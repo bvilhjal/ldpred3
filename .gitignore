@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+sim_results.csv
+scaling_results.csv
+ld_scaling_results.csv

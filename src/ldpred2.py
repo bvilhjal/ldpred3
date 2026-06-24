@@ -38,6 +38,25 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
+# Optional Numba acceleration. The Gibbs sampler's inner sweep is pure Python
+# and dominates runtime; JIT-compiling it gives a large speed-up. If Numba is
+# not installed we fall back to a no-op decorator and run the identical code in
+# pure Python (just slower).
+try:
+    from numba import njit as _njit
+
+    HAVE_NUMBA = True
+
+    def _jit(func):
+        return _njit(cache=True)(func)
+
+except ImportError:  # pragma: no cover - exercised only without numba
+    HAVE_NUMBA = False
+
+    def _jit(func):
+        return func
+
+
 __all__ = [
     "standardize_betas",
     "ldpred2_inf",
@@ -128,72 +147,96 @@ def ldpred2_inf(corr, beta_hat, n_eff, h2):
     return np.linalg.solve(A, beta_hat)
 
 
-def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
-                   rng, estimate_hyper, h2_bounds, shrink_corr):
-    """Core point-normal Gibbs sampler shared by grid and auto.
+def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
+                  estimate_hyper, h2_min, h2_max, seed):
+    """Numeric core of the point-normal Gibbs sampler (JIT-compiled if numba).
 
-    Returns ``(avg_beta, h2_path, p_path)`` where the paths hold the per-
-    iteration hyper-parameter estimates (only meaningful when
-    ``estimate_hyper`` is True).
+    Takes only plain numeric / array arguments so it compiles under
+    ``numba.njit``. Uses the legacy global ``np.random`` (seeded here): its
+    ``random`` / ``standard_normal`` streams are identical between the compiled
+    and pure-Python paths; ``beta`` (used only for the -auto p-update) may differ
+    slightly between the two but yields an equally valid sampler.
+
+    Returns ``(avg_beta, h2_path, p_path)``; the paths hold per-iteration
+    hyper-parameter values (meaningful only when ``estimate_hyper`` is True).
     """
+    np.random.seed(seed)
     m = beta_hat.shape[0]
+
     curr_beta = np.zeros(m)
     avg_beta = np.zeros(m)
-
-    # Optionally shrink off-diagonal LD to stabilise the sampler (LDpred2
-    # exposes this; default 1.0 = no shrinkage).
-    if shrink_corr != 1.0:
-        corr = corr * shrink_corr
-        np.fill_diagonal(corr, 1.0)
+    # Running product Rb = R @ curr_beta. Maintaining it incrementally turns the
+    # per-SNP residual into an O(1) lookup; we only pay the O(m) rank-1 update
+    # when an effect actually changes (rare for sparse architectures). It starts
+    # at zero because curr_beta starts at zero.
+    Rb = np.zeros(m)
 
     h2_path = np.empty(num_iter)
     p_path = np.empty(num_iter)
-
-    h2_min, h2_max = h2_bounds
     n_iter_total = burn_in + num_iter
 
     for it in range(n_iter_total):
         # Variance of a causal effect under the slab.
         c1 = h2 / (m * p)
+        log_prior_odds = np.log1p(-p) - np.log(p)    # constant within iteration
+        # Per-SNP posterior quantities are vectors of length m.
+        post_var = c1 / (n * c1 + 1.0)               # = 1 / (n + 1/c1)
+        post_sd = np.sqrt(post_var)
+        half_log_term = 0.5 * np.log1p(n * c1)
+        n_post_var = n * post_var                    # post_mean = this * residual
         nb_causal = 0
 
+        # Periodically resync Rb from scratch to bound floating-point drift from
+        # the incremental updates (cheap relative to all the full sweeps).
+        if it % 100 == 0 and it > 0:
+            Rb = np.zeros(m)
+            for k in range(m):
+                bk = curr_beta[k]
+                if bk != 0.0:
+                    Rb += corr[k] * bk
+
+        # Batch the random draws for the whole sweep (far cheaper than per-SNP
+        # RNG calls in the Python loop).
+        unif = np.random.random(m)
+        gauss = np.random.standard_normal(m)
+
         for j in range(m):
-            # Residualised marginal effect for SNP j: remove the contribution
-            # of every *other* SNP currently in the model. R[j, j] == 1.
-            dotprod = corr[j].dot(curr_beta) - curr_beta[j]
-            res_beta_j = beta_hat[j] - dotprod
+            old = curr_beta[j]
+            # Residualised marginal effect: subtract every other SNP's
+            # contribution. Rb[j] includes this SNP (corr[j, j] == 1), so add
+            # back its own term.
+            res_beta_j = beta_hat[j] - Rb[j] + old
 
-            nj = n[j]
-            # Posterior of the effect given that the SNP is causal.
-            post_var = c1 / (nj * c1 + 1.0)        # = 1 / (nj + 1/c1)
-            post_mean = nj * post_var * res_beta_j
+            pv = post_var[j]
+            post_mean = n_post_var[j] * res_beta_j
 
-            # Posterior probability that the SNP is causal (inclusion prob).
-            # log-odds(null vs causal) = log((1-p)/p) + 0.5*log(1 + nj*c1)
-            #                            - post_mean**2 / (2*post_var)
-            log_odds = (np.log1p(-p) - np.log(p)
-                        + 0.5 * np.log1p(nj * c1)
-                        - 0.5 * post_mean ** 2 / post_var)
+            # Posterior inclusion probability via the log-odds of null vs causal.
+            log_odds = (log_prior_odds + half_log_term[j]
+                        - 0.5 * post_mean * post_mean / pv)
             postp = 1.0 / (1.0 + np.exp(log_odds))
 
             if sparse and postp < 0.5:
-                # Hard-threshold to exactly zero (sparse LDpred2 variant).
-                curr_beta[j] = 0.0
-                continue
-
-            if rng.random() < postp:
-                curr_beta[j] = post_mean + rng.standard_normal() * np.sqrt(post_var)
+                new = 0.0
+            elif unif[j] < postp:
+                new = post_mean + gauss[j] * post_sd[j]
                 nb_causal += 1
             else:
-                curr_beta[j] = 0.0
+                new = 0.0
+
+            delta = new - old
+            if delta != 0.0:
+                Rb += corr[j] * delta      # rank-1 update of R @ curr_beta
+                curr_beta[j] = new
 
         if estimate_hyper:
             # Sample p from its Beta full-conditional given the causal count.
-            p = rng.beta(1 + nb_causal, 1 + m - nb_causal)
-            # Estimate h2 as the genetic variance implied by current effects:
-            # h2 = beta^T R beta.
-            h2 = float(curr_beta @ (corr @ curr_beta))
-            h2 = min(max(h2, h2_min), h2_max)
+            p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
+            # h2 = beta^T R beta, reusing the maintained Rb (no extra matvec).
+            h2 = np.sum(curr_beta * Rb)
+            if h2 < h2_min:
+                h2 = h2_min
+            elif h2 > h2_max:
+                h2 = h2_max
 
         if it >= burn_in:
             k = it - burn_in
@@ -203,6 +246,40 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
 
     avg_beta /= num_iter
     return avg_beta, h2_path, p_path
+
+
+# Compiled (or pass-through) version of the kernel.
+_gibbs_kernel_jit = _jit(_gibbs_kernel)
+
+
+def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
+                   seed, estimate_hyper, h2_bounds, shrink_corr):
+    """Prepare arguments and dispatch to the (optionally JIT-compiled) kernel.
+
+    Returns ``(avg_beta, h2_path, p_path)``.
+    """
+    # Contiguous float layout for fast row access. ``corr`` is symmetric, so
+    # row j (a contiguous slice) is also column j -- used for the rank-1 update.
+    corr = np.ascontiguousarray(corr, dtype=np.float64)
+
+    # Optionally shrink off-diagonal LD to stabilise the sampler (LDpred2
+    # exposes this; default 1.0 = no shrinkage). Copy so the caller's matrix is
+    # untouched.
+    if shrink_corr != 1.0:
+        corr = corr * shrink_corr
+        np.fill_diagonal(corr, 1.0)
+
+    beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
+    n = np.ascontiguousarray(n, dtype=np.float64)
+    h2_min, h2_max = h2_bounds
+    if seed is None:
+        seed = np.random.SeedSequence().generate_state(1)[0]
+
+    return _gibbs_kernel_jit(
+        corr, beta_hat, n, float(h2), float(p), int(burn_in), int(num_iter),
+        bool(sparse), bool(estimate_hyper), float(h2_min), float(h2_max),
+        int(seed),
+    )
 
 
 def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
@@ -250,10 +327,9 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
     n = _as_n_vector(n_eff, m)
     if not 0.0 < p <= 1.0:
         raise ValueError("p must be in (0, 1]")
-    rng = np.random.default_rng(seed)
     avg_beta, _, _ = _gibbs_sampler(
         corr, beta_hat, n, h2, p,
-        burn_in=burn_in, num_iter=num_iter, sparse=sparse, rng=rng,
+        burn_in=burn_in, num_iter=num_iter, sparse=sparse, seed=seed,
         estimate_hyper=False, h2_bounds=(1e-6, 1.0), shrink_corr=shrink_corr,
     )
     return avg_beta
@@ -308,10 +384,9 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
-    rng = np.random.default_rng(seed)
     avg_beta, h2_path, p_path = _gibbs_sampler(
         corr, beta_hat, n, h2_init, p_init,
-        burn_in=burn_in, num_iter=num_iter, sparse=False, rng=rng,
+        burn_in=burn_in, num_iter=num_iter, sparse=False, seed=seed,
         estimate_hyper=True, h2_bounds=h2_bounds, shrink_corr=shrink_corr,
     )
     return AutoResult(

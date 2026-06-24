@@ -15,6 +15,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import ldpred2  # noqa: E402
 from ldpred2 import (  # noqa: E402
     ldpred2_auto,
     ldpred2_grid,
@@ -86,6 +87,27 @@ def test_auto_recovers_hyperparams():
     # Hyper-parameter estimates should land in a sensible ballpark.
     assert 0.2 < res.h2_est < 0.9
     assert 0.005 < res.p_est < 0.4
+
+
+def test_numba_and_python_paths_agree():
+    """The JIT-compiled and pure-Python grid samplers must be identical.
+
+    The -grid path uses only ``random`` / ``standard_normal`` draws, whose
+    streams match between numba and NumPy's legacy RNG, so results should be
+    bit-for-bit identical. Skipped when numba is not installed.
+    """
+    if not ldpred2.HAVE_NUMBA:
+        import pytest
+        pytest.skip("numba not installed")
+
+    corr, beta_hat, true_beta, n = simulate(m=200, seed=5)
+    n_vec = np.full(corr.shape[0], float(n))
+    kwargs = dict(burn_in=40, num_iter=120, sparse=False, estimate_hyper=False,
+                  h2_min=1e-6, h2_max=1.0, seed=11)
+    corr_c = np.ascontiguousarray(corr)
+    py = ldpred2._gibbs_kernel(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
+    jit = ldpred2._gibbs_kernel_jit(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
+    assert np.allclose(py[0], jit[0], atol=1e-10)
 
 
 if __name__ == "__main__":
