@@ -55,3 +55,29 @@ python -m pytest tests/          # run the assertions
 
 On the bundled synthetic LD block, correlation with the true effects improves
 from ~0.67 (raw marginal betas) to ~0.98 (inf) and ~0.99 (grid / auto).
+
+### Genotype-level benchmark
+
+`src/simulate.py` is a full end-to-end simulation: it generates genotypes with
+block LD, simulates a phenotype under a chosen heritability and polygenicity,
+runs a marginal GWAS, estimates the LD matrix from the training sample, fits
+LDpred2, and reports **out-of-sample** prediction R² on a held-out test set. It
+sweeps a grid of polygenicity × heritability × sample size.
+
+```bash
+python src/simulate.py --quick            # fast sanity check
+python src/simulate.py --csv sim.csv      # full grid, save results
+```
+
+Representative results (m=1000 SNPs, blocks of 100; prediction R² vs phenotype):
+
+| N | h² | p (causal) | marginal | inf | grid | auto | ceiling |
+|---|----|-----------|---------|-----|------|------|---------|
+| 5000 | 0.5 | 0.005 | 0.280 | 0.331 | 0.452 | 0.451 | 0.455 |
+| 5000 | 0.5 | 0.05  | 0.320 | 0.377 | 0.491 | 0.482 | 0.501 |
+| 10000 | 0.5 | 0.5  | 0.368 | 0.460 | 0.475 | 0.471 | 0.537 |
+| 10000 | 0.2 | 0.05 | 0.128 | 0.142 | 0.196 | 0.197 | 0.203 |
+
+Takeaways: LDpred2 always beats the raw marginal baseline; accuracy rises with
+heritability and sample size; `grid`/`auto` approach the ceiling for sparse
+architectures, while `inf` is competitive for highly polygenic traits.
