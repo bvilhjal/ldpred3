@@ -19,6 +19,21 @@ LD (linkage-disequilibrium) correlation matrix.
 Helpers: `standardize_betas` (put GWAS effects on the correlation scale) and
 `ldpred2_by_blocks` (run a model independently per LD block, genome-wide).
 
+### Performance (optional Numba acceleration)
+
+The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an
+O(1) lookup; the O(m) rank-1 update is only paid when an effect changes), so it
+scales sub-quadratically in block size for sparse traits.
+
+If [Numba](https://numba.pydata.org/) is installed, the inner sampler is
+JIT-compiled automatically for a further **~10–16×** speed-up; otherwise it
+falls back to identical pure-NumPy code (NumPy is the only hard dependency). The
+`-grid` results are bit-for-bit identical with or without Numba.
+
+```bash
+pip install numba      # optional, recommended for large analyses
+```
+
 ### Conventions
 
 Effects are on the standardized scale, where the marginal effects relate to the
