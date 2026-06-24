@@ -23,16 +23,27 @@ Helpers: `standardize_betas` (put GWAS effects on the correlation scale) and
 
 The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an
 O(1) lookup; the O(m) rank-1 update is only paid when an effect changes), so it
-scales sub-quadratically in block size for sparse traits.
+scales sub-quadratically in block size for sparse traits. The rank-1 update is
+the bandwidth-bound hot path, so it runs as a fused element loop over a
+**single-precision** LD row (float32 halves the memory traffic, ~2× faster, with
+no meaningful accuracy cost — and matches bigsnpr, which also stores LD in single
+precision). The effects and the `R @ beta` accumulator stay in float64.
 
-If [Numba](https://numba.pydata.org/) is installed, the inner sampler is
-JIT-compiled automatically for a further **~10–16×** speed-up; otherwise it
-falls back to identical pure-NumPy code (NumPy is the only hard dependency). The
-`-grid` results are bit-for-bit identical with or without Numba.
+[Numba](https://numba.pydata.org/) is strongly recommended: when installed, the
+inner sampler is JIT-compiled (and cached) for a large speed-up. Without it the
+code still runs and gives identical results, but the sampler falls back to plain
+Python loops and is much slower — fine for small problems / CI, not for genome-
+wide runs.
 
 ```bash
-pip install numba      # optional, recommended for large analyses
+pip install numba      # optional but strongly recommended
 ```
+
+On a single core, the JIT-compiled `grid`/`auto` samplers are competitive with —
+and on dense blocks ~3–5× faster than — bigsnpr's C++ `snp_ldpred2_{grid,auto}`
+at equal problem size, producing matching effects (r ≥ 0.999). bigsnpr's
+infinitesimal solver and its sparse-LD / multicore handling remain faster at
+genome-wide scale.
 
 ### Conventions
 

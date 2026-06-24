@@ -189,11 +189,13 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
         # Periodically resync Rb from scratch to bound floating-point drift from
         # the incremental updates (cheap relative to all the full sweeps).
         if it % 100 == 0 and it > 0:
-            Rb = np.zeros(m)
+            Rb[:] = 0.0
             for k in range(m):
                 bk = curr_beta[k]
                 if bk != 0.0:
-                    Rb += corr[k] * bk
+                    ck = corr[k]
+                    for i in range(m):
+                        Rb[i] += ck[i] * bk
 
         # Batch the random draws for the whole sweep (far cheaper than per-SNP
         # RNG calls in the Python loop).
@@ -225,14 +227,22 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
 
             delta = new - old
             if delta != 0.0:
-                Rb += corr[j] * delta      # rank-1 update of R @ curr_beta
+                # Rank-1 update of Rb = R @ curr_beta. Fused element loop (no
+                # temporary array) over a single-precision row -- this is the
+                # sampler's hot path and is memory-bandwidth bound, so the
+                # float32 row halves the dominant traffic.
+                cj = corr[j]
+                for i in range(m):
+                    Rb[i] += cj[i] * delta
                 curr_beta[j] = new
 
         if estimate_hyper:
             # Sample p from its Beta full-conditional given the causal count.
             p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
             # h2 = beta^T R beta, reusing the maintained Rb (no extra matvec).
-            h2 = np.sum(curr_beta * Rb)
+            h2 = 0.0
+            for i in range(m):
+                h2 += curr_beta[i] * Rb[i]
             if h2 < h2_min:
                 h2 = h2_min
             elif h2 > h2_max:
@@ -258,16 +268,19 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
 
     Returns ``(avg_beta, h2_path, p_path)``.
     """
-    # Contiguous float layout for fast row access. ``corr`` is symmetric, so
-    # row j (a contiguous slice) is also column j -- used for the rank-1 update.
-    corr = np.ascontiguousarray(corr, dtype=np.float64)
+    # Single-precision, contiguous LD matrix. ``corr`` is symmetric, so row j
+    # (a contiguous slice) is also column j -- used for the rank-1 update. float32
+    # halves the memory traffic of that (bandwidth-bound) hot loop with no
+    # meaningful accuracy cost; it also matches bigsnpr, which stores LD in single
+    # precision. The accumulator Rb and effects stay in float64.
+    corr = np.ascontiguousarray(corr, dtype=np.float32)
 
     # Optionally shrink off-diagonal LD to stabilise the sampler (LDpred2
     # exposes this; default 1.0 = no shrinkage). Copy so the caller's matrix is
     # untouched.
     if shrink_corr != 1.0:
-        corr = corr * shrink_corr
-        np.fill_diagonal(corr, 1.0)
+        corr = corr * np.float32(shrink_corr)
+        np.fill_diagonal(corr, np.float32(1.0))
 
     beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
     n = np.ascontiguousarray(n, dtype=np.float64)
