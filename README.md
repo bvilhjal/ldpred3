@@ -19,20 +19,72 @@ LD (linkage-disequilibrium) correlation matrix.
 Helpers: `standardize_betas` (put GWAS effects on the correlation scale) and
 `ldpred2_by_blocks` (run a model independently per LD block, genome-wide).
 
+### Sparse / banded LD
+
+Real LD is banded — most off-diagonal entries are ~0 — so the LD can be stored
+sparse (CSR) and the sampler/solver need only touch non-zero neighbours
+(O(bandwidth) instead of O(block_size)). Build a `SparseLD` with `sparsify_ld`
+and pass it to any model (or `ldpred2_by_blocks(..., sparsify=True)`):
+
+```python
+from ldpred2 import sparsify_ld, ldpred2_inf, ldpred2_auto
+ld = sparsify_ld(corr, threshold=1e-3)        # drop |r| < 1e-3 (and/or max_dist=…)
+beta = ldpred2_inf(ld, beta_hat, n_eff, h2)   # sparse CG solve; samplers also accept ld
+```
+
+On a clean population AR(1) block (m=4000, 0.47 % density) this gives, with
+**identical results** (r = 1.000):
+
+| method | dense | sparse | speedup |
+|--------|-------|--------|---------|
+| inf  | 2.77 s | 0.006 s | **444×** (CG vs dense O(m³) solve) |
+| grid | 0.131 s | 0.070 s | 1.9× |
+| auto | 0.138 s | 0.071 s | 1.9× |
+
+Two important caveats:
+
+* **In-sample LD has a noise floor (~1/√N)** that fills the matrix, so magnitude
+  thresholding alone won't sparsify it — band by distance (`max_dist=`) to drop
+  the spurious far-apart entries, as LDpred2/bigsnpr do.
+* **Hard banding can break positive-definiteness**, which destabilises the
+  *fixed-h² sampler* (`grid` can diverge; `auto` self-limits via its h² clamp;
+  `inf`'s ridge is unaffected). Use `sparsify_ld(..., shrink=<1)` to restore
+  diagonal dominance, or supply an already-valid windowed LD matrix.
+
 ### Performance (optional Numba acceleration)
 
 The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an
 O(1) lookup; the O(m) rank-1 update is only paid when an effect changes), so it
-scales sub-quadratically in block size for sparse traits.
+scales sub-quadratically in block size for sparse traits. The rank-1 update is
+the bandwidth-bound hot path, so it runs as a fused element loop over a
+**single-precision** LD row (float32 halves the memory traffic, ~2× faster, with
+no meaningful accuracy cost — and matches bigsnpr, which also stores LD in single
+precision). The effects and the `R @ beta` accumulator stay in float64.
 
-If [Numba](https://numba.pydata.org/) is installed, the inner sampler is
-JIT-compiled automatically for a further **~10–16×** speed-up; otherwise it
-falls back to identical pure-NumPy code (NumPy is the only hard dependency). The
-`-grid` results are bit-for-bit identical with or without Numba.
+The posterior-mean estimate is **Rao-Blackwellized** (as in the original
+LDpred): each sweep accumulates the conditional expectation
+`E[beta_j | rest] = P(causal) · posterior_mean` rather than the sampled draw.
+The sampled value still drives the Markov chain; only the *estimate* uses the
+expectation, which has much lower Monte-Carlo variance (≈6–13× in fast-mixing
+regimes), so fewer iterations are needed for the same accuracy. In extreme-LD
+regions the benefit is smaller because chain mixing, not sampling noise, is the
+bottleneck.
+
+[Numba](https://numba.pydata.org/) is strongly recommended: when installed, the
+inner sampler is JIT-compiled (and cached) for a large speed-up. Without it the
+code still runs and gives identical results, but the sampler falls back to plain
+Python loops and is much slower — fine for small problems / CI, not for genome-
+wide runs.
 
 ```bash
-pip install numba      # optional, recommended for large analyses
+pip install numba      # optional but strongly recommended
 ```
+
+On a single core, the JIT-compiled `grid`/`auto` samplers are competitive with —
+and on dense blocks ~3–5× faster than — bigsnpr's C++ `snp_ldpred2_{grid,auto}`
+at equal problem size, producing matching effects (r ≥ 0.999). bigsnpr's
+infinitesimal solver and its sparse-LD / multicore handling remain faster at
+genome-wide scale.
 
 ### Conventions
 
@@ -83,8 +135,25 @@ To stay within memory at scale, genotypes are stored as `int8` dosages and
 every step (standardization, GWAS, LD, PRS) is processed one LD block at a time,
 so a full float genotype matrix is never materialised.
 
+**LD model (`--ld-model`).** Two choices for the LD between SNPs:
+
+* `ar1` (default): a latent-Gaussian model with geometric LD decay
+  (`r ≈ ρ^dist`). Fast and dependency-free, but idealized — LD collapses to ~0
+  within a handful of SNPs.
+* `coalescent`: realistic LD from a coalescent-with-recombination simulation
+  (via [msprime](https://tskit.dev/msprime), human-like Ne=10⁴ and 1e-8 recomb/
+  mutation rates). This produces actual haplotype blocks, recombination
+  hotspots, a heavy LD decay tail and sporadic long-range LD — the structure of
+  real reference panels (mean r² stays ~0.02 at 200 SNPs apart, vs ~0 for AR(1)).
+
+LDpred2's advantage over the raw marginal PRS is *larger* under realistic LD
+(e.g. h²=0.5, p=0.01: marginal 0.21 → grid/auto 0.43 with coalescent LD, vs
+0.32 → 0.50 with AR(1)), because realistic long-range LD inflates the naive
+score that LDpred2's LD-adjustment removes.
+
 ```bash
-python src/simulate.py --quick            # fast sanity check
+python src/simulate.py --quick                      # fast (AR(1))
+python src/simulate.py --quick --ld-model coalescent  # realistic LD (needs msprime)
 python src/simulate.py --csv sim.csv      # full accuracy grid, save results
 ```
 
