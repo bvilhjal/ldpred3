@@ -14,31 +14,37 @@ end-to-end check:
 6. build polygenic scores on the held-out test sample and report prediction
    accuracy (R^2 with the phenotype).
 
-It sweeps a grid of polygenicity, heritability and GWAS sample size and prints
-a results table (optionally saved to CSV).
+To scale to 10k-100k SNPs without exhausting memory, genotypes are stored as
+``int8`` dosages (~8x smaller than float64) and every step (standardization,
+GWAS, LD, PRS) is processed one LD block at a time, so a full float genotype
+matrix is never materialised.
 
 Run::
 
-    python src/simulate.py                 # default grid
-    python src/simulate.py --quick         # small/fast grid
-    python src/simulate.py --csv out.csv   # also save results
+    python src/simulate.py                       # default accuracy grid
+    python src/simulate.py --quick               # small/fast grid
+    python src/simulate.py --csv out.csv         # grid + save results
+    python src/simulate.py --scaling             # runtime/memory vs #SNPs
+    python src/simulate.py --scaling --m 10000 50000 100000
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import resource
 import sys
+import time
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from ldpred2 import ldpred2_by_blocks, standardize_betas  # noqa: E402
+from ldpred2 import HAVE_NUMBA, ldpred2_by_blocks, standardize_betas  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
-# Simulation
+# Genotype simulation
 # --------------------------------------------------------------------------- #
 def _ar1_chol(k, rho):
     """Cholesky factor of the AR(1) correlation matrix of size ``k``."""
@@ -47,52 +53,14 @@ def _ar1_chol(k, rho):
     return np.linalg.cholesky(corr + 1e-8 * np.eye(k))
 
 
-def simulate_genotypes(n, block_sizes, maf, rho, rng):
-    """Simulate diploid genotype dosages (0/1/2) with within-block LD.
-
-    LD is induced through a latent multivariate-normal haplotype model: for each
-    block two latent Gaussian haplotypes with AR(1) correlation ``rho`` are
-    drawn and thresholded at the MAF-implied quantile, then summed. The
-    resulting genotype LD has realistic block structure (attenuated relative to
-    the latent correlation, as with real tetrachoric thresholding).
-
-    Returns
-    -------
-    G : ndarray, shape (n, m)
-        Integer genotype dosages.
-    blocks : list of ndarray
-        Index arrays giving the columns belonging to each LD block.
-    """
-    m = int(np.sum(block_sizes))
-    G = np.empty((n, m), dtype=np.float64)
-    blocks = []
-    col = 0
-    for k in block_sizes:
-        chol = _ar1_chol(k, rho)
-        thresholds = -np.sqrt(2.0)  # placeholder, set per-SNP below
-        block_maf = maf[col:col + k]
-        # Per-SNP threshold so that P(latent > t) = maf.
-        from math import sqrt  # local import to keep numpy-only top level
-        thr = _norm_isf(block_maf)
-        hap_sum = np.zeros((n, k))
-        for _ in range(2):  # two haplotypes -> dosage 0/1/2
-            z = rng.standard_normal((n, k)) @ chol.T
-            hap_sum += (z > thr).astype(np.float64)
-        G[:, col:col + k] = hap_sum
-        blocks.append(np.arange(col, col + k))
-        col += k
-    return G, blocks
-
-
 def _norm_isf(q):
     """Inverse survival function of the standard normal (vectorised).
 
-    Uses the Acklam rational approximation so the module stays NumPy-only.
-    Returns z such that P(Z > z) = q.
+    Returns ``z`` such that ``P(Z > z) = q``. Uses Acklam's rational
+    approximation so the module stays NumPy-only.
     """
     q = np.asarray(q, dtype=float)
-    p = 1.0 - q  # want the p-th quantile
-    # Acklam's algorithm.
+    p = 1.0 - q
     a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
          1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
     b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
@@ -103,11 +71,9 @@ def _norm_isf(q):
          3.754408661907416e+00]
     plow, phigh = 0.02425, 1 - 0.02425
     z = np.empty_like(p)
-
     lo = p < plow
     hi = p > phigh
     mid = ~(lo | hi)
-
     if np.any(lo):
         ql = np.sqrt(-2 * np.log(p[lo]))
         z[lo] = (((((c[0] * ql + c[1]) * ql + c[2]) * ql + c[3]) * ql + c[4]) * ql + c[5]) / \
@@ -124,64 +90,40 @@ def _norm_isf(q):
     return z
 
 
-def simulate_phenotype(G_std, h2, p, rng):
-    """Simulate a phenotype from standardized genotypes.
+def simulate_genotypes(n, block_sizes, maf, rho, rng):
+    """Simulate diploid genotype dosages (0/1/2) with within-block LD.
 
-    Causal variants are a random fraction ``p`` of all SNPs with effects
-    ``N(0, h2 / m_causal)`` on the standardized-genotype scale. Environmental
-    noise is added so the phenotype has ~unit variance and heritability ``h2``.
+    LD is induced through a latent multivariate-normal haplotype model: two
+    latent Gaussian haplotypes with AR(1) correlation ``rho`` per block are
+    thresholded at the MAF-implied quantile and summed. Genotypes are returned
+    as ``int8`` to keep large matrices small in memory.
 
-    Returns ``(y, true_beta, genetic_value)``.
+    Returns ``(G, blocks)`` with ``G`` of shape ``(n, m)`` and ``blocks`` a list
+    of column-index arrays.
     """
-    n, m = G_std.shape
-    is_causal = rng.random(m) < p
-    m_causal = max(int(is_causal.sum()), 1)
-    true_beta = np.zeros(m)
-    true_beta[is_causal] = rng.normal(0.0, np.sqrt(h2 / m_causal), size=int(is_causal.sum()))
-
-    g = G_std @ true_beta
-    g *= np.sqrt(h2) / (g.std() + 1e-12)  # fix realised genetic variance to h2
-    e = rng.normal(0.0, np.sqrt(1.0 - h2), size=n)
-    y = g + e
-    return y, true_beta, g
-
-
-# --------------------------------------------------------------------------- #
-# GWAS + LD
-# --------------------------------------------------------------------------- #
-def standardize_columns(G, mean=None, sd=None):
-    """Standardize genotype columns; reuse train mean/sd on the test set."""
-    if mean is None:
-        mean = G.mean(axis=0)
-    if sd is None:
-        sd = G.std(axis=0)
-    sd = np.where(sd < 1e-8, 1.0, sd)
-    return (G - mean) / sd, mean, sd
+    m = int(np.sum(block_sizes))
+    G = np.empty((n, m), dtype=np.int8)
+    blocks = []
+    col = 0
+    for k in block_sizes:
+        chol = _ar1_chol(k, rho)
+        thr = _norm_isf(maf[col:col + k])
+        hap_sum = np.zeros((n, k))
+        for _ in range(2):  # two haplotypes -> dosage 0/1/2
+            z = rng.standard_normal((n, k)) @ chol.T
+            hap_sum += (z > thr)
+        G[:, col:col + k] = hap_sum.astype(np.int8)
+        blocks.append(np.arange(col, col + k))
+        col += k
+    return G, blocks
 
 
-def run_gwas(G_std, y):
-    """Marginal (single-SNP) GWAS on standardized genotypes & phenotype.
-
-    Returns ``(beta_hat, beta_se, n)`` for the per-SNP simple regressions.
-    """
-    n = G_std.shape[0]
-    ys = (y - y.mean()) / (y.std() + 1e-12)
-    # With standardized x and y the slope equals the correlation.
-    r = (G_std * ys[:, None]).mean(axis=0)
-    r = np.clip(r, -0.9999, 0.9999)
-    se = np.sqrt((1 - r ** 2) / (n - 2))
-    return r, se, n
-
-
-def ld_blocks_from_geno(G_std, blocks):
-    """Per-block in-sample LD correlation matrices."""
-    n = G_std.shape[0]
-    out = []
-    for idx in blocks:
-        Xb = G_std[:, idx]
-        corr = (Xb.T @ Xb) / n
-        out.append((corr, idx))
-    return out
+def _std_block(G, rows, idx, mean, sd):
+    """Standardize a genotype sub-block to float64 (column z-scores)."""
+    X = G[rows][:, idx].astype(np.float64)
+    X -= mean[idx]
+    X /= sd[idx]
+    return X
 
 
 def r2(pred, target):
@@ -192,12 +134,13 @@ def r2(pred, target):
 
 
 # --------------------------------------------------------------------------- #
-# One replicate
+# One replicate (block-streaming, memory efficient)
 # --------------------------------------------------------------------------- #
 def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
             rho=0.6, maf_range=(0.05, 0.5), seed=0,
-            burn_in=60, num_iter=150):
-    """Run a single simulation replicate and return prediction R^2 per method."""
+            burn_in=60, num_iter=150,
+            methods=("marginal", "inf", "grid", "auto")):
+    """Run a single simulation replicate; return prediction R^2 per method."""
     rng = np.random.default_rng(seed)
     block_sizes = [block_size] * (m // block_size)
     m = int(sum(block_sizes))
@@ -205,64 +148,98 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
 
     n_total = n_train + n_test
     G, blocks = simulate_genotypes(n_total, block_sizes, maf, rho, rng)
-    G_train, G_test = G[:n_train], G[n_train:]
+    train_rows = slice(0, n_train)
+    test_rows = slice(n_train, n_total)
 
-    G_train_std, mean, sd = standardize_columns(G_train)
-    G_test_std, _, _ = standardize_columns(G_test, mean, sd)
+    # True sparse effects on the standardized-genotype scale.
+    is_causal = rng.random(m) < p
+    m_causal = max(int(is_causal.sum()), 1)
+    true_beta = np.zeros(m)
+    true_beta[is_causal] = rng.normal(0.0, np.sqrt(h2 / m_causal),
+                                      size=int(is_causal.sum()))
 
-    # Phenotype is generated on the (training-standardized) genotypes.
-    y_train, true_beta, _ = simulate_phenotype(G_train_std, h2, p, rng)
-    g_test = G_test_std @ true_beta
-    e_test = rng.normal(0.0, np.sqrt(1 - h2), size=n_test)
-    y_test = g_test + e_test
+    # Pass 1: training mean/sd per SNP + genetic values (train & test).
+    mean = np.empty(m)
+    sd = np.empty(m)
+    g_train = np.zeros(n_train)
+    g_test = np.zeros(n_test)
+    for idx in blocks:
+        Xtr = G[train_rows][:, idx].astype(np.float64)
+        mu = Xtr.mean(axis=0)
+        s = Xtr.std(axis=0)
+        s[s < 1e-8] = 1.0
+        mean[idx] = mu
+        sd[idx] = s
+        Xtr -= mu
+        Xtr /= s
+        bb = true_beta[idx]
+        g_train += Xtr @ bb
+        g_test += _std_block(G, test_rows, idx, mean, sd) @ bb
 
-    # GWAS + LD on training data.
-    beta_hat, beta_se, n = run_gwas(G_train_std, y_train)
-    beta_std, scale = standardize_betas(beta_hat, beta_se, n)
-    ld = ld_blocks_from_geno(G_train_std, blocks)
+    # Fix the realised genetic variance to h2, then add environmental noise.
+    sg = np.sqrt(h2) / (g_train.std() + 1e-12)
+    true_beta *= sg
+    g_train *= sg
+    g_test *= sg
+    y_train = g_train + rng.normal(0.0, np.sqrt(1.0 - h2), n_train)
+    y_test = g_test + rng.normal(0.0, np.sqrt(1.0 - h2), n_test)
+    ys = (y_train - y_train.mean()) / (y_train.std() + 1e-12)
 
-    results = {}
+    # Pass 2: marginal GWAS + per-block LD matrices.
+    beta_std = np.empty(m)
+    ld = []
+    for idx in blocks:
+        Xtr = _std_block(G, train_rows, idx, mean, sd)
+        r = (Xtr * ys[:, None]).mean(axis=0)          # slope == correlation
+        r = np.clip(r, -0.9999, 0.9999)
+        se = np.sqrt((1 - r ** 2) / (n_train - 2))
+        bs, _ = standardize_betas(r, se, n_train)
+        beta_std[idx] = bs
+        ld.append(((Xtr.T @ Xtr) / n_train, idx))
 
-    def score(beta_adj):
-        return r2(G_test_std @ beta_adj, y_test)
+    n_vec = np.full(m, float(n_train))
 
-    # Baseline: raw marginal effects as a PRS (LD double-counting).
-    results["marginal"] = score(beta_std)
+    # Fit each method (full adjusted-beta vector).
+    adj = {"marginal": beta_std}
+    if "inf" in methods:
+        adj["inf"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="inf", h2=h2)
+    if "grid" in methods:
+        adj["grid"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="grid",
+                                        h2=h2, p=p, burn_in=burn_in,
+                                        num_iter=num_iter, seed=seed)
+    if "auto" in methods:
+        adj["auto"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="auto",
+                                        burn_in=burn_in, num_iter=num_iter,
+                                        seed=seed)
 
-    results["inf"] = score(
-        ldpred2_by_blocks(ld, beta_std, n, method="inf", h2=h2)
-    )
-    results["grid"] = score(
-        ldpred2_by_blocks(ld, beta_std, n, method="grid", h2=h2, p=p,
-                          burn_in=burn_in, num_iter=num_iter, seed=seed)
-    )
-    auto_beta = ldpred2_by_blocks(ld, beta_std, n, method="auto",
-                                  burn_in=burn_in, num_iter=num_iter, seed=seed)
-    results["auto"] = score(auto_beta)
+    # Pass 3: build PRS on the test sample, block by block.
+    prs = {k: np.zeros(n_test) for k in adj}
+    for idx in blocks:
+        Xte = _std_block(G, test_rows, idx, mean, sd)
+        for k, beta in adj.items():
+            prs[k] += Xte @ beta[idx]
 
-    # Theoretical ceiling: R^2 of the true genetic value with the phenotype.
+    results = {k: r2(prs[k], y_test) for k in adj}
     results["ceiling(h2)"] = r2(g_test, y_test)
     return results
 
 
-# --------------------------------------------------------------------------- #
-# Grid sweep
-# --------------------------------------------------------------------------- #
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--quick", action="store_true",
-                        help="smaller/faster grid for a sanity check")
-    parser.add_argument("--csv", default=None, help="write results to this CSV file")
-    parser.add_argument("--seed", type=int, default=1)
-    args = parser.parse_args(argv)
+def _peak_mem_gb():
+    """Peak resident set size of this process, in GB (Linux ru_maxrss is KB)."""
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 ** 2)
 
+
+# --------------------------------------------------------------------------- #
+# Modes
+# --------------------------------------------------------------------------- #
+def run_grid(args):
     if args.quick:
         polygenicities = [0.01, 0.5]
         heritabilities = [0.5]
         sample_sizes = [3000]
         m, block_size = 500, 100
     else:
-        polygenicities = [0.005, 0.05, 0.5]   # sparse -> highly polygenic
+        polygenicities = [0.005, 0.05, 0.5]
         heritabilities = [0.2, 0.5]
         sample_sizes = [2000, 5000, 10000]
         m, block_size = 1000, 100
@@ -284,12 +261,72 @@ def main(argv=None):
                 print(f"{n_train:>7} {h2:>5} {p:>7} | {cells}")
 
     if args.csv:
-        import csv
-        with open(args.csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            w.writeheader()
-            w.writerows(rows)
-        print(f"\nSaved results to {args.csv}")
+        _write_csv(args.csv, rows)
+
+
+def run_scaling(args):
+    sizes = args.m or [10000, 50000, 100000]
+    h2, p = args.h2, args.p
+    methods = ["marginal", "inf", "grid", "auto", "ceiling(h2)"]
+
+    print(f"LDpred2 scaling benchmark  (numba={'on' if HAVE_NUMBA else 'off'}, "
+          f"N_train={args.n_train}, N_test={args.n_test}, blocks of "
+          f"{args.block_size}, h2={h2}, p={p})")
+    head = (f"{'#SNPs':>8} {'time(s)':>8} {'mem(GB)':>8} | "
+            + " ".join(f"{x:>11}" for x in methods))
+    print(head)
+    print("-" * len(head))
+
+    rows = []
+    for m in sizes:
+        t0 = time.time()
+        res = run_one(args.n_train, h2, p, m=m, block_size=args.block_size,
+                      n_test=args.n_test, seed=args.seed,
+                      burn_in=args.burn_in, num_iter=args.num_iter)
+        dt = time.time() - t0
+        mem = _peak_mem_gb()
+        rows.append({"m": m, "time_s": round(dt, 2), "peak_mem_gb": round(mem, 2),
+                     **res})
+        cells = " ".join(f"{res[k]:>11.3f}" for k in methods)
+        print(f"{m:>8} {dt:>8.1f} {mem:>8.2f} | {cells}")
+
+    if args.csv:
+        _write_csv(args.csv, rows)
+
+
+def _write_csv(path, rows):
+    import csv
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"\nSaved results to {path}")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--quick", action="store_true",
+                        help="smaller/faster accuracy grid")
+    parser.add_argument("--scaling", action="store_true",
+                        help="benchmark runtime/memory/accuracy vs number of SNPs")
+    parser.add_argument("--m", type=int, nargs="+", default=None,
+                        help="number(s) of SNPs for --scaling mode")
+    parser.add_argument("--n-train", type=int, default=8000, dest="n_train")
+    parser.add_argument("--n-test", type=int, default=2000, dest="n_test")
+    parser.add_argument("--block-size", type=int, default=200, dest="block_size")
+    parser.add_argument("--h2", type=float, default=0.5)
+    parser.add_argument("--p", type=float, default=0.01)
+    parser.add_argument("--burn-in", type=int, default=50, dest="burn_in")
+    parser.add_argument("--num-iter", type=int, default=100, dest="num_iter")
+    parser.add_argument("--csv", default=None, help="write results to this CSV file")
+    parser.add_argument("--seed", type=int, default=1)
+    args = parser.parse_args(argv)
+
+    if args.scaling:
+        run_scaling(args)
+    else:
+        run_grid(args)
 
 
 if __name__ == "__main__":

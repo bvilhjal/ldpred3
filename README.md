@@ -79,9 +79,13 @@ runs a marginal GWAS, estimates the LD matrix from the training sample, fits
 LDpred2, and reports **out-of-sample** prediction R² on a held-out test set. It
 sweeps a grid of polygenicity × heritability × sample size.
 
+To stay within memory at scale, genotypes are stored as `int8` dosages and
+every step (standardization, GWAS, LD, PRS) is processed one LD block at a time,
+so a full float genotype matrix is never materialised.
+
 ```bash
 python src/simulate.py --quick            # fast sanity check
-python src/simulate.py --csv sim.csv      # full grid, save results
+python src/simulate.py --csv sim.csv      # full accuracy grid, save results
 ```
 
 Representative results (m=1000 SNPs, blocks of 100; prediction R² vs phenotype):
@@ -96,3 +100,27 @@ Representative results (m=1000 SNPs, blocks of 100; prediction R² vs phenotype)
 Takeaways: LDpred2 always beats the raw marginal baseline; accuracy rises with
 heritability and sample size; `grid`/`auto` approach the ceiling for sparse
 architectures, while `inf` is competitive for highly polygenic traits.
+
+### Scaling to many SNPs
+
+`--scaling` benchmarks runtime, peak memory and accuracy as the number of SNPs
+grows:
+
+```bash
+python src/simulate.py --scaling --m 10000 50000 100000
+```
+
+Measured on a 4-core / 15 GB box (Numba on, N_train=8000, N_test=2000, blocks of
+200, h²=0.5, p=0.01):
+
+| #SNPs | time (s) | peak mem (GB) | marginal | inf | grid | auto | ceiling |
+|-------|---------|---------------|---------|-----|------|------|---------|
+| 10000  | 10  | 0.30 | 0.167 | 0.174 | 0.465 | 0.452 | 0.503 |
+| 50000  | 48  | 0.74 | 0.051 | 0.050 | 0.316 | 0.264 | 0.485 |
+| 100000 | 102 | 1.28 | 0.016 | 0.015 | 0.181 | 0.115 | 0.482 |
+
+Runtime and memory scale ~linearly in the number of SNPs (≈1 ms/SNP; memory
+bounded by the `int8` genotype matrix). With the GWAS sample size held fixed,
+accuracy falls as more SNPs (and causal variants) dilute power — `grid` degrades
+gracefully while the raw `marginal` / `inf` scores collapse, the expected
+behaviour for an underpowered, increasingly polygenic setting.
