@@ -51,6 +51,22 @@ Two important caveats:
   `inf`'s ridge is unaffected). Use `sparsify_ld(..., shrink=<1)` to restore
   diagonal dominance, or supply an already-valid windowed LD matrix.
 
+### Fewer iterations: warm start & adaptive stopping
+
+`ldpred2_grid`/`ldpred2_auto` accept:
+
+* `warm_start=True` — initialise the chain from the LDpred2-inf solution instead
+  of zeros, shortening burn-in. It pays for one `inf` solve up front, so it only
+  helps when burn-in/mixing dominates **and** inf is cheap — i.e. paired with the
+  sparse LD backend (CG inf). With a *dense* O(m³) inf solve it can cost more
+  than it saves.
+* `tol=<x>` (+ `check_every`) — **adaptive stopping**: end sampling once the
+  running posterior mean's relative RMS change over `check_every` sweeps drops
+  below `tol`, instead of always running `num_iter`. `AutoResult.n_iter` reports
+  how many sweeps were used. On a fast-mixing block this reached the same
+  accuracy as a fixed 2000-iteration run in ~100 iterations (~10× faster), with
+  no loss (corr 1.000 vs the long run).
+
 ### Performance (optional Numba acceleration)
 
 The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an

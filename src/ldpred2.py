@@ -278,7 +278,8 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
 
 
 def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
-                  estimate_hyper, h2_min, h2_max, seed):
+                  estimate_hyper, h2_min, h2_max, seed, init_beta, tol,
+                  check_every):
     """Numeric core of the point-normal Gibbs sampler (JIT-compiled if numba).
 
     Takes only plain numeric / array arguments so it compiles under
@@ -287,25 +288,29 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
     and pure-Python paths; ``beta`` (used only for the -auto p-update) may differ
     slightly between the two but yields an equally valid sampler.
 
-    Returns ``(avg_beta, h2_path, p_path)``; the paths hold per-iteration
-    hyper-parameter values (meaningful only when ``estimate_hyper`` is True).
+    ``init_beta`` warm-starts the chain (e.g. from LDpred2-inf). When ``tol`` > 0,
+    the sampler stops early once the running posterior mean's relative RMS change
+    over ``check_every`` sweeps falls below ``tol`` (adaptive stopping).
+
+    Returns ``(avg_beta, h2_path, p_path, count)``; ``count`` is the number of
+    post-burn-in sweeps actually used, and the paths are truncated to it.
     """
     np.random.seed(seed)
     m = beta_hat.shape[0]
 
-    curr_beta = np.zeros(m)
+    curr_beta = init_beta.copy()                 # warm start (zeros = cold start)
     avg_beta = np.zeros(m)
     # Per-sweep Rao-Blackwellized contribution E[beta_j | rest] = postp * post_mean.
     post_means = np.zeros(m)
-    # Running product Rb = R @ curr_beta. Maintaining it incrementally turns the
-    # per-SNP residual into an O(1) lookup; we only pay the O(m) rank-1 update
-    # when an effect actually changes (rare for sparse architectures). It starts
-    # at zero because curr_beta starts at zero.
+    # Running product Rb = R @ curr_beta, maintained incrementally; initialised
+    # from curr_beta by the resync at it == 0 below.
     Rb = np.zeros(m)
+    prev_mean = np.zeros(m)                       # snapshot for convergence check
 
     h2_path = np.empty(num_iter)
     p_path = np.empty(num_iter)
     n_iter_total = burn_in + num_iter
+    count = 0
 
     for it in range(n_iter_total):
         # Variance of a causal effect under the slab.
@@ -318,9 +323,9 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
         n_post_var = n * post_var                    # post_mean = this * residual
         nb_causal = 0
 
-        # Periodically resync Rb from scratch to bound floating-point drift from
-        # the incremental updates (cheap relative to all the full sweeps).
-        if it % 100 == 0 and it > 0:
+        # Resync Rb from scratch at it == 0 (initialises it from the warm-start
+        # curr_beta) and periodically thereafter to bound floating-point drift.
+        if it % 100 == 0:
             Rb[:] = 0.0
             for k in range(m):
                 bk = curr_beta[k]
@@ -387,7 +392,6 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
                 h2 = h2_max
 
         if it >= burn_in:
-            k = it - burn_in
             # Rao-Blackwellized posterior mean for the dense estimator; for the
             # sparse variant accumulate the sampled (hard-thresholded) effects so
             # the result stays sparse.
@@ -395,11 +399,27 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
                 avg_beta += curr_beta
             else:
                 avg_beta += post_means
-            h2_path[k] = h2
-            p_path[k] = p
+            h2_path[count] = h2
+            p_path[count] = p
+            count += 1
 
-    avg_beta /= num_iter
-    return avg_beta, h2_path, p_path
+            # Adaptive stopping: relative RMS change of the running mean.
+            if tol > 0.0 and count % check_every == 0:
+                num = 0.0
+                den = 0.0
+                for i in range(m):
+                    cm = avg_beta[i] / count
+                    d = cm - prev_mean[i]
+                    num += d * d
+                    den += cm * cm
+                    prev_mean[i] = cm
+                if count > check_every and num <= tol * tol * den:
+                    break
+
+    if count == 0:
+        count = 1
+    avg_beta /= count
+    return avg_beta, h2_path[:count], p_path[:count], count
 
 
 # Compiled (or pass-through) version of the kernel.
@@ -407,25 +427,29 @@ _gibbs_kernel_jit = _jit(_gibbs_kernel)
 
 
 def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
-                         num_iter, sparse, estimate_hyper, h2_min, h2_max, seed):
+                         num_iter, sparse, estimate_hyper, h2_min, h2_max, seed,
+                         init_beta, tol, check_every):
     """Sparse (CSR) counterpart of :func:`_gibbs_kernel`.
 
-    Identical point-normal Gibbs / Rao-Blackwellized sampler, but the LD matrix
-    is stored as CSR (``indptr``/``indices``/``data``), so the rank-1 update and
-    the resync touch only the non-zero neighbours of each SNP -- O(bandwidth)
-    rather than O(m). The diagonal must be present in the CSR structure.
+    Identical point-normal Gibbs / Rao-Blackwellized sampler (incl. warm start
+    and adaptive stopping), but the LD matrix is stored as CSR
+    (``indptr``/``indices``/``data``), so the rank-1 update and the resync touch
+    only the non-zero neighbours of each SNP -- O(bandwidth) rather than O(m).
+    The diagonal must be present in the CSR structure.
     """
     np.random.seed(seed)
     m = beta_hat.shape[0]
 
-    curr_beta = np.zeros(m)
+    curr_beta = init_beta.copy()
     avg_beta = np.zeros(m)
     post_means = np.zeros(m)
     Rb = np.zeros(m)
+    prev_mean = np.zeros(m)
 
     h2_path = np.empty(num_iter)
     p_path = np.empty(num_iter)
     n_iter_total = burn_in + num_iter
+    count = 0
 
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
@@ -436,8 +460,8 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
         n_post_var = n * post_var
         nb_causal = 0
 
-        # Periodically resync Rb from scratch (only over non-zeros).
-        if it % 100 == 0 and it > 0:
+        # Resync Rb at it == 0 (from warm start) and periodically (non-zeros only).
+        if it % 100 == 0:
             Rb[:] = 0.0
             for k in range(m):
                 bk = curr_beta[k]
@@ -485,33 +509,57 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
                 h2 = h2_max
 
         if it >= burn_in:
-            k = it - burn_in
             if sparse:
                 avg_beta += curr_beta
             else:
                 avg_beta += post_means
-            h2_path[k] = h2
-            p_path[k] = p
+            h2_path[count] = h2
+            p_path[count] = p
+            count += 1
 
-    avg_beta /= num_iter
-    return avg_beta, h2_path, p_path
+            if tol > 0.0 and count % check_every == 0:
+                num = 0.0
+                den = 0.0
+                for i in range(m):
+                    cm = avg_beta[i] / count
+                    d = cm - prev_mean[i]
+                    num += d * d
+                    den += cm * cm
+                    prev_mean[i] = cm
+                if count > check_every and num <= tol * tol * den:
+                    break
+
+    if count == 0:
+        count = 1
+    avg_beta /= count
+    return avg_beta, h2_path[:count], p_path[:count], count
 
 
 _gibbs_kernel_sparse_jit = _jit(_gibbs_kernel_sparse)
 
 
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
-                   seed, estimate_hyper, h2_bounds, shrink_corr):
+                   seed, estimate_hyper, h2_bounds, shrink_corr,
+                   warm_start=False, tol=0.0, check_every=50):
     """Prepare arguments and dispatch to the (optionally JIT-compiled) kernel.
 
     ``corr`` may be a dense ndarray or a :class:`SparseLD`; the matching dense or
-    sparse kernel is used. Returns ``(avg_beta, h2_path, p_path)``.
+    sparse kernel is used. With ``warm_start`` the chain is initialised from the
+    LDpred2-inf solution; with ``tol`` > 0 the sampler stops early once the
+    running estimate converges. Returns ``(avg_beta, h2_path, p_path, count)``.
     """
     beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
     n = np.ascontiguousarray(n, dtype=np.float64)
     h2_min, h2_max = h2_bounds
     if seed is None:
         seed = np.random.SeedSequence().generate_state(1)[0]
+
+    # Warm start from the (cheap) infinitesimal solution, else cold start.
+    if warm_start:
+        init_beta = np.ascontiguousarray(
+            ldpred2_inf(corr, beta_hat, n, h2), dtype=np.float64)
+    else:
+        init_beta = np.zeros(beta_hat.shape[0])
 
     if isinstance(corr, SparseLD):
         if shrink_corr != 1.0:
@@ -520,6 +568,7 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
             corr.indptr, corr.indices, corr.data, beta_hat, n, float(h2),
             float(p), int(burn_in), int(num_iter), bool(sparse),
             bool(estimate_hyper), float(h2_min), float(h2_max), int(seed),
+            init_beta, float(tol), int(check_every),
         )
 
     # Single-precision, contiguous LD matrix. ``corr`` is symmetric, so row j
@@ -539,12 +588,13 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     return _gibbs_kernel_jit(
         corr, beta_hat, n, float(h2), float(p), int(burn_in), int(num_iter),
         bool(sparse), bool(estimate_hyper), float(h2_min), float(h2_max),
-        int(seed),
+        int(seed), init_beta, float(tol), int(check_every),
     )
 
 
 def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
-                 sparse=False, shrink_corr=1.0, seed=None):
+                 sparse=False, shrink_corr=1.0, warm_start=False, tol=0.0,
+                 check_every=50, seed=None):
     """LDpred2 grid model: point-normal prior, fixed hyper-parameters.
 
     The prior is spike-and-slab: with probability ``p`` a variant is causal
@@ -589,10 +639,11 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
     n = _as_n_vector(n_eff, m)
     if not 0.0 < p <= 1.0:
         raise ValueError("p must be in (0, 1]")
-    avg_beta, _, _ = _gibbs_sampler(
+    avg_beta, _, _, _ = _gibbs_sampler(
         corr, beta_hat, n, h2, p,
         burn_in=burn_in, num_iter=num_iter, sparse=sparse, seed=seed,
         estimate_hyper=False, h2_bounds=(1e-6, 1.0), shrink_corr=shrink_corr,
+        warm_start=warm_start, tol=tol, check_every=check_every,
     )
     return avg_beta
 
@@ -604,13 +655,15 @@ class AutoResult:
     beta_est: np.ndarray
     h2_est: float
     p_est: float
-    h2_path: np.ndarray = field(repr=False)
-    p_path: np.ndarray = field(repr=False)
+    n_iter: int = 0
+    h2_path: np.ndarray = field(default=None, repr=False)
+    p_path: np.ndarray = field(default=None, repr=False)
 
 
 def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
                  burn_in=200, num_iter=200, shrink_corr=1.0,
-                 h2_bounds=(1e-4, 1.0), seed=None):
+                 h2_bounds=(1e-4, 1.0), warm_start=False, tol=0.0,
+                 check_every=50, seed=None):
     """LDpred2-auto: fit the point-normal model and estimate ``h2`` and ``p``.
 
     Unlike :func:`ldpred2_grid`, no validation set is needed: the proportion of
@@ -647,15 +700,17 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
-    avg_beta, h2_path, p_path = _gibbs_sampler(
+    avg_beta, h2_path, p_path, count = _gibbs_sampler(
         corr, beta_hat, n, h2_init, p_init,
         burn_in=burn_in, num_iter=num_iter, sparse=False, seed=seed,
         estimate_hyper=True, h2_bounds=h2_bounds, shrink_corr=shrink_corr,
+        warm_start=warm_start, tol=tol, check_every=check_every,
     )
     return AutoResult(
         beta_est=avg_beta,
         h2_est=float(np.mean(h2_path)),
         p_est=float(np.mean(p_path)),
+        n_iter=int(count),
         h2_path=h2_path,
         p_path=p_path,
     )

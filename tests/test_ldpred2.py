@@ -103,8 +103,10 @@ def test_numba_and_python_paths_agree():
 
     corr, beta_hat, true_beta, n = simulate(m=200, seed=5)
     n_vec = np.full(corr.shape[0], float(n))
+    init = np.zeros(corr.shape[0])
     kwargs = dict(burn_in=40, num_iter=120, sparse=False, estimate_hyper=False,
-                  h2_min=1e-6, h2_max=1.0, seed=11)
+                  h2_min=1e-6, h2_max=1.0, seed=11, init_beta=init, tol=0.0,
+                  check_every=50)
     corr_c = np.ascontiguousarray(corr)
     py = ldpred2._gibbs_kernel(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
     jit = ldpred2._gibbs_kernel_jit(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
@@ -141,6 +143,32 @@ def test_banded_sparse_recovers_signal():
     beta_grid = ldpred2_grid(sp, beta_hat, n_vec, h2=0.5, p=0.05,
                              burn_in=60, num_iter=200, seed=1)
     assert _corr(beta_grid, true_beta) > _corr(beta_hat, true_beta)
+
+
+def test_warm_start_recovers_signal():
+    """Warm-starting from inf should still recover the signal (and converge)."""
+    corr, beta_hat, true_beta, n = simulate(m=300, seed=9)
+    n_vec = np.full(corr.shape[0], float(n))
+    cold = ldpred2_grid(corr, beta_hat, n_vec, h2=0.5, p=0.05,
+                        burn_in=100, num_iter=300, seed=1)
+    warm = ldpred2_grid(corr, beta_hat, n_vec, h2=0.5, p=0.05,
+                        burn_in=100, num_iter=300, warm_start=True, seed=1)
+    base = _corr(beta_hat, true_beta)
+    assert _corr(cold, true_beta) > base
+    assert _corr(warm, true_beta) > base
+    # Cold and warm start estimate the same posterior mean (well correlated).
+    assert _corr(cold, warm) > 0.9
+
+
+def test_adaptive_stopping_stops_early():
+    """Adaptive stopping should use fewer iterations yet recover the signal."""
+    corr, beta_hat, true_beta, n = simulate(m=300, seed=10)
+    n_vec = np.full(corr.shape[0], float(n))
+    res = ldpred2_auto(corr, beta_hat, n_vec, h2_init=0.3, p_init=0.1,
+                       burn_in=50, num_iter=2000, warm_start=True,
+                       tol=1e-2, check_every=50, seed=1)
+    assert res.n_iter < 2000                       # stopped before the cap
+    assert _corr(res.beta_est, true_beta) > _corr(beta_hat, true_beta)
 
 
 if __name__ == "__main__":
