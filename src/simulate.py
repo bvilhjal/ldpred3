@@ -150,7 +150,7 @@ def simulate_genotypes_coalescent(n, m, block_size, *, Ne=10000,
         ms_seed = int(rng.integers(1, 2 ** 31 - 1))
         ts = msprime.sim_ancestry(
             samples=n, ploidy=2, population_size=Ne,
-            recombination_rate=recomb_rate, sequence_length=seq_len,
+            recombination_rate=recomb_rate, sequence_length=int(seq_len),
             random_seed=ms_seed)
         mts = msprime.sim_mutations(ts, rate=mut_rate, random_seed=ms_seed,
                                     model=msprime.BinaryMutationModel())
