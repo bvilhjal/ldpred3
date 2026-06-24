@@ -101,26 +101,48 @@ Takeaways: LDpred2 always beats the raw marginal baseline; accuracy rises with
 heritability and sample size; `grid`/`auto` approach the ceiling for sparse
 architectures, while `inf` is competitive for highly polygenic traits.
 
-### Scaling to many SNPs
+### Scaling: what the algorithm actually depends on
 
-`--scaling` benchmarks runtime, peak memory and accuracy as the number of SNPs
-grows:
+The LDpred2 *algorithm* works from summary statistics + the LD matrix, so its
+cost is **independent of the GWAS sample size N** and is driven instead by the
+**LD structure (block size)**. The benchmarks below separate the algorithm's
+`fit` time from the simulation/GWAS/LD-construction `prep` time (which does scale
+with N). All measured on a 4-core / 15 GB box, Numba on, h²=0.5, p=0.01.
 
-```bash
-python src/simulate.py --scaling --m 10000 50000 100000
-```
+**Independent of N** (`--n-independence`, m=10000, blocks of 200): the fit time
+is flat while prep grows with N.
 
-Measured on a 4-core / 15 GB box (Numba on, N_train=8000, N_test=2000, blocks of
-200, h²=0.5, p=0.01):
+| N_train | prep (s) | fit_grid (s) | fit_auto (s) |
+|---------|---------|--------------|--------------|
+| 2000   | 4.1  | 0.200 | 0.367 |
+| 8000   | 10.4 | 0.199 | 0.305 |
+| 32000  | 46.9 | 0.195 | 0.270 |
 
-| #SNPs | time (s) | peak mem (GB) | marginal | inf | grid | auto | ceiling |
-|-------|---------|---------------|---------|-----|------|------|---------|
-| 10000  | 10  | 0.30 | 0.167 | 0.174 | 0.465 | 0.452 | 0.503 |
-| 50000  | 48  | 0.74 | 0.051 | 0.050 | 0.316 | 0.264 | 0.485 |
-| 100000 | 102 | 1.28 | 0.016 | 0.015 | 0.181 | 0.115 | 0.482 |
+**Driven by LD block size** (`--ld-scaling`, m=20000 fixed, N=8000): larger LD
+blocks make each block's solve/sampler costlier. The infinitesimal model is a
+dense linear solve per block (≈O(m·k²), grows fast), whereas the Gibbs samplers
+stay nearly flat for sparse traits thanks to the running-residual update.
 
-Runtime and memory scale ~linearly in the number of SNPs (≈1 ms/SNP; memory
-bounded by the `int8` genotype matrix). With the GWAS sample size held fixed,
-accuracy falls as more SNPs (and causal variants) dilute power — `grid` degrades
-gracefully while the raw `marginal` / `inf` scores collapse, the expected
-behaviour for an underpowered, increasingly polygenic setting.
+| block size | #blocks | fit_inf (s) | fit_grid (s) | fit_auto (s) |
+|-----------|---------|-------------|--------------|--------------|
+| 100   | 200 | 0.076 | 0.379 | 0.664 |
+| 250   | 80  | 0.105 | 0.402 | 0.680 |
+| 500   | 40  | 0.167 | 0.398 | 0.731 |
+| 1000  | 20  | 0.347 | 0.410 | 0.468 |
+| 2000  | 10  | 1.082 | 0.469 | 0.541 |
+
+**Scaling #SNPs** (`--scaling`, N=8000, blocks of 200): with N fixed, total
+runtime and memory grow ~linearly in #SNPs (≈1 ms/SNP; memory bounded by the
+`int8` genotype matrix). Accuracy falls only because more SNPs/causal variants
+dilute the fixed GWAS power — `grid` degrades gracefully while raw
+`marginal`/`inf` collapse.
+
+| #SNPs | prep (s) | fit (s) | peak mem (GB) | marginal | inf | grid | auto | ceiling |
+|-------|---------|--------|---------------|---------|-----|------|------|---------|
+| 10000  | ~10 | ~0.7 | 0.30 | 0.167 | 0.174 | 0.465 | 0.452 | 0.503 |
+| 50000  | ~46 | ~3.5 | 0.74 | 0.051 | 0.050 | 0.316 | 0.264 | 0.485 |
+| 100000 | ~98 | ~7   | 1.28 | 0.016 | 0.015 | 0.181 | 0.115 | 0.482 |
+
+Practical takeaway: for dense data with long-range / large LD blocks, the
+dense per-block LD storage and the infinitesimal solve become the bottleneck,
+which motivates a banded / sparse-LD backend.

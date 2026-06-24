@@ -139,8 +139,15 @@ def r2(pred, target):
 def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
             rho=0.6, maf_range=(0.05, 0.5), seed=0,
             burn_in=60, num_iter=150,
-            methods=("marginal", "inf", "grid", "auto")):
-    """Run a single simulation replicate; return prediction R^2 per method."""
+            methods=("marginal", "inf", "grid", "auto"),
+            return_timing=False):
+    """Run a single simulation replicate; return prediction R^2 per method.
+
+    If ``return_timing`` is True, return ``(results, timing)`` where ``timing``
+    splits ``prep_s`` (genotype sim + GWAS + LD construction, which scale with
+    N) from ``fit_s`` (the LDpred2 algorithm per method, which does not).
+    """
+    t_start = time.time()
     rng = np.random.default_rng(seed)
     block_sizes = [block_size] * (m // block_size)
     m = int(sum(block_sizes))
@@ -198,19 +205,29 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
         ld.append(((Xtr.T @ Xtr) / n_train, idx))
 
     n_vec = np.full(m, float(n_train))
+    t_prep = time.time() - t_start   # sim + GWAS + LD build (scales with N)
 
-    # Fit each method (full adjusted-beta vector).
+    # Fit each method (full adjusted-beta vector). Time the LDpred2 algorithm
+    # itself (it operates on sumstats + LD only, independent of N) separately
+    # from the data-prep / GWAS / LD-construction above (which do depend on N).
+    fit_time = {}
     adj = {"marginal": beta_std}
     if "inf" in methods:
+        t = time.time()
         adj["inf"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="inf", h2=h2)
+        fit_time["inf"] = time.time() - t
     if "grid" in methods:
+        t = time.time()
         adj["grid"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="grid",
                                         h2=h2, p=p, burn_in=burn_in,
                                         num_iter=num_iter, seed=seed)
+        fit_time["grid"] = time.time() - t
     if "auto" in methods:
+        t = time.time()
         adj["auto"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="auto",
                                         burn_in=burn_in, num_iter=num_iter,
                                         seed=seed)
+        fit_time["auto"] = time.time() - t
 
     # Pass 3: build PRS on the test sample, block by block.
     prs = {k: np.zeros(n_test) for k in adj}
@@ -221,12 +238,21 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
 
     results = {k: r2(prs[k], y_test) for k in adj}
     results["ceiling(h2)"] = r2(g_test, y_test)
-    return results
+
+    timing = {"prep_s": t_prep, "fit_s": fit_time}
+    return (results, timing) if return_timing else results
 
 
 def _peak_mem_gb():
     """Peak resident set size of this process, in GB (Linux ru_maxrss is KB)."""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 ** 2)
+
+
+def _warmup():
+    """Trigger Numba JIT compilation so it doesn't pollute the first timing row."""
+    if HAVE_NUMBA:
+        run_one(500, 0.5, 0.05, m=200, block_size=100, n_test=100,
+                burn_in=5, num_iter=5, seed=0)
 
 
 # --------------------------------------------------------------------------- #
@@ -265,30 +291,110 @@ def run_grid(args):
 
 
 def run_scaling(args):
+    """Scale the number of SNPs; split prep time (scales with N) from fit time."""
     sizes = args.m or [10000, 50000, 100000]
     h2, p = args.h2, args.p
     methods = ["marginal", "inf", "grid", "auto", "ceiling(h2)"]
 
-    print(f"LDpred2 scaling benchmark  (numba={'on' if HAVE_NUMBA else 'off'}, "
-          f"N_train={args.n_train}, N_test={args.n_test}, blocks of "
-          f"{args.block_size}, h2={h2}, p={p})")
-    head = (f"{'#SNPs':>8} {'time(s)':>8} {'mem(GB)':>8} | "
+    print(f"LDpred2 #SNP-scaling benchmark  (numba={'on' if HAVE_NUMBA else 'off'}, "
+          f"N_train={args.n_train}, blocks of {args.block_size}, h2={h2}, p={p})")
+    head = (f"{'#SNPs':>8} {'prep(s)':>8} {'fit(s)':>7} {'mem(GB)':>8} | "
             + " ".join(f"{x:>11}" for x in methods))
     print(head)
     print("-" * len(head))
 
     rows = []
     for m in sizes:
-        t0 = time.time()
-        res = run_one(args.n_train, h2, p, m=m, block_size=args.block_size,
-                      n_test=args.n_test, seed=args.seed,
-                      burn_in=args.burn_in, num_iter=args.num_iter)
-        dt = time.time() - t0
+        res, tm = run_one(args.n_train, h2, p, m=m, block_size=args.block_size,
+                          n_test=args.n_test, seed=args.seed,
+                          burn_in=args.burn_in, num_iter=args.num_iter,
+                          return_timing=True)
+        fit = sum(tm["fit_s"].values())
         mem = _peak_mem_gb()
-        rows.append({"m": m, "time_s": round(dt, 2), "peak_mem_gb": round(mem, 2),
-                     **res})
+        rows.append({"m": m, "prep_s": round(tm["prep_s"], 2),
+                     "fit_s": round(fit, 2), "peak_mem_gb": round(mem, 2), **res})
         cells = " ".join(f"{res[k]:>11.3f}" for k in methods)
-        print(f"{m:>8} {dt:>8.1f} {mem:>8.2f} | {cells}")
+        print(f"{m:>8} {tm['prep_s']:>8.1f} {fit:>7.2f} {mem:>8.2f} | {cells}")
+
+    if args.csv:
+        _write_csv(args.csv, rows)
+
+
+def run_ld_scaling(args):
+    """Scale the LD block size at fixed total #SNPs.
+
+    This isolates the axis the LDpred2 algorithm actually depends on. Larger LD
+    blocks make each block's sampler/solve more expensive: the Gibbs samplers
+    (grid/auto) grow ~linearly in block size for fixed m (the rank-1 updates
+    cost grows with block size), while the infinitesimal solve is a dense linear
+    system per block and grows ~quadratically in block size for fixed m.
+    """
+    block_sizes = args.block_sizes or [100, 250, 500, 1000, 2000]
+    m = (args.m or [20000])[0]
+    h2, p = args.h2, args.p
+    _warmup()
+
+    print(f"LDpred2 LD-block-size scaling  (numba={'on' if HAVE_NUMBA else 'off'}, "
+          f"m={m} SNPs fixed, N_train={args.n_train}, h2={h2}, p={p})")
+    head = (f"{'block':>6} {'#blocks':>8} {'prep(s)':>8} | "
+            f"{'fit_inf':>9} {'fit_grid':>9} {'fit_auto':>9} | "
+            f"{'R2_grid':>8} {'R2_auto':>8}")
+    print(head)
+    print("-" * len(head))
+
+    rows = []
+    for bs in block_sizes:
+        res, tm = run_one(args.n_train, h2, p, m=m, block_size=bs,
+                          n_test=args.n_test, seed=args.seed,
+                          burn_in=args.burn_in, num_iter=args.num_iter,
+                          return_timing=True)
+        ft = tm["fit_s"]
+        nblk = m // bs
+        rows.append({"block_size": bs, "n_blocks": nblk,
+                     "prep_s": round(tm["prep_s"], 2),
+                     "fit_inf_s": round(ft["inf"], 3),
+                     "fit_grid_s": round(ft["grid"], 3),
+                     "fit_auto_s": round(ft["auto"], 3),
+                     "R2_grid": res["grid"], "R2_auto": res["auto"]})
+        print(f"{bs:>6} {nblk:>8} {tm['prep_s']:>8.1f} | "
+              f"{ft['inf']:>9.3f} {ft['grid']:>9.3f} {ft['auto']:>9.3f} | "
+              f"{res['grid']:>8.3f} {res['auto']:>8.3f}")
+
+    if args.csv:
+        _write_csv(args.csv, rows)
+
+
+def run_n_independence(args):
+    """Vary the GWAS sample size at fixed LD; the fit time should be flat.
+
+    Demonstrates that the LDpred2 algorithm cost is independent of N: only the
+    data-prep / GWAS / LD-construction time grows with N, while the sampler time
+    (which sees only sumstats + LD) stays roughly constant.
+    """
+    n_list = args.n_list or [2000, 8000, 32000]
+    m = (args.m or [10000])[0]
+    h2, p = args.h2, args.p
+    _warmup()
+
+    print(f"LDpred2 N-independence check  (numba={'on' if HAVE_NUMBA else 'off'}, "
+          f"m={m} SNPs, blocks of {args.block_size}, h2={h2}, p={p})")
+    head = (f"{'N_train':>8} {'prep(s)':>8} | {'fit_grid(s)':>11} "
+            f"{'fit_auto(s)':>11} | {'R2_grid':>8}")
+    print(head)
+    print("-" * len(head))
+
+    rows = []
+    for n in n_list:
+        res, tm = run_one(n, h2, p, m=m, block_size=args.block_size,
+                          n_test=args.n_test, seed=args.seed,
+                          burn_in=args.burn_in, num_iter=args.num_iter,
+                          return_timing=True)
+        ft = tm["fit_s"]
+        rows.append({"N_train": n, "prep_s": round(tm["prep_s"], 2),
+                     "fit_grid_s": round(ft["grid"], 3),
+                     "fit_auto_s": round(ft["auto"], 3), "R2_grid": res["grid"]})
+        print(f"{n:>8} {tm['prep_s']:>8.1f} | {ft['grid']:>11.3f} "
+              f"{ft['auto']:>11.3f} | {res['grid']:>8.3f}")
 
     if args.csv:
         _write_csv(args.csv, rows)
@@ -310,8 +416,20 @@ def main(argv=None):
                         help="smaller/faster accuracy grid")
     parser.add_argument("--scaling", action="store_true",
                         help="benchmark runtime/memory/accuracy vs number of SNPs")
+    parser.add_argument("--ld-scaling", action="store_true", dest="ld_scaling",
+                        help="benchmark algorithm time vs LD block size (fixed #SNPs)")
+    parser.add_argument("--n-independence", action="store_true",
+                        dest="n_independence",
+                        help="show the algorithm's fit time is independent of N")
     parser.add_argument("--m", type=int, nargs="+", default=None,
-                        help="number(s) of SNPs for --scaling mode")
+                        help="number(s) of SNPs (first value used as fixed m for "
+                             "--ld-scaling / --n-independence)")
+    parser.add_argument("--block-sizes", type=int, nargs="+", default=None,
+                        dest="block_sizes",
+                        help="LD block sizes to sweep for --ld-scaling")
+    parser.add_argument("--n-list", type=int, nargs="+", default=None,
+                        dest="n_list",
+                        help="GWAS sample sizes to sweep for --n-independence")
     parser.add_argument("--n-train", type=int, default=8000, dest="n_train")
     parser.add_argument("--n-test", type=int, default=2000, dest="n_test")
     parser.add_argument("--block-size", type=int, default=200, dest="block_size")
@@ -323,7 +441,11 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args(argv)
 
-    if args.scaling:
+    if args.ld_scaling:
+        run_ld_scaling(args)
+    elif args.n_independence:
+        run_n_independence(args)
+    elif args.scaling:
         run_scaling(args)
     else:
         run_grid(args)
