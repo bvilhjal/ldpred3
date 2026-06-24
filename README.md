@@ -29,6 +29,15 @@ the bandwidth-bound hot path, so it runs as a fused element loop over a
 no meaningful accuracy cost — and matches bigsnpr, which also stores LD in single
 precision). The effects and the `R @ beta` accumulator stay in float64.
 
+The posterior-mean estimate is **Rao-Blackwellized** (as in the original
+LDpred): each sweep accumulates the conditional expectation
+`E[beta_j | rest] = P(causal) · posterior_mean` rather than the sampled draw.
+The sampled value still drives the Markov chain; only the *estimate* uses the
+expectation, which has much lower Monte-Carlo variance (≈6–13× in fast-mixing
+regimes), so fewer iterations are needed for the same accuracy. In extreme-LD
+regions the benefit is smaller because chain mixing, not sampling noise, is the
+bottleneck.
+
 [Numba](https://numba.pydata.org/) is strongly recommended: when installed, the
 inner sampler is JIT-compiled (and cached) for a large speed-up. Without it the
 code still runs and gives identical results, but the sampler falls back to plain

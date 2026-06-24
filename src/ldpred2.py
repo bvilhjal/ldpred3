@@ -165,6 +165,8 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
 
     curr_beta = np.zeros(m)
     avg_beta = np.zeros(m)
+    # Per-sweep Rao-Blackwellized contribution E[beta_j | rest] = postp * post_mean.
+    post_means = np.zeros(m)
     # Running product Rb = R @ curr_beta. Maintaining it incrementally turns the
     # per-SNP residual into an O(1) lookup; we only pay the O(m) rank-1 update
     # when an effect actually changes (rare for sparse architectures). It starts
@@ -217,6 +219,12 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
                         - 0.5 * post_mean * post_mean / pv)
             postp = 1.0 / (1.0 + np.exp(log_odds))
 
+            # Rao-Blackwellized estimate: accumulate the conditional posterior
+            # mean E[beta_j | rest] = postp * post_mean rather than the sampled
+            # value. Same expectation, lower Monte-Carlo variance (as in the
+            # original LDpred). The *sampled* value below still drives the chain.
+            post_means[j] = postp * post_mean
+
             if sparse and postp < 0.5:
                 new = 0.0
             elif unif[j] < postp:
@@ -250,7 +258,13 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
 
         if it >= burn_in:
             k = it - burn_in
-            avg_beta += curr_beta
+            # Rao-Blackwellized posterior mean for the dense estimator; for the
+            # sparse variant accumulate the sampled (hard-thresholded) effects so
+            # the result stays sparse.
+            if sparse:
+                avg_beta += curr_beta
+            else:
+                avg_beta += post_means
             h2_path[k] = h2
             p_path[k] = p
 
