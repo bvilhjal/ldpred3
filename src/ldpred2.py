@@ -64,6 +64,8 @@ __all__ = [
     "ldpred2_auto",
     "ldpred2_by_blocks",
     "AutoResult",
+    "SparseLD",
+    "sparsify_ld",
 ]
 
 
@@ -113,6 +115,87 @@ def _as_n_vector(n_eff, m):
     return n_eff
 
 
+@dataclass
+class SparseLD:
+    """A symmetric LD matrix stored in compressed-sparse-row (CSR) form.
+
+    Real LD is banded -- most off-diagonal entries are ~0 -- so storing only the
+    non-zeros and updating only non-zero neighbours turns the sampler's hot-path
+    rank-1 update from O(block_size) into O(bandwidth). Build one with
+    :func:`sparsify_ld`. The diagonal (1.0) is always kept. Arrays use the
+    layout numba expects: ``indptr``/``indices`` int32, ``data`` float32.
+    """
+
+    indptr: np.ndarray
+    indices: np.ndarray
+    data: np.ndarray
+    m: int
+
+    @property
+    def nnz(self):
+        return int(self.data.shape[0])
+
+    @property
+    def density(self):
+        return self.nnz / float(self.m * self.m)
+
+
+def sparsify_ld(corr, threshold=1e-3, max_dist=None, shrink=1.0):
+    """Build a :class:`SparseLD` from a dense LD matrix.
+
+    Entries are kept when ``|r| >= threshold`` and (if ``max_dist`` is given)
+    within ``max_dist`` SNPs of the diagonal; the diagonal is always kept. This
+    mirrors how LDpred2 windows/thresholds LD in practice.
+
+    Dropping off-diagonal entries (especially by hard distance banding) can make
+    the matrix lose positive-definiteness, which **destabilises the Gibbs
+    sampler** (effects can diverge with fixed ``h2``). Setting ``shrink`` < 1
+    multiplies the kept off-diagonal entries by that factor (diagonal stays 1),
+    restoring diagonal dominance / validity -- the standard regularisation for a
+    windowed LD matrix. ``shrink`` is recommended whenever you band the LD before
+    sampling; the infinitesimal solver is unaffected (its ridge handles it).
+
+    Parameters
+    ----------
+    corr : ndarray, shape (m, m)
+        Dense symmetric LD matrix.
+    threshold : float
+        Drop off-diagonal entries with absolute correlation below this.
+    max_dist : int or None
+        If set, also drop entries more than this many SNPs apart (banding).
+    shrink : float
+        Multiply kept off-diagonal entries by this (diagonal kept at 1.0).
+    """
+    corr = np.asarray(corr)
+    m = corr.shape[0]
+    indptr = np.zeros(m + 1, dtype=np.int32)
+    idx_parts = []
+    data_parts = []
+    for j in range(m):
+        row = corr[j]
+        keep = np.abs(row) >= threshold
+        if max_dist is not None:
+            lo = max(0, j - max_dist)
+            hi = min(m, j + max_dist + 1)
+            band = np.zeros(m, dtype=bool)
+            band[lo:hi] = True
+            keep &= band
+        keep[j] = True                      # always keep the diagonal
+        cols = np.flatnonzero(keep)
+        vals = row[cols].astype(np.float32)
+        if shrink != 1.0:
+            vals = vals * np.float32(shrink)
+            vals[cols == j] = np.float32(1.0)   # restore the diagonal
+        idx_parts.append(cols.astype(np.int32))
+        data_parts.append(vals)
+        indptr[j + 1] = indptr[j] + cols.shape[0]
+    indices = (np.concatenate(idx_parts) if idx_parts
+               else np.empty(0, np.int32)).astype(np.int32)
+    data = (np.concatenate(data_parts) if data_parts
+            else np.empty(0, np.float32)).astype(np.float32)
+    return SparseLD(indptr, indices, data, m)
+
+
 def ldpred2_inf(corr, beta_hat, n_eff, h2):
     """LDpred2 infinitesimal model (closed form).
 
@@ -123,8 +206,10 @@ def ldpred2_inf(corr, beta_hat, n_eff, h2):
 
     Parameters
     ----------
-    corr : ndarray, shape (m, m)
-        LD correlation matrix for the block.
+    corr : ndarray (m, m) or SparseLD
+        LD correlation matrix for the block. A dense matrix is solved directly;
+        a :class:`SparseLD` is solved iteratively (conjugate gradient on the
+        sparse system), avoiding the dense O(m^3) factorisation.
     beta_hat : array_like, shape (m,)
         Standardized marginal effects (see :func:`standardize_betas`).
     n_eff : array_like or float
@@ -138,13 +223,58 @@ def ldpred2_inf(corr, beta_hat, n_eff, h2):
     ndarray, shape (m,)
         Adjusted (posterior-mean) standardized effects.
     """
-    corr = np.asarray(corr, dtype=float)
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
     N = float(np.median(n))
-    A = corr + np.eye(m) * (m / (h2 * N))
+    ridge = m / (h2 * N)
+
+    if isinstance(corr, SparseLD):
+        # Solve (R + ridge*I) x = beta_hat by conjugate gradient; the system is
+        # SPD (R is a correlation matrix and ridge>0) and only needs matvecs.
+        return _cg_solve(corr, ridge, beta_hat)
+
+    corr = np.asarray(corr, dtype=float)
+    A = corr + np.eye(m) * ridge
     return np.linalg.solve(A, beta_hat)
+
+
+def _sparse_matvec(indptr, indices, data, x, out):
+    """out = R @ x for a symmetric CSR matrix (out is overwritten)."""
+    m = out.shape[0]
+    for j in range(m):
+        acc = 0.0
+        for idx in range(indptr[j], indptr[j + 1]):
+            acc += data[idx] * x[indices[idx]]
+        out[j] = acc
+    return out
+
+
+_sparse_matvec_jit = _jit(_sparse_matvec)
+
+
+def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
+    """Conjugate-gradient solve of (R + ridge*I) x = b for SparseLD R."""
+    m = ld.m
+    indptr, indices, data = ld.indptr, ld.indices, ld.data
+    x = np.zeros(m)
+    r = b.copy()                       # residual = b - A@0
+    pvec = r.copy()
+    rs = float(r @ r)
+    Ap = np.empty(m)
+    tol2 = tol * tol * float(b @ b)
+    for _ in range(max_iter):
+        _sparse_matvec_jit(indptr, indices, data, pvec, Ap)
+        Ap += ridge * pvec
+        alpha = rs / float(pvec @ Ap)
+        x += alpha * pvec
+        r -= alpha * Ap
+        rs_new = float(r @ r)
+        if rs_new <= tol2:
+            break
+        pvec = r + (rs_new / rs) * pvec
+        rs = rs_new
+    return x
 
 
 def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
@@ -276,12 +406,122 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
 _gibbs_kernel_jit = _jit(_gibbs_kernel)
 
 
+def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
+                         num_iter, sparse, estimate_hyper, h2_min, h2_max, seed):
+    """Sparse (CSR) counterpart of :func:`_gibbs_kernel`.
+
+    Identical point-normal Gibbs / Rao-Blackwellized sampler, but the LD matrix
+    is stored as CSR (``indptr``/``indices``/``data``), so the rank-1 update and
+    the resync touch only the non-zero neighbours of each SNP -- O(bandwidth)
+    rather than O(m). The diagonal must be present in the CSR structure.
+    """
+    np.random.seed(seed)
+    m = beta_hat.shape[0]
+
+    curr_beta = np.zeros(m)
+    avg_beta = np.zeros(m)
+    post_means = np.zeros(m)
+    Rb = np.zeros(m)
+
+    h2_path = np.empty(num_iter)
+    p_path = np.empty(num_iter)
+    n_iter_total = burn_in + num_iter
+
+    for it in range(n_iter_total):
+        c1 = h2 / (m * p)
+        log_prior_odds = np.log1p(-p) - np.log(p)
+        post_var = c1 / (n * c1 + 1.0)
+        post_sd = np.sqrt(post_var)
+        half_log_term = 0.5 * np.log1p(n * c1)
+        n_post_var = n * post_var
+        nb_causal = 0
+
+        # Periodically resync Rb from scratch (only over non-zeros).
+        if it % 100 == 0 and it > 0:
+            Rb[:] = 0.0
+            for k in range(m):
+                bk = curr_beta[k]
+                if bk != 0.0:
+                    for idx in range(indptr[k], indptr[k + 1]):
+                        Rb[indices[idx]] += data[idx] * bk
+
+        unif = np.random.random(m)
+        gauss = np.random.standard_normal(m)
+
+        for j in range(m):
+            old = curr_beta[j]
+            res_beta_j = beta_hat[j] - Rb[j] + old
+
+            pv = post_var[j]
+            post_mean = n_post_var[j] * res_beta_j
+            log_odds = (log_prior_odds + half_log_term[j]
+                        - 0.5 * post_mean * post_mean / pv)
+            postp = 1.0 / (1.0 + np.exp(log_odds))
+            post_means[j] = postp * post_mean
+
+            if sparse and postp < 0.5:
+                new = 0.0
+            elif unif[j] < postp:
+                new = post_mean + gauss[j] * post_sd[j]
+                nb_causal += 1
+            else:
+                new = 0.0
+
+            delta = new - old
+            if delta != 0.0:
+                # Rank-1 update over the non-zero neighbours only (O(bandwidth)).
+                for idx in range(indptr[j], indptr[j + 1]):
+                    Rb[indices[idx]] += data[idx] * delta
+                curr_beta[j] = new
+
+        if estimate_hyper:
+            p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
+            h2 = 0.0
+            for i in range(m):
+                h2 += curr_beta[i] * Rb[i]
+            if h2 < h2_min:
+                h2 = h2_min
+            elif h2 > h2_max:
+                h2 = h2_max
+
+        if it >= burn_in:
+            k = it - burn_in
+            if sparse:
+                avg_beta += curr_beta
+            else:
+                avg_beta += post_means
+            h2_path[k] = h2
+            p_path[k] = p
+
+    avg_beta /= num_iter
+    return avg_beta, h2_path, p_path
+
+
+_gibbs_kernel_sparse_jit = _jit(_gibbs_kernel_sparse)
+
+
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr):
     """Prepare arguments and dispatch to the (optionally JIT-compiled) kernel.
 
-    Returns ``(avg_beta, h2_path, p_path)``.
+    ``corr`` may be a dense ndarray or a :class:`SparseLD`; the matching dense or
+    sparse kernel is used. Returns ``(avg_beta, h2_path, p_path)``.
     """
+    beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
+    n = np.ascontiguousarray(n, dtype=np.float64)
+    h2_min, h2_max = h2_bounds
+    if seed is None:
+        seed = np.random.SeedSequence().generate_state(1)[0]
+
+    if isinstance(corr, SparseLD):
+        if shrink_corr != 1.0:
+            raise ValueError("shrink_corr is only supported for dense LD")
+        return _gibbs_kernel_sparse_jit(
+            corr.indptr, corr.indices, corr.data, beta_hat, n, float(h2),
+            float(p), int(burn_in), int(num_iter), bool(sparse),
+            bool(estimate_hyper), float(h2_min), float(h2_max), int(seed),
+        )
+
     # Single-precision, contiguous LD matrix. ``corr`` is symmetric, so row j
     # (a contiguous slice) is also column j -- used for the rank-1 update. float32
     # halves the memory traffic of that (bandwidth-bound) hot loop with no
@@ -295,12 +535,6 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     if shrink_corr != 1.0:
         corr = corr * np.float32(shrink_corr)
         np.fill_diagonal(corr, np.float32(1.0))
-
-    beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
-    n = np.ascontiguousarray(n, dtype=np.float64)
-    h2_min, h2_max = h2_bounds
-    if seed is None:
-        seed = np.random.SeedSequence().generate_state(1)[0]
 
     return _gibbs_kernel_jit(
         corr, beta_hat, n, float(h2), float(p), int(burn_in), int(num_iter),
@@ -348,7 +582,8 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
     ndarray, shape (m,)
         Posterior-mean standardized effects.
     """
-    corr = np.asarray(corr, dtype=float)
+    if not isinstance(corr, SparseLD):
+        corr = np.asarray(corr, dtype=float)
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
@@ -407,7 +642,8 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
         With fields ``beta_est``, ``h2_est``, ``p_est`` and the full sampling
         paths ``h2_path`` / ``p_path``.
     """
-    corr = np.asarray(corr, dtype=float)
+    if not isinstance(corr, SparseLD):
+        corr = np.asarray(corr, dtype=float)
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
@@ -425,7 +661,9 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
     )
 
 
-def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto", **kwargs):
+def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
+                      sparsify=False, ld_threshold=1e-3, ld_max_dist=None,
+                      **kwargs):
     """Apply an LDpred2 model independently to a list of LD blocks.
 
     Genome-wide LDpred2 treats (approximately) independent LD blocks
@@ -443,6 +681,13 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto", **kwargs):
         GWAS sample size (per variant or scalar).
     method : {"inf", "grid", "auto"}
         Which model to run per block.
+    sparsify : bool
+        If True, convert each dense block to a :class:`SparseLD` (via
+        :func:`sparsify_ld` with ``ld_threshold`` / ``ld_max_dist``) before
+        fitting, so the sampler/solver only touch non-zero LD entries. Blocks
+        that are already ``SparseLD`` are used as-is.
+    ld_threshold, ld_max_dist :
+        Passed to :func:`sparsify_ld` when ``sparsify`` is True.
     **kwargs
         Passed through to the chosen model function. For ``inf``/``grid`` the
         per-block ``h2`` is rescaled by the fraction of variants in the block.
@@ -467,6 +712,9 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto", **kwargs):
     for corr_block, idx in blocks:
         idx = np.asarray(idx)
         k = idx.shape[0]
+        if sparsify and not isinstance(corr_block, SparseLD):
+            corr_block = sparsify_ld(corr_block, threshold=ld_threshold,
+                                     max_dist=ld_max_dist)
         block_kwargs = dict(kwargs)
         if method in ("inf", "grid"):
             block_kwargs["h2"] = (total_h2 * k / m) if total_h2 is not None else 0.1

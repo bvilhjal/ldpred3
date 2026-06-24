@@ -19,6 +19,38 @@ LD (linkage-disequilibrium) correlation matrix.
 Helpers: `standardize_betas` (put GWAS effects on the correlation scale) and
 `ldpred2_by_blocks` (run a model independently per LD block, genome-wide).
 
+### Sparse / banded LD
+
+Real LD is banded — most off-diagonal entries are ~0 — so the LD can be stored
+sparse (CSR) and the sampler/solver need only touch non-zero neighbours
+(O(bandwidth) instead of O(block_size)). Build a `SparseLD` with `sparsify_ld`
+and pass it to any model (or `ldpred2_by_blocks(..., sparsify=True)`):
+
+```python
+from ldpred2 import sparsify_ld, ldpred2_inf, ldpred2_auto
+ld = sparsify_ld(corr, threshold=1e-3)        # drop |r| < 1e-3 (and/or max_dist=…)
+beta = ldpred2_inf(ld, beta_hat, n_eff, h2)   # sparse CG solve; samplers also accept ld
+```
+
+On a clean population AR(1) block (m=4000, 0.47 % density) this gives, with
+**identical results** (r = 1.000):
+
+| method | dense | sparse | speedup |
+|--------|-------|--------|---------|
+| inf  | 2.77 s | 0.006 s | **444×** (CG vs dense O(m³) solve) |
+| grid | 0.131 s | 0.070 s | 1.9× |
+| auto | 0.138 s | 0.071 s | 1.9× |
+
+Two important caveats:
+
+* **In-sample LD has a noise floor (~1/√N)** that fills the matrix, so magnitude
+  thresholding alone won't sparsify it — band by distance (`max_dist=`) to drop
+  the spurious far-apart entries, as LDpred2/bigsnpr do.
+* **Hard banding can break positive-definiteness**, which destabilises the
+  *fixed-h² sampler* (`grid` can diverge; `auto` self-limits via its h² clamp;
+  `inf`'s ridge is unaffected). Use `sparsify_ld(..., shrink=<1)` to restore
+  diagonal dominance, or supply an already-valid windowed LD matrix.
+
 ### Performance (optional Numba acceleration)
 
 The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an

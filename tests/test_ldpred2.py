@@ -20,6 +20,7 @@ from ldpred2 import (  # noqa: E402
     ldpred2_auto,
     ldpred2_grid,
     ldpred2_inf,
+    sparsify_ld,
     standardize_betas,
 )
 
@@ -108,6 +109,38 @@ def test_numba_and_python_paths_agree():
     py = ldpred2._gibbs_kernel(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
     jit = ldpred2._gibbs_kernel_jit(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
     assert np.allclose(py[0], jit[0], atol=1e-10)
+
+
+def test_sparse_matches_dense_when_full():
+    """A SparseLD that keeps every entry must reproduce the dense sampler exactly."""
+    corr, beta_hat, true_beta, n = simulate(m=200, seed=6)
+    n_vec = np.full(corr.shape[0], float(n))
+    beta_std, _ = standardize_betas(beta_hat, np.full(corr.shape[0], 0.01), n_vec)
+    dense = ldpred2_grid(corr, beta_std, n_vec, h2=0.5, p=0.05,
+                         burn_in=40, num_iter=120, seed=3)
+    full = sparsify_ld(corr, threshold=0.0)        # keep all entries
+    sp = ldpred2_grid(full, beta_std, n_vec, h2=0.5, p=0.05,
+                      burn_in=40, num_iter=120, seed=3)
+    assert np.allclose(dense, sp, atol=1e-6)
+
+
+def test_sparse_inf_matches_dense_when_full():
+    """Sparse (CG) inf with all entries must match the dense direct solve."""
+    corr, beta_hat, true_beta, n = simulate(m=150, seed=7)
+    n_vec = np.full(corr.shape[0], float(n))
+    dense = ldpred2_inf(corr, beta_hat, n_vec, h2=0.5)
+    sp = ldpred2_inf(sparsify_ld(corr, threshold=0.0), beta_hat, n_vec, h2=0.5)
+    assert np.allclose(dense, sp, atol=1e-5)
+
+
+def test_banded_sparse_recovers_signal():
+    """A thresholded/banded SparseLD still beats the raw marginal betas."""
+    corr, beta_hat, true_beta, n = simulate(m=300, seed=8)
+    n_vec = np.full(corr.shape[0], float(n))
+    sp = sparsify_ld(corr, threshold=1e-2)
+    beta_grid = ldpred2_grid(sp, beta_hat, n_vec, h2=0.5, p=0.05,
+                             burn_in=60, num_iter=200, seed=1)
+    assert _corr(beta_grid, true_beta) > _corr(beta_hat, true_beta)
 
 
 if __name__ == "__main__":
