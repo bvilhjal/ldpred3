@@ -94,8 +94,25 @@ To stay within memory at scale, genotypes are stored as `int8` dosages and
 every step (standardization, GWAS, LD, PRS) is processed one LD block at a time,
 so a full float genotype matrix is never materialised.
 
+**LD model (`--ld-model`).** Two choices for the LD between SNPs:
+
+* `ar1` (default): a latent-Gaussian model with geometric LD decay
+  (`r ≈ ρ^dist`). Fast and dependency-free, but idealized — LD collapses to ~0
+  within a handful of SNPs.
+* `coalescent`: realistic LD from a coalescent-with-recombination simulation
+  (via [msprime](https://tskit.dev/msprime), human-like Ne=10⁴ and 1e-8 recomb/
+  mutation rates). This produces actual haplotype blocks, recombination
+  hotspots, a heavy LD decay tail and sporadic long-range LD — the structure of
+  real reference panels (mean r² stays ~0.02 at 200 SNPs apart, vs ~0 for AR(1)).
+
+LDpred2's advantage over the raw marginal PRS is *larger* under realistic LD
+(e.g. h²=0.5, p=0.01: marginal 0.21 → grid/auto 0.43 with coalescent LD, vs
+0.32 → 0.50 with AR(1)), because realistic long-range LD inflates the naive
+score that LDpred2's LD-adjustment removes.
+
 ```bash
-python src/simulate.py --quick            # fast sanity check
+python src/simulate.py --quick                      # fast (AR(1))
+python src/simulate.py --quick --ld-model coalescent  # realistic LD (needs msprime)
 python src/simulate.py --csv sim.csv      # full accuracy grid, save results
 ```
 

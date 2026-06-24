@@ -118,6 +118,62 @@ def simulate_genotypes(n, block_sizes, maf, rho, rng):
     return G, blocks
 
 
+def simulate_genotypes_coalescent(n, m, block_size, *, Ne=10000,
+                                  recomb_rate=1e-8, mut_rate=1e-8, min_maf=0.01,
+                                  seed=None):
+    """Simulate genotypes with *realistic* LD via a coalescent-with-recombination.
+
+    Unlike the AR(1) latent model (smooth geometric LD decay), a coalescent
+    simulation (msprime) produces realistic LD: haplotype blocks separated by
+    recombination, high-LD plateaus, a heavy decay tail and sporadic long-range
+    correlation -- the structure seen in real reference panels.
+
+    Human-like defaults: Ne=10,000, recombination & mutation rate 1e-8 per bp
+    per generation. The sequence length is grown until at least ``m`` common
+    SNPs (MAF > ``min_maf``) are obtained; the first ``m`` are kept and cut into
+    contiguous LD blocks of ``block_size``.
+
+    Returns ``(G, blocks)`` with ``G`` int8 of shape ``(n, m')`` and ``blocks``
+    a list of contiguous index arrays (``m'`` is ``m`` rounded down to a multiple
+    of ``block_size``).
+    """
+    try:
+        import msprime
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("the coalescent LD model needs msprime "
+                          "(pip install msprime)") from e
+
+    rng = np.random.default_rng(seed)
+    seq_len = max(1e6, m / 1200 * 1e6)   # ~1200 common SNPs per Mb to start
+    G = None
+    for _ in range(7):
+        ms_seed = int(rng.integers(1, 2 ** 31 - 1))
+        ts = msprime.sim_ancestry(
+            samples=n, ploidy=2, population_size=Ne,
+            recombination_rate=recomb_rate, sequence_length=seq_len,
+            random_seed=ms_seed)
+        mts = msprime.sim_mutations(ts, rate=mut_rate, random_seed=ms_seed,
+                                    model=msprime.BinaryMutationModel())
+        H = mts.genotype_matrix()                       # (sites, 2n), 0/1
+        dos = (H[:, 0::2] + H[:, 1::2]).T               # (n, sites), 0/1/2
+        af = dos.mean(axis=0) / 2.0
+        dos = dos[:, (af > min_maf) & (af < 1 - min_maf)]
+        if dos.shape[1] >= m:
+            G = dos
+            break
+        seq_len *= 1.8
+    if G is None or G.shape[1] < m:
+        raise RuntimeError("coalescent simulation produced too few common SNPs; "
+                           "increase sequence length / Ne")
+
+    n_blocks = m // block_size
+    m2 = n_blocks * block_size
+    G = np.ascontiguousarray(G[:, :m2].astype(np.int8))
+    blocks = [np.arange(i * block_size, (i + 1) * block_size)
+              for i in range(n_blocks)]
+    return G, blocks
+
+
 def _std_block(G, rows, idx, mean, sd):
     """Standardize a genotype sub-block to float64 (column z-scores)."""
     X = G[rows][:, idx].astype(np.float64)
@@ -138,10 +194,14 @@ def r2(pred, target):
 # --------------------------------------------------------------------------- #
 def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
             rho=0.6, maf_range=(0.05, 0.5), seed=0,
-            burn_in=60, num_iter=150,
+            burn_in=60, num_iter=150, ld_model="ar1",
             methods=("marginal", "inf", "grid", "auto"),
             return_timing=False):
     """Run a single simulation replicate; return prediction R^2 per method.
+
+    ``ld_model`` selects the LD structure: ``"ar1"`` (fast, idealized geometric
+    decay) or ``"coalescent"`` (realistic LD via msprime: haplotype blocks,
+    recombination hotspots, heavy decay tail, long-range LD).
 
     If ``return_timing`` is True, return ``(results, timing)`` where ``timing``
     splits ``prep_s`` (genotype sim + GWAS + LD construction, which scale with
@@ -149,12 +209,19 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
     """
     t_start = time.time()
     rng = np.random.default_rng(seed)
-    block_sizes = [block_size] * (m // block_size)
-    m = int(sum(block_sizes))
-    maf = rng.uniform(*maf_range, size=m)
-
     n_total = n_train + n_test
-    G, blocks = simulate_genotypes(n_total, block_sizes, maf, rho, rng)
+
+    if ld_model == "coalescent":
+        G, blocks = simulate_genotypes_coalescent(n_total, m, block_size,
+                                                  seed=seed)
+        m = int(sum(len(b) for b in blocks))
+    elif ld_model == "ar1":
+        block_sizes = [block_size] * (m // block_size)
+        m = int(sum(block_sizes))
+        maf = rng.uniform(*maf_range, size=m)
+        G, blocks = simulate_genotypes(n_total, block_sizes, maf, rho, rng)
+    else:
+        raise ValueError("ld_model must be 'ar1' or 'coalescent'")
     train_rows = slice(0, n_train)
     test_rows = slice(n_train, n_total)
 
@@ -272,7 +339,8 @@ def run_grid(args):
 
     methods = ["marginal", "inf", "grid", "auto", "ceiling(h2)"]
     header = f"{'N':>7} {'h2':>5} {'p':>7} | " + " ".join(f"{x:>11}" for x in methods)
-    print(f"Genotype-level LDpred2 benchmark  (m={m} SNPs, blocks of {block_size})")
+    print(f"Genotype-level LDpred2 benchmark  (m={m} SNPs, blocks of "
+          f"{block_size}, LD={args.ld_model})")
     print(header)
     print("-" * len(header))
 
@@ -281,7 +349,7 @@ def run_grid(args):
         for p in polygenicities:
             for n_train in sample_sizes:
                 res = run_one(n_train, h2, p, m=m, block_size=block_size,
-                              seed=args.seed)
+                              ld_model=args.ld_model, seed=args.seed)
                 rows.append({"N": n_train, "h2": h2, "p": p, **res})
                 cells = " ".join(f"{res[k]:>11.3f}" for k in methods)
                 print(f"{n_train:>7} {h2:>5} {p:>7} | {cells}")
@@ -308,7 +376,7 @@ def run_scaling(args):
         res, tm = run_one(args.n_train, h2, p, m=m, block_size=args.block_size,
                           n_test=args.n_test, seed=args.seed,
                           burn_in=args.burn_in, num_iter=args.num_iter,
-                          return_timing=True)
+                          ld_model=args.ld_model, return_timing=True)
         fit = sum(tm["fit_s"].values())
         mem = _peak_mem_gb()
         rows.append({"m": m, "prep_s": round(tm["prep_s"], 2),
@@ -347,7 +415,7 @@ def run_ld_scaling(args):
         res, tm = run_one(args.n_train, h2, p, m=m, block_size=bs,
                           n_test=args.n_test, seed=args.seed,
                           burn_in=args.burn_in, num_iter=args.num_iter,
-                          return_timing=True)
+                          ld_model=args.ld_model, return_timing=True)
         ft = tm["fit_s"]
         nblk = m // bs
         rows.append({"block_size": bs, "n_blocks": nblk,
@@ -388,7 +456,7 @@ def run_n_independence(args):
         res, tm = run_one(n, h2, p, m=m, block_size=args.block_size,
                           n_test=args.n_test, seed=args.seed,
                           burn_in=args.burn_in, num_iter=args.num_iter,
-                          return_timing=True)
+                          ld_model=args.ld_model, return_timing=True)
         ft = tm["fit_s"]
         rows.append({"N_train": n, "prep_s": round(tm["prep_s"], 2),
                      "fit_grid_s": round(ft["grid"], 3),
@@ -430,6 +498,10 @@ def main(argv=None):
     parser.add_argument("--n-list", type=int, nargs="+", default=None,
                         dest="n_list",
                         help="GWAS sample sizes to sweep for --n-independence")
+    parser.add_argument("--ld-model", choices=["ar1", "coalescent"], default="ar1",
+                        dest="ld_model",
+                        help="LD structure: ar1 (idealized) or coalescent "
+                             "(realistic, needs msprime)")
     parser.add_argument("--n-train", type=int, default=8000, dest="n_train")
     parser.add_argument("--n-test", type=int, default=2000, dest="n_test")
     parser.add_argument("--block-size", type=int, default=200, dest="block_size")

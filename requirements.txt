@@ -7,3 +7,7 @@ numpy>=1.20
 
 # Used by the test suite / simulation harness only.
 # pytest
+
+# Optional: realistic LD simulation (coalescent-with-recombination) for
+# src/simulate.py --ld-model coalescent. The default ar1 model needs only numpy.
+# msprime>=1.3
