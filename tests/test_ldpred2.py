@@ -17,7 +17,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import ldpred2  # noqa: E402
 from ldpred2 import (  # noqa: E402
+    block_diagonal_ld,
     ldpred2_auto,
+    ldpred2_by_blocks,
     ldpred2_grid,
     ldpred2_inf,
     sparsify_ld,
@@ -169,6 +171,48 @@ def test_adaptive_stopping_stops_early():
                        tol=1e-2, check_every=50, seed=1)
     assert res.n_iter < 2000                       # stopped before the cap
     assert _corr(res.beta_est, true_beta) > _corr(beta_hat, true_beta)
+
+
+def _make_blocks(nb=4, k=150, rho=0.5, p=0.05, N=20000, seed=0):
+    rng = np.random.default_rng(seed)
+    m = nb * k
+    blk = _ar1_corr(k, rho)
+    chol = np.linalg.cholesky(blk + 1e-9 * np.eye(k))
+    beta = np.zeros(m)
+    causal = rng.random(m) < p
+    beta[causal] = rng.normal(0, np.sqrt(0.5 / max(int(causal.sum()), 1)),
+                              int(causal.sum()))
+    bhat = np.empty(m)
+    blocks = []
+    for b in range(nb):
+        s = slice(b * k, (b + 1) * k)
+        bhat[s] = blk @ beta[s] + (chol @ rng.standard_normal(k)) / np.sqrt(N)
+        blocks.append((blk, np.arange(b * k, (b + 1) * k)))
+    n = np.full(m, float(N))
+    return blocks, bhat, beta, n
+
+
+def test_block_diagonal_inf_matches_per_block():
+    """inf on the assembled block-diagonal matrix == per-block inf (independence).
+
+    The infinitesimal ridge is ``m / (h2 * N)``: a single block of size k with
+    ``h2 = H*k/m`` and the whole matrix (size m) with ``h2 = H`` give the same
+    ridge, so the block-diagonal solve must reproduce the per-block solves.
+    """
+    blocks, bhat, true_beta, n = _make_blocks(seed=1)
+    m = len(bhat)
+    per_block = np.concatenate([ldpred2_inf(c, bhat[idx], n[idx], h2=0.5 * len(idx) / m)
+                                for c, idx in blocks])
+    glob = ldpred2_inf(block_diagonal_ld(blocks), bhat, n, h2=0.5)
+    assert np.allclose(per_block, glob, atol=1e-4)
+
+
+def test_global_auto_recovers_signal():
+    """LDpred2-auto with global hyper-parameters recovers the signal."""
+    blocks, bhat, true_beta, n = _make_blocks(nb=5, seed=2)
+    beta = ldpred2_by_blocks(blocks, bhat, n, method="auto",
+                             burn_in=50, num_iter=150, seed=1, global_hyper=True)
+    assert _corr(beta, true_beta) > _corr(bhat, true_beta)
 
 
 if __name__ == "__main__":

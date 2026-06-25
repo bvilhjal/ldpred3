@@ -66,6 +66,7 @@ __all__ = [
     "AutoResult",
     "SparseLD",
     "sparsify_ld",
+    "block_diagonal_ld",
 ]
 
 
@@ -194,6 +195,40 @@ def sparsify_ld(corr, threshold=1e-3, max_dist=None, shrink=1.0):
     data = (np.concatenate(data_parts) if data_parts
             else np.empty(0, np.float32)).astype(np.float32)
     return SparseLD(indptr, indices, data, m)
+
+
+def block_diagonal_ld(blocks):
+    """Assemble per-block dense LD matrices into one block-diagonal SparseLD.
+
+    ``blocks`` is a sequence of ``(corr_block, idx)`` with ``corr_block`` a dense
+    ``(k, k)`` LD matrix and ``idx`` the variants' global positions (the blocks
+    must tile ``0 .. m-1``). Running a *single* model on the result gives
+    genome-wide behaviour -- in particular LDpred2-auto then estimates ``h2`` and
+    ``p`` jointly across all variants (global hyper-parameters), rather than
+    independently per block. It is also one compiled call instead of one per
+    block. Each block keeps all its entries (exact block-diagonal, so positive-
+    definiteness is preserved).
+    """
+    blocks = sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0]))
+    m = 0
+    data_parts = []
+    idx_parts = []
+    row_nnz = []
+    for corr_block, idx in blocks:
+        idx = np.asarray(idx)
+        k = idx.shape[0]
+        if isinstance(corr_block, SparseLD):
+            raise ValueError("block_diagonal_ld expects dense blocks")
+        cb = np.asarray(corr_block, dtype=np.float32)
+        data_parts.append(cb.ravel())                       # k*k, row-major
+        idx_parts.append(np.tile(idx.astype(np.int32), k))  # block cols per row
+        row_nnz.append(np.full(k, k, dtype=np.int64))
+        m += k
+    data = np.concatenate(data_parts).astype(np.float32)
+    indices = np.concatenate(idx_parts).astype(np.int32)
+    indptr = np.zeros(m + 1, dtype=np.int64)
+    np.cumsum(np.concatenate(row_nnz), out=indptr[1:])
+    return SparseLD(indptr.astype(np.int32), indices, data, m)
 
 
 def ldpred2_inf(corr, beta_hat, n_eff, h2):
@@ -718,7 +753,7 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
 
 def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
                       sparsify=False, ld_threshold=1e-3, ld_max_dist=None,
-                      **kwargs):
+                      global_hyper=True, **kwargs):
     """Apply an LDpred2 model independently to a list of LD blocks.
 
     Genome-wide LDpred2 treats (approximately) independent LD blocks
@@ -760,6 +795,15 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
     funcs = {"inf": ldpred2_inf, "grid": ldpred2_grid, "auto": ldpred2_auto}
     if method not in funcs:
         raise ValueError(f"method must be one of {sorted(funcs)}")
+
+    # LDpred2-auto with GLOBAL hyper-parameters: assemble one block-diagonal
+    # matrix and run a single auto fit, so h2 and p are estimated jointly across
+    # all variants (matching bigsnpr) rather than noisily per block. Falls back
+    # to per-block when global_hyper is off.
+    if method == "auto" and global_hyper:
+        ld = block_diagonal_ld([(cb, np.asarray(idx)) for cb, idx in blocks])
+        kwargs.pop("h2", None)                       # auto estimates h2 itself
+        return ldpred2_auto(ld, beta_hat, n, **kwargs).beta_est
 
     # Total h2 (if given) is split across blocks proportionally to block size.
     total_h2 = kwargs.pop("h2", None)

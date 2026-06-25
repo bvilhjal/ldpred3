@@ -16,8 +16,26 @@ LD (linkage-disequilibrium) correlation matrix.
 | `ldpred2_grid`    | Point-normal / spike-and-slab (Gibbs sampler)      | `h2`, `p` (fixed)    |
 | `ldpred2_auto`    | Point-normal, estimates `h2` and `p` automatically | none (self-tuning)   |
 
-Helpers: `standardize_betas` (put GWAS effects on the correlation scale) and
-`ldpred2_by_blocks` (run a model independently per LD block, genome-wide).
+Helpers: `standardize_betas` (put GWAS effects on the correlation scale),
+`ldpred2_by_blocks` (run a model per LD block, genome-wide) and
+`block_diagonal_ld` (assemble blocks into one matrix).
+
+### Global hyper-parameters for `-auto`
+
+`ldpred2_by_blocks(method="auto")` estimates `h2` and `p` **globally** by default
+(`global_hyper=True`): it assembles the blocks into one block-diagonal matrix and
+runs a single fit, so the causal count and genetic variance are pooled across all
+variants (as in bigsnpr). Estimating them per block instead (`global_hyper=False`)
+is noisy when blocks hold few causal variants and **loses accuracy at genome
+scale**. On a 1M-SNP simulation (block-diagonal LD, p=0.001, vs R `bigsnpr`):
+
+| `-auto` variant | predictive R² | bigsnpr |
+|-----------------|---------------|---------|
+| global (default) | **0.941** | 0.942 |
+| per block | 0.848 | 0.942 |
+
+`inf` and `grid` already match bigsnpr (0.080/0.080 and 0.942/0.942 in the same
+run); global hyper-parameters bring `-auto` to parity too.
 
 ### Sparse / banded LD
 
