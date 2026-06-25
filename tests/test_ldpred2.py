@@ -216,6 +216,17 @@ def test_global_auto_recovers_signal():
     assert _corr(beta, true_beta) > _corr(bhat, true_beta)
 
 
+def test_parallel_auto_recovers_signal():
+    """Multicore (ncores>1) global auto runs and recovers the signal."""
+    if not ldpred2.HAVE_NUMBA:
+        import pytest
+        pytest.skip("numba not installed")
+    blocks, bhat, true_beta, n = _make_blocks(nb=6, seed=4)
+    beta = ldpred2_by_blocks(blocks, bhat, n, method="auto", burn_in=40,
+                             num_iter=120, seed=1, ncores=2)
+    assert _corr(beta, true_beta) > _corr(bhat, true_beta)
+
+
 def _discarded_ld2(R, blocks, window):
     blk = np.empty(R.shape[0], int)
     for bi, (a, b) in enumerate(blocks):

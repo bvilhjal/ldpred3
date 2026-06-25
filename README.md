@@ -21,7 +21,11 @@ via a **streaming** sampler that never materialises a genome-wide LD matrix.
 Across 200k–2M SNPs (single core) it matches bigsnpr's accuracy at **~3.5× less
 memory**, scales linearly to **2M SNPs in ~4 GB where bigsnpr runs out of RAM**,
 and is competitive on runtime (`-auto` faster-to-parity; `-grid` ~2× slower,
-pending a streaming rewrite). The remaining speed lever is multicore (`prange`).
+pending a streaming rewrite). Optional multicore for global `-auto`
+(`ldpred2_by_blocks(..., ncores=k)`) parallelises the per-sweep block loop with
+`numba.prange` (≈3× kernel speed-up at 4 cores); on this memory-bandwidth-bound
+workload the net gain over the fast streaming single-core path is modest, and it
+trades the streaming sampler's low memory for a packed LD matrix.
 
 ### Benchmark vs bigsnpr (200k–2M SNPs, single core, distinct LD blocks)
 
