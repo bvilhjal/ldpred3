@@ -51,15 +51,16 @@ paper.
 ### Global hyper-parameters for `-auto`
 
 `ldpred2_by_blocks(method="auto")` estimates `h2` and `p` **globally** by default
-(`global_hyper=True`): a single batched kernel sweeps all blocks (packed
-contiguously) per iteration and pools the causal count and genetic variance
-across all variants (as in bigsnpr). Estimating them per block instead
+(`global_hyper=True`): the sampler **streams the LD blocks one at a time** (a
+jitted per-block sweep), pooling the causal count and genetic variance across all
+variants each iteration (as in bigsnpr). Estimating them per block instead
 (`global_hyper=False`) is noisy when blocks hold few causal variants and **loses
-accuracy at genome scale**. The batched kernel keeps the fast dense contiguous
-update (no index indirection), so global hyper-parameters cost about the same as
-the per-block path while being far more accurate; it also has a constant-N fast
-path (per-SNP posterior constants computed once per sweep). On a 1M-SNP
-simulation (block-diagonal LD, p=0.001, vs R `bigsnpr`):
+accuracy at genome scale**. Streaming keeps the fast dense contiguous update,
+has a constant-N fast path, and — critically — never materialises a packed
+genome-wide LD matrix, so peak memory is just the LD plus O(m) state. At **2M
+SNPs** this brought global auto from 137 s / 11.4 GB (packed) down to
+**21 s / 0.34 GB** (~6× faster, ~34× less memory). On a 1M-SNP simulation
+(block-diagonal LD, p=0.001, vs R `bigsnpr`):
 
 | `-auto` variant | predictive R² | bigsnpr |
 |-----------------|---------------|---------|
