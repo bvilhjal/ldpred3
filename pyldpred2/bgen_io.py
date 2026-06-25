@@ -26,7 +26,7 @@ import zlib
 
 import numpy as np
 
-from genotype_io import VariantTable, SampleTable, Genotypes
+from .genotype_io import VariantTable, SampleTable, Genotypes
 
 __all__ = ["read_bgen", "write_bgen"]
 

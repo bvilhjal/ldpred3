@@ -5,11 +5,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from sumstats import read_sumstats                      # noqa: E402
-from harmonize import harmonize, _complement, _is_palindromic   # noqa: E402
-from genotype_io import VariantTable                    # noqa: E402
+from pyldpred2.sumstats import read_sumstats                      # noqa: E402
+from pyldpred2.harmonize import harmonize, _complement, _is_palindromic   # noqa: E402
+from pyldpred2.genotype_io import VariantTable                    # noqa: E402
 
 
 def _write(tmp_path, text, name="ss.txt"):

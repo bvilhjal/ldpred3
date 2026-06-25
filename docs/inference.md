@@ -1,6 +1,6 @@
 # Inferring h², polygenicity and predictive r² (LDpred2-auto)
 
-`infer.ldpred2_auto_infer` implements the inference machinery of
+`ldpred2_auto_infer` implements the inference machinery of
 [Privé et al. (*AJHG* 2023)](https://doi.org/10.1016/j.ajhg.2023.10.010): it
 runs many LDpred2-auto chains from log-spaced `p_init`, drops chains that failed
 to converge (keeping those whose fitted effects `R·β̂` vary enough), and pools
@@ -15,7 +15,7 @@ validation set** —
   uncorrelated and `r² ≈ 0`.
 
 ```python
-from infer import ldpred2_auto_infer
+from pyldpred2 import ldpred2_auto_infer
 res = ldpred2_auto_infer(corr, beta_hat, n_eff, n_chains=10)
 res.h2_est, res.h2_ci      # heritability + 95% CI
 res.p_est,  res.p_ci       # polygenicity + 95% CI

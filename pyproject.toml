@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyldpred2"
+version = "0.1.0"
+description = "A NumPy-only implementation of LDpred2 with a full polygenic-score pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Bjarni Vilhjálmsson" }]
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+fast = ["numba>=0.59"]          # JIT-compiled Gibbs sampler (strongly recommended)
+sim = ["msprime>=1.3"]          # realistic-LD (coalescent) simulation
+test = ["pytest>=7"]
+
+[project.scripts]
+pyldpred2-prs = "pyldpred2.pipeline:_main"
+
+[tool.setuptools]
+packages = ["pyldpred2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

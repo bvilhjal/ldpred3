@@ -5,9 +5,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from genotype_io import (         # noqa: E402
+from pyldpred2.genotype_io import (         # noqa: E402
     VariantTable, SampleTable, read_plink, write_plink, read_bed,
     _BED_MAGIC, _BED_SNP_MAJOR,
 )

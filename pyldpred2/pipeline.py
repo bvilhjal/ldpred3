@@ -37,14 +37,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from genotype_io import read_plink
-from bgen_io import read_bgen
-from sumstats import read_sumstats
-from harmonize import harmonize
-from ld import compute_ld_blocks
-from prs import prs_score, allele_frequency
-from qc import qc_sumstats, sd_consistency_mask
-from ldpred2 import standardize_betas, ldpred2_by_blocks
+from .genotype_io import read_plink
+from .bgen_io import read_bgen
+from .sumstats import read_sumstats
+from .harmonize import harmonize
+from .ld import compute_ld_blocks
+from .prs import prs_score, allele_frequency
+from .qc import qc_sumstats, sd_consistency_mask
+from .ldpred2 import standardize_betas, ldpred2_by_blocks
 
 __all__ = ["PRSResult", "run_ldpred2_prs", "load_genotypes"]
 
@@ -177,7 +177,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
 
 
 def _subset_harmonized(h, mask):
-    from harmonize import Harmonized
+    from .harmonize import Harmonized
     return Harmonized(
         var_index=h.var_index[mask], beta=h.beta[mask], se=h.se[mask],
         n_eff=h.n_eff[mask], flipped=h.flipped[mask], log=h.log)

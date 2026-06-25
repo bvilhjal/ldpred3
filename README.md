@@ -28,12 +28,12 @@ pip install msprime         # optional, only for realistic-LD simulation
 ### Quick start — full PRS pipeline
 
 ```bash
-python -m pipeline --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
-python -m pipeline --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+pyldpred2-prs --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
 ```
 
 ```python
-from pipeline import run_ldpred2_prs
+from pyldpred2 import run_ldpred2_prs
 res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
 res.scores          # per-individual PRS
 res.qc_log          # per-filter QC counts
@@ -56,7 +56,7 @@ genome-wide), `block_diagonal_ld`, `optimal_ld_blocks`.
 
 ```python
 import numpy as np
-from ldpred2 import standardize_betas, ldpred2_auto
+from pyldpred2 import standardize_betas, ldpred2_auto
 
 # beta, beta_se, n_eff: GWAS summary stats for one LD block;
 # corr: the (m x m) LD correlation matrix for those variants.
@@ -68,13 +68,13 @@ print(res.h2_est, res.p_est)             # estimated heritability & causal fract
 
 ### Inferring h², polygenicity & predictive r²
 
-`infer.ldpred2_auto_infer` runs many LDpred2-auto chains (with chain QC) and
+`ldpred2_auto_infer` runs many LDpred2-auto chains (with chain QC) and
 returns heritability, polygenicity and the **out-of-sample predictive r²**, each
 with a 95% credible interval and **no validation set** (Privé et al., *AJHG*
 2023):
 
 ```python
-from infer import ldpred2_auto_infer
+from pyldpred2 import ldpred2_auto_infer
 res = ldpred2_auto_infer(corr, beta_hat, n_eff, n_chains=10)
 res.h2_est, res.p_est, res.r2_est        # point estimates (+ *_ci for intervals)
 ```
@@ -122,7 +122,7 @@ convert reported GWAS effects to this scale and to recover the back-transform.
 
 ```bash
 python -m pytest tests/          # full assertion suite
-python tests/test_ldpred2.py     # prints recovery of true effects on simulated data
+python -m pytest tests/test_ldpred2.py     # prints recovery of true effects on simulated data
 ```
 
 ### Documentation

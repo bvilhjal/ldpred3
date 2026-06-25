@@ -5,11 +5,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
-from bgen_io import write_bgen                                   # noqa: E402
-from pipeline import run_ldpred2_prs                             # noqa: E402
+from pyldpred2.genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
+from pyldpred2.bgen_io import write_bgen                                   # noqa: E402
+from pyldpred2.pipeline import run_ldpred2_prs                             # noqa: E402
 
 
 def _simulate(tmp_path, n_train=4000, n_target=1500, m=600, p_causal=0.1,

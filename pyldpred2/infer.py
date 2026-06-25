@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ldpred2 import _gibbs_kernel_sample_jit, _as_n_vector, _check_h2_p, SparseLD
+from .ldpred2 import _gibbs_kernel_sample_jit, _as_n_vector, _check_h2_p, SparseLD
 
 __all__ = ["InferResult", "ldpred2_auto_infer"]
 

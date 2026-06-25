@@ -1,6 +1,6 @@
 # End-to-end PRS pipeline
 
-`src/pipeline.py` runs the whole workflow from GWAS summary statistics and
+`pyldpred2/pipeline.py` runs the whole workflow from GWAS summary statistics and
 genotype files to one polygenic score per individual — no R, NumPy-only:
 
 ```
@@ -16,14 +16,14 @@ GWAS sumstats + genotypes (PLINK/BGEN)
 From the command line:
 
 ```bash
-python -m pipeline --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
-python -m pipeline --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+pyldpred2-prs --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
 ```
 
 or from Python:
 
 ```python
-from pipeline import run_ldpred2_prs
+from pyldpred2 import run_ldpred2_prs
 res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
 res.scores          # per-individual PRS
 res.harmonize_log   # matched / flipped / ambiguous / mismatched counts

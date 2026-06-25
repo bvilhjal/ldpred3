@@ -5,9 +5,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from prs import allele_frequency, standardize_dosage, prs_score   # noqa: E402
+from pyldpred2.prs import allele_frequency, standardize_dosage, prs_score   # noqa: E402
 
 
 def test_allele_frequency_ignores_missing():

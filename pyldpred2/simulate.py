@@ -38,9 +38,7 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from ldpred2 import HAVE_NUMBA, ldpred2_by_blocks, standardize_betas  # noqa: E402
+from .ldpred2 import HAVE_NUMBA, ldpred2_by_blocks, standardize_betas
 
 
 # --------------------------------------------------------------------------- #

@@ -11,9 +11,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from infer import ldpred2_auto_infer       # noqa: E402
+from pyldpred2.infer import ldpred2_auto_infer       # noqa: E402
 
 
 def _block_R(m, nblk, rng):

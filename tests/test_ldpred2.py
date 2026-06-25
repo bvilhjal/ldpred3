@@ -13,12 +13,11 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest  # noqa: E402
 
-import ldpred2  # noqa: E402
-from ldpred2 import (  # noqa: E402
+import pyldpred2.ldpred2 as ldpred2
+from pyldpred2.ldpred2 import (  # noqa: E402
     block_diagonal_ld,
     ldpred2_auto,
     ldpred2_by_blocks,
