@@ -1,0 +1,203 @@
+"""
+Reader for GWAS summary-statistics files.
+
+GWAS are distributed as delimited text with wildly inconsistent column names,
+so this reader maps a large set of common aliases onto a canonical schema and
+lets the caller override any column explicitly. The canonical fields are:
+
+==============  ====================================================
+field           meaning
+==============  ====================================================
+``id``          variant identifier (rsID), may be empty
+``chrom``       chromosome (string), may be empty
+``pos``         base-pair position (int), may be 0
+``ea``          effect allele -- the allele ``beta`` is expressed per copy of
+``oa``          other (non-effect) allele
+``beta``        per-allele effect on the trait (log-OR for binary traits)
+``se``          standard error of ``beta``
+``n_eff``       (effective) sample size
+``eaf``         effect-allele frequency (optional; used for palindrome QC)
+==============  ====================================================
+
+Effects given as odds ratios are converted to ``beta = log(OR)``. A missing
+``se`` is recovered from ``beta`` and the p-value when possible.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import csv
+import gzip
+import math
+
+import numpy as np
+
+__all__ = ["Sumstats", "read_sumstats"]
+
+# Column aliases (lower-cased) -> canonical field.
+_ALIASES = {
+    "id": ["snp", "rsid", "rs", "id", "variant_id", "markername", "snpid",
+           "marker", "rs_id"],
+    "chrom": ["chr", "chrom", "chromosome", "#chrom", "hg19chr", "chr_name"],
+    "pos": ["bp", "pos", "position", "base_pair_location", "bp_position",
+            "pos_b37", "base_pair"],
+    "ea": ["a1", "effect_allele", "ea", "allele1", "alt", "effectallele",
+           "tested_allele", "inc_allele"],
+    "oa": ["a2", "other_allele", "oa", "nea", "allele0", "allele2", "ref",
+           "noneffect_allele", "dec_allele"],
+    "beta": ["beta", "b", "effect", "effect_size", "effects", "log_odds"],
+    "or": ["or", "odds_ratio", "oddsratio"],
+    "se": ["se", "standard_error", "stderr", "standarderror", "sebeta",
+           "se_beta", "logor_se"],
+    "pval": ["p", "pval", "p_value", "pvalue", "p-value", "p_bolt_lmm",
+             "p_value_association"],
+    "n_eff": ["n_eff", "neff", "n", "sample_size", "totalsamplesize",
+              "n_samples", "n_total"],
+    "eaf": ["eaf", "freq", "frq", "effect_allele_frequency", "a1freq",
+            "freq1", "maf", "af", "effect_allele_freq"],
+}
+
+
+@dataclass
+class Sumstats:
+    """Parsed GWAS summary statistics as parallel arrays."""
+
+    id: np.ndarray
+    chrom: np.ndarray
+    pos: np.ndarray
+    ea: np.ndarray
+    oa: np.ndarray
+    beta: np.ndarray
+    se: np.ndarray
+    n_eff: np.ndarray
+    eaf: np.ndarray
+
+    def __len__(self):
+        return len(self.beta)
+
+
+def _open(path):
+    if str(path).endswith(".gz"):
+        return gzip.open(path, "rt")
+    return open(path, "r")
+
+
+def _sniff_delimiter(header_line):
+    if "\t" in header_line:
+        return "\t"
+    if "," in header_line:
+        return ","
+    return None      # whitespace; handled with str.split
+
+
+def _build_colmap(header, overrides):
+    """Map canonical field -> column index using aliases + user overrides."""
+    lower = [h.strip().lower() for h in header]
+    colmap = {}
+    for field, aliases in _ALIASES.items():
+        for a in aliases:
+            if a in lower:
+                colmap[field] = lower.index(a)
+                break
+    # Explicit overrides win (value may be a column name or an integer index).
+    for field, col in (overrides or {}).items():
+        if isinstance(col, int):
+            colmap[field] = col
+        else:
+            colmap[field] = lower.index(col.strip().lower())
+    return colmap
+
+
+def _to_float(s):
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return math.nan
+
+
+def read_sumstats(path, *, n_eff=None, **col_overrides):
+    """Read a GWAS summary-statistics file into a :class:`Sumstats`.
+
+    Parameters
+    ----------
+    path : str
+        Path to a delimited text file (optionally gzipped). Delimiter (tab,
+        comma or whitespace) is auto-detected.
+    n_eff : float, optional
+        Sample size to use when the file has no per-variant N column.
+    **col_overrides
+        Force a canonical field to a particular column, e.g.
+        ``read_sumstats(..., ea="A1", beta="effect")`` or by index
+        ``read_sumstats(..., beta=6)``.
+
+    Returns
+    -------
+    Sumstats
+    """
+    with _open(path) as fh:
+        first = fh.readline().rstrip("\n")
+        delim = _sniff_delimiter(first)
+        header = first.split(delim) if delim else first.split()
+        colmap = _build_colmap(header, col_overrides)
+
+        for req in ("ea", "oa"):
+            if req not in colmap:
+                raise ValueError(
+                    f"could not find a '{req}' allele column in {path}; "
+                    f"header was {header}. Pass it explicitly, e.g. {req}=...")
+        if "beta" not in colmap and "or" not in colmap:
+            raise ValueError(
+                f"no effect column (beta/OR) found in {path}; header {header}")
+        if "n_eff" not in colmap and n_eff is None:
+            raise ValueError(
+                f"no sample-size column found in {path}; pass n_eff=...")
+
+        ids, chroms, poss, eas, oas = [], [], [], [], []
+        betas, ses, ns, eafs = [], [], [], []
+
+        def get(fields, key, default=""):
+            i = colmap.get(key)
+            return fields[i] if i is not None and i < len(fields) else default
+
+        for raw in fh:
+            raw = raw.rstrip("\n")
+            if not raw:
+                continue
+            f = raw.split(delim) if delim else raw.split()
+
+            if "beta" in colmap:
+                beta = _to_float(get(f, "beta"))
+            else:
+                orv = _to_float(get(f, "or"))
+                beta = math.log(orv) if orv > 0 else math.nan
+
+            se = _to_float(get(f, "se")) if "se" in colmap else math.nan
+            if math.isnan(se) and "pval" in colmap and not math.isnan(beta):
+                p = _to_float(get(f, "pval"))
+                if 0 < p < 1 and beta != 0:
+                    from statistics import NormalDist
+                    z = NormalDist().inv_cdf(1 - p / 2.0)
+                    if z > 0:
+                        se = abs(beta) / z
+
+            n = _to_float(get(f, "n_eff")) if "n_eff" in colmap else float(n_eff)
+
+            ids.append(get(f, "id"))
+            chroms.append(str(get(f, "chrom")))
+            poss.append(int(_to_float(get(f, "pos", "0")) or 0))
+            eas.append(get(f, "ea").upper())
+            oas.append(get(f, "oa").upper())
+            betas.append(beta); ses.append(se); ns.append(n)
+            eafs.append(_to_float(get(f, "eaf")) if "eaf" in colmap else math.nan)
+
+    return Sumstats(
+        id=np.array(ids, dtype=object),
+        chrom=np.array(chroms, dtype=object),
+        pos=np.array(poss, dtype=np.int64),
+        ea=np.array(eas, dtype=object),
+        oa=np.array(oas, dtype=object),
+        beta=np.array(betas, dtype=float),
+        se=np.array(ses, dtype=float),
+        n_eff=np.array(ns, dtype=float),
+        eaf=np.array(eafs, dtype=float),
+    )

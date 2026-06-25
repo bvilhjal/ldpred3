@@ -62,6 +62,52 @@ Prediction R²_pheno matches bigsnpr at every size (0.493/0.490 at 200k,
 - Regenerate with `benchmarks/plot_cores_realistic.py` (data in
   `benchmarks/cores_realistic_benchmark.csv`).
 
+### End-to-end PRS pipeline (real data)
+
+`src/pipeline.py` runs the whole workflow from GWAS summary statistics and
+genotype files to one polygenic score per individual — no R, NumPy-only:
+
+```
+GWAS sumstats + genotypes (PLINK/BGEN)
+  → read & harmonise (align effect alleles to A1, drop ambiguous/mismatched)
+  → per-block LD from a reference panel (in-sample or external)
+  → ldpred2 (inf / grid / auto)
+  → per-individual PRS
+```
+
+From the command line:
+
+```bash
+python -m pipeline --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+python -m pipeline --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
+```
+
+or from Python:
+
+```python
+from pipeline import run_ldpred2_prs
+res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
+res.scores          # per-individual PRS
+res.harmonize_log   # QC: matched / flipped / ambiguous / mismatched counts
+```
+
+Supporting modules, each usable on its own:
+
+| Module          | What it does                                                           |
+|-----------------|-----------------------------------------------------------------------|
+| `genotype_io`   | Read/write PLINK 1 `.bed/.bim/.fam` (2-bit decode, NumPy-only)         |
+| `bgen_io`       | Read BGEN v1.2/layout-2 (uncompressed or zlib; biallelic diploid)      |
+| `sumstats`      | Parse GWAS files with flexible column aliases (OR→β, SE-from-p)        |
+| `harmonize`     | Match variants + align effect alleles (swap-flip, strand, palindrome) |
+| `ld`            | Per-block LD correlation matrices from a genotype panel               |
+| `prs`           | Weighted polygenic scores with missing-call imputation                |
+
+**Format notes.** Dosages count the A1 (first) allele; missing calls are `-1`
+(PLINK, hard calls) or `NaN` (BGEN, dosages in `[0,2]`). Strand-ambiguous
+(A/T, C/G) and allele-mismatched variants are dropped during harmonisation.
+BGEN with zstd compression needs the optional `zstandard` package (a clear
+error is raised otherwise).
+
 ### Models implemented
 
 | Function          | Model                                              | Hyper-parameters     |
