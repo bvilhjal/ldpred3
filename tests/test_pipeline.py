@@ -8,6 +8,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
+from bgen_io import write_bgen                                   # noqa: E402
 from pipeline import run_ldpred2_prs                             # noqa: E402
 
 
@@ -62,7 +63,9 @@ def _simulate(tmp_path, n_train=4000, n_target=1500, m=600, p_causal=0.1,
             sex=np.ones(n, dtype=np.int64), pheno=np.full(n, np.nan))
 
     prefix = str(tmp_path / "target")
-    write_plink(prefix, G_te, variants, samples(n_target, "T"))
+    smp = samples(n_target, "T")
+    write_plink(prefix, G_te, variants, smp)
+    write_bgen(str(tmp_path / "target.bgen"), G_te, variants, smp)
 
     ss_path = str(tmp_path / "gwas.txt")
     with open(ss_path, "w") as fh:
@@ -82,6 +85,15 @@ def test_end_to_end_prs_predicts_genetic_value(tmp_path):
     assert res.harmonize_log["n_matched"] == 600
     r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
     assert r2 > 0.20, f"PRS R^2 vs true genetic value too low: {r2:.3f}"
+
+
+def test_end_to_end_prs_via_bgen(tmp_path):
+    prefix, ss_path, g_te = _simulate(tmp_path, seed=1)
+    res = run_ldpred2_prs(ss_path, str(tmp_path / "target.bgen"), method="auto",
+                          block_size=200, num_iter=150, burn_in=50, seed=1)
+    assert res.scores.shape[0] == len(g_te)
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"BGEN PRS R^2 vs true genetic value too low: {r2:.3f}"
 
 
 def test_end_to_end_inf_runs(tmp_path):

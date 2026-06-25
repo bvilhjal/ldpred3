@@ -38,13 +38,21 @@ from dataclasses import dataclass
 import numpy as np
 
 from genotype_io import read_plink
+from bgen_io import read_bgen
 from sumstats import read_sumstats
 from harmonize import harmonize
 from ld import compute_ld_blocks
 from prs import prs_score
 from ldpred2 import standardize_betas, ldpred2_by_blocks
 
-__all__ = ["PRSResult", "run_ldpred2_prs"]
+__all__ = ["PRSResult", "run_ldpred2_prs", "load_genotypes"]
+
+
+def load_genotypes(path, *, sample_path=None):
+    """Read genotypes from a PLINK prefix or a ``.bgen`` file (auto-detected)."""
+    if str(path).endswith(".bgen"):
+        return read_bgen(path, sample_path=sample_path)
+    return read_plink(path)
 
 
 @dataclass
@@ -61,6 +69,7 @@ class PRSResult:
 
 def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     n_eff=None, ld_prefix=None, ld_ridge=0.0,
+                    sample_path=None, ld_sample_path=None,
                     sumstats_cols=None, **ldpred2_kwargs):
     """Run the full sumstats -> LDpred2 -> PRS pipeline.
 
@@ -90,7 +99,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     -------
     PRSResult
     """
-    geno = read_plink(plink)
+    geno = load_genotypes(plink, sample_path=sample_path)
     ss = read_sumstats(sumstats, n_eff=n_eff, **(sumstats_cols or {}))
     h = harmonize(ss, geno.variants)
     if len(h) == 0:
@@ -102,7 +111,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
 
     # LD reference: external panel (matched to the same variants) or in-sample.
     if ld_prefix is not None:
-        ref = read_plink(ld_prefix)
+        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
         href = harmonize(ss, ref.variants)
         # Restrict to variants present in both target-matched and ref-matched.
         common = np.intersect1d(geno.variants.id[h.var_index],
@@ -147,7 +156,10 @@ def _main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="LDpred2 PRS pipeline")
     ap.add_argument("--sumstats", required=True, help="GWAS sumstats file")
-    ap.add_argument("--plink", required=True, help="target PLINK prefix")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--plink", help="target PLINK prefix (.bed/.bim/.fam)")
+    g.add_argument("--bgen", help="target BGEN file (.bgen)")
+    ap.add_argument("--sample", default=None, help="BGEN .sample file")
     ap.add_argument("--method", default="auto", choices=["auto", "grid", "inf"])
     ap.add_argument("--block-size", type=int, default=500)
     ap.add_argument("--n-eff", type=float, default=None)
@@ -158,8 +170,8 @@ def _main(argv=None):
     args = ap.parse_args(argv)
 
     res = run_ldpred2_prs(
-        args.sumstats, args.plink, method=args.method,
-        block_size=args.block_size, n_eff=args.n_eff,
+        args.sumstats, args.plink or args.bgen, method=args.method,
+        block_size=args.block_size, n_eff=args.n_eff, sample_path=args.sample,
         ld_prefix=args.ld_prefix, ld_ridge=args.ld_ridge, ncores=args.ncores)
 
     with open(args.out, "w") as fh:
