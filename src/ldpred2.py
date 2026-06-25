@@ -639,6 +639,103 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
 _gibbs_kernel_jit = _jit(_gibbs_kernel)
 
 
+def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
+                         h2_min, h2_max, seed, sample_every):
+    """Auto Gibbs kernel that also retains thinned *sampled* effect vectors.
+
+    A trimmed copy of :func:`_gibbs_kernel` (dense, ``estimate_hyper`` always on,
+    no sparse / warm-start / adaptive-stop branches) that, in addition to the
+    Rao-Blackwellized posterior mean and the ``h2``/``p`` paths, stores the
+    sampled ``curr_beta`` every ``sample_every`` post-burn-in sweeps. Those
+    samples drive the LDpred2-auto predictive-r2 estimator (Privé et al. 2023).
+
+    Returns ``(avg_beta, h2_path, p_path, beta_samples, n_saved)``.
+    """
+    np.random.seed(seed)
+    m = beta_hat.shape[0]
+    curr_beta = np.zeros(m)
+    avg_beta = np.zeros(m)
+    post_means = np.zeros(m)
+    Rb = np.zeros(m)
+
+    h2_path = np.empty(num_iter)
+    p_path = np.empty(num_iter)
+    max_saved = num_iter // sample_every + 1
+    beta_samples = np.zeros((max_saved, m))
+    n_iter_total = burn_in + num_iter
+    count = 0
+    n_saved = 0
+
+    for it in range(n_iter_total):
+        c1 = h2 / (m * p)
+        log_prior_odds = np.log1p(-p) - np.log(p)
+        post_var = c1 / (n * c1 + 1.0)
+        post_sd = np.sqrt(post_var)
+        half_log_term = 0.5 * np.log1p(n * c1)
+        n_post_var = n * post_var
+        nb_causal = 0
+
+        if it % 100 == 0:
+            Rb[:] = 0.0
+            for k in range(m):
+                bk = curr_beta[k]
+                if bk != 0.0:
+                    ck = corr[k]
+                    for i in range(m):
+                        Rb[i] += ck[i] * bk
+
+        unif = np.random.random(m)
+        gauss = np.random.standard_normal(m)
+
+        for j in range(m):
+            old = curr_beta[j]
+            res_beta_j = beta_hat[j] - Rb[j] + old
+            pv = post_var[j]
+            post_mean = n_post_var[j] * res_beta_j
+            log_odds = (log_prior_odds + half_log_term[j]
+                        - 0.5 * post_mean * post_mean / pv)
+            postp = _stable_postp(log_odds)
+            post_means[j] = postp * post_mean
+            if unif[j] < postp:
+                new = post_mean + gauss[j] * post_sd[j]
+                nb_causal += 1
+            else:
+                new = 0.0
+            delta = new - old
+            if delta != 0.0:
+                cj = corr[j]
+                for i in range(m):
+                    Rb[i] += cj[i] * delta
+                curr_beta[j] = new
+
+        p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
+        h2 = 0.0
+        for i in range(m):
+            h2 += curr_beta[i] * Rb[i]
+        if h2 < h2_min:
+            h2 = h2_min
+        elif h2 > h2_max:
+            h2 = h2_max
+
+        if it >= burn_in:
+            avg_beta += post_means
+            h2_path[count] = h2
+            p_path[count] = p
+            if count % sample_every == 0:
+                for i in range(m):
+                    beta_samples[n_saved, i] = curr_beta[i]
+                n_saved += 1
+            count += 1
+
+    if count == 0:
+        count = 1
+    avg_beta /= count
+    return avg_beta, h2_path[:count], p_path[:count], beta_samples[:n_saved], n_saved
+
+
+_gibbs_kernel_sample_jit = _jit(_gibbs_kernel_sample)
+
+
 def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
                          num_iter, sparse, estimate_hyper, h2_min, h2_max, seed,
                          init_beta, tol, check_every):
