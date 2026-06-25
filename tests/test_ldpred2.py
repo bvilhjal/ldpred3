@@ -17,9 +17,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import ldpred2  # noqa: E402
 from ldpred2 import (  # noqa: E402
+    block_diagonal_ld,
     ldpred2_auto,
+    ldpred2_by_blocks,
     ldpred2_grid,
     ldpred2_inf,
+    optimal_ld_blocks,
     sparsify_ld,
     standardize_betas,
 )
@@ -103,8 +106,10 @@ def test_numba_and_python_paths_agree():
 
     corr, beta_hat, true_beta, n = simulate(m=200, seed=5)
     n_vec = np.full(corr.shape[0], float(n))
+    init = np.zeros(corr.shape[0])
     kwargs = dict(burn_in=40, num_iter=120, sparse=False, estimate_hyper=False,
-                  h2_min=1e-6, h2_max=1.0, seed=11)
+                  h2_min=1e-6, h2_max=1.0, seed=11, init_beta=init, tol=0.0,
+                  check_every=50)
     corr_c = np.ascontiguousarray(corr)
     py = ldpred2._gibbs_kernel(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
     jit = ldpred2._gibbs_kernel_jit(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
@@ -141,6 +146,108 @@ def test_banded_sparse_recovers_signal():
     beta_grid = ldpred2_grid(sp, beta_hat, n_vec, h2=0.5, p=0.05,
                              burn_in=60, num_iter=200, seed=1)
     assert _corr(beta_grid, true_beta) > _corr(beta_hat, true_beta)
+
+
+def test_warm_start_recovers_signal():
+    """Warm-starting from inf should still recover the signal (and converge)."""
+    corr, beta_hat, true_beta, n = simulate(m=300, seed=9)
+    n_vec = np.full(corr.shape[0], float(n))
+    cold = ldpred2_grid(corr, beta_hat, n_vec, h2=0.5, p=0.05,
+                        burn_in=100, num_iter=300, seed=1)
+    warm = ldpred2_grid(corr, beta_hat, n_vec, h2=0.5, p=0.05,
+                        burn_in=100, num_iter=300, warm_start=True, seed=1)
+    base = _corr(beta_hat, true_beta)
+    assert _corr(cold, true_beta) > base
+    assert _corr(warm, true_beta) > base
+    # Cold and warm start estimate the same posterior mean (well correlated).
+    assert _corr(cold, warm) > 0.9
+
+
+def test_adaptive_stopping_stops_early():
+    """Adaptive stopping should use fewer iterations yet recover the signal."""
+    corr, beta_hat, true_beta, n = simulate(m=300, seed=10)
+    n_vec = np.full(corr.shape[0], float(n))
+    res = ldpred2_auto(corr, beta_hat, n_vec, h2_init=0.3, p_init=0.1,
+                       burn_in=50, num_iter=2000, warm_start=True,
+                       tol=1e-2, check_every=50, seed=1)
+    assert res.n_iter < 2000                       # stopped before the cap
+    assert _corr(res.beta_est, true_beta) > _corr(beta_hat, true_beta)
+
+
+def _make_blocks(nb=4, k=150, rho=0.5, p=0.05, N=20000, seed=0):
+    rng = np.random.default_rng(seed)
+    m = nb * k
+    blk = _ar1_corr(k, rho)
+    chol = np.linalg.cholesky(blk + 1e-9 * np.eye(k))
+    beta = np.zeros(m)
+    causal = rng.random(m) < p
+    beta[causal] = rng.normal(0, np.sqrt(0.5 / max(int(causal.sum()), 1)),
+                              int(causal.sum()))
+    bhat = np.empty(m)
+    blocks = []
+    for b in range(nb):
+        s = slice(b * k, (b + 1) * k)
+        bhat[s] = blk @ beta[s] + (chol @ rng.standard_normal(k)) / np.sqrt(N)
+        blocks.append((blk, np.arange(b * k, (b + 1) * k)))
+    n = np.full(m, float(N))
+    return blocks, bhat, beta, n
+
+
+def test_block_diagonal_inf_matches_per_block():
+    """inf on the assembled block-diagonal matrix == per-block inf (independence).
+
+    The infinitesimal ridge is ``m / (h2 * N)``: a single block of size k with
+    ``h2 = H*k/m`` and the whole matrix (size m) with ``h2 = H`` give the same
+    ridge, so the block-diagonal solve must reproduce the per-block solves.
+    """
+    blocks, bhat, true_beta, n = _make_blocks(seed=1)
+    m = len(bhat)
+    per_block = np.concatenate([ldpred2_inf(c, bhat[idx], n[idx], h2=0.5 * len(idx) / m)
+                                for c, idx in blocks])
+    glob = ldpred2_inf(block_diagonal_ld(blocks), bhat, n, h2=0.5)
+    assert np.allclose(per_block, glob, atol=1e-4)
+
+
+def test_global_auto_recovers_signal():
+    """LDpred2-auto with global hyper-parameters recovers the signal."""
+    blocks, bhat, true_beta, n = _make_blocks(nb=5, seed=2)
+    beta = ldpred2_by_blocks(blocks, bhat, n, method="auto",
+                             burn_in=50, num_iter=150, seed=1, global_hyper=True)
+    assert _corr(beta, true_beta) > _corr(bhat, true_beta)
+
+
+def _discarded_ld2(R, blocks, window):
+    blk = np.empty(R.shape[0], int)
+    for bi, (a, b) in enumerate(blocks):
+        blk[a:b] = bi
+    s = 0.0
+    m = R.shape[0]
+    for i in range(m):
+        for j in range(i + 1, min(i + window + 1, m)):
+            if blk[i] != blk[j]:
+                s += R[i, j] ** 2
+    return s
+
+
+def test_optimal_ld_blocks():
+    """Optimal LD splitting finds the natural boundary and beats fixed blocks."""
+    k1, k2 = 100, 150
+    R = np.zeros((k1 + k2, k1 + k2))
+    R[:k1, :k1] = _ar1_corr(k1, 0.6)
+    R[k1:, k1:] = _ar1_corr(k2, 0.6)
+    np.fill_diagonal(R, 1.0)
+    m = k1 + k2
+
+    blocks, cost = optimal_ld_blocks(R, max_size=200, min_size=20, window=50)
+    # boundary placed exactly at the LD gap -> ~zero discarded LD
+    assert cost < 1e-8
+    assert (0, k1) in blocks and (k1, m) in blocks
+    # valid tiling within the size bounds
+    assert blocks[0][0] == 0 and blocks[-1][1] == m
+    assert all(20 <= b - a <= 200 for a, b in blocks)
+    # optimal never discards more LD than fixed blocks of the same max size
+    fixed = [(i, min(i + 120, m)) for i in range(0, m, 120)]
+    assert cost <= _discarded_ld2(R, fixed, 50) + 1e-9
 
 
 if __name__ == "__main__":

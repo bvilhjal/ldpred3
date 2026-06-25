@@ -16,8 +16,58 @@ LD (linkage-disequilibrium) correlation matrix.
 | `ldpred2_grid`    | Point-normal / spike-and-slab (Gibbs sampler)      | `h2`, `p` (fixed)    |
 | `ldpred2_auto`    | Point-normal, estimates `h2` and `p` automatically | none (self-tuning)   |
 
-Helpers: `standardize_betas` (put GWAS effects on the correlation scale) and
-`ldpred2_by_blocks` (run a model independently per LD block, genome-wide).
+Helpers: `standardize_betas` (put GWAS effects on the correlation scale),
+`ldpred2_by_blocks` (run a model per LD block, genome-wide),
+`block_diagonal_ld` (assemble blocks into one matrix) and `optimal_ld_blocks`
+(choose LD block boundaries, below).
+
+### Optimal LD block splitting
+
+Fixed-size LD blocks cut arbitrarily through high-LD regions. `optimal_ld_blocks`
+implements [Privé (2022), *Bioinformatics*](https://doi.org/10.1093/bioinformatics/btab519)
+(`snp_ldsplit`): a dynamic program that places boundaries to **minimise the
+squared LD discarded between blocks**, subject to a maximum block size — so cuts
+land in low-LD valleys (recombination hotspots).
+
+```python
+blocks, discarded_ld2 = optimal_ld_blocks(corr, max_size=1000, window=300)
+```
+
+On a simulated chromosome with recombination hotspots (within-300 LD window):
+
+| scheme | max block | LD retained |
+|--------|-----------|-------------|
+| fixed 500 | 500 | 87.7 % |
+| optimal (max 500) | 499 | **94.4 %** |
+| fixed 1000 | 1000 | 94.6 % |
+| optimal (max 1000) | 900 | **97.7 %** |
+
+Optimal blocks discard less than half the LD of fixed blocks of the same size —
+and `optimal(max 500)` retains as much LD as `fixed(1000)`, i.e. the same fidelity
+at half the block size (≈4× less per-block O(k²) work and memory). The downstream
+prediction gain is modest; the win is mainly computational/validity, as in the
+paper.
+
+### Global hyper-parameters for `-auto`
+
+`ldpred2_by_blocks(method="auto")` estimates `h2` and `p` **globally** by default
+(`global_hyper=True`): a single batched kernel sweeps all blocks (packed
+contiguously) per iteration and pools the causal count and genetic variance
+across all variants (as in bigsnpr). Estimating them per block instead
+(`global_hyper=False`) is noisy when blocks hold few causal variants and **loses
+accuracy at genome scale**. The batched kernel keeps the fast dense contiguous
+update (no index indirection), so global hyper-parameters cost about the same as
+the per-block path while being far more accurate; it also has a constant-N fast
+path (per-SNP posterior constants computed once per sweep). On a 1M-SNP
+simulation (block-diagonal LD, p=0.001, vs R `bigsnpr`):
+
+| `-auto` variant | predictive R² | bigsnpr |
+|-----------------|---------------|---------|
+| global (default) | **0.941** | 0.942 |
+| per block | 0.848 | 0.942 |
+
+`inf` and `grid` already match bigsnpr (0.080/0.080 and 0.942/0.942 in the same
+run); global hyper-parameters bring `-auto` to parity too.
 
 ### Sparse / banded LD
 
@@ -50,6 +100,22 @@ Two important caveats:
   *fixed-h² sampler* (`grid` can diverge; `auto` self-limits via its h² clamp;
   `inf`'s ridge is unaffected). Use `sparsify_ld(..., shrink=<1)` to restore
   diagonal dominance, or supply an already-valid windowed LD matrix.
+
+### Fewer iterations: warm start & adaptive stopping
+
+`ldpred2_grid`/`ldpred2_auto` accept:
+
+* `warm_start=True` — initialise the chain from the LDpred2-inf solution instead
+  of zeros, shortening burn-in. It pays for one `inf` solve up front, so it only
+  helps when burn-in/mixing dominates **and** inf is cheap — i.e. paired with the
+  sparse LD backend (CG inf). With a *dense* O(m³) inf solve it can cost more
+  than it saves.
+* `tol=<x>` (+ `check_every`) — **adaptive stopping**: end sampling once the
+  running posterior mean's relative RMS change over `check_every` sweeps drops
+  below `tol`, instead of always running `num_iter`. `AutoResult.n_iter` reports
+  how many sweeps were used. On a fast-mixing block this reached the same
+  accuracy as a fixed 2000-iteration run in ~100 iterations (~10× faster), with
+  no loss (corr 1.000 vs the long run).
 
 ### Performance (optional Numba acceleration)
 
