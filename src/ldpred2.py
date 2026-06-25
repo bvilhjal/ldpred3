@@ -67,6 +67,7 @@ __all__ = [
     "SparseLD",
     "sparsify_ld",
     "block_diagonal_ld",
+    "optimal_ld_blocks",
 ]
 
 
@@ -229,6 +230,126 @@ def block_diagonal_ld(blocks):
     indptr = np.zeros(m + 1, dtype=np.int64)
     np.cumsum(np.concatenate(row_nnz), out=indptr[1:])
     return SparseLD(indptr.astype(np.int32), indices, data, m)
+
+
+def _cost_diff_dense(corr, window, m):
+    """Difference array whose prefix sum gives the per-boundary cut LD^2 (dense)."""
+    diff = np.zeros(m + 1)
+    for i in range(m):
+        hi = i + window + 1
+        if hi > m:
+            hi = m
+        for j in range(i + 1, hi):
+            r = corr[i, j]
+            r2 = r * r
+            diff[i + 1] += r2
+            diff[j + 1] -= r2
+    return diff
+
+
+def _cost_diff_sparse(indptr, indices, data, window, m):
+    """Difference array of per-boundary cut LD^2 (sparse CSR)."""
+    diff = np.zeros(m + 1)
+    for i in range(m):
+        for idx in range(indptr[i], indptr[i + 1]):
+            j = indices[idx]
+            if j > i and (j - i) <= window:
+                r = data[idx]
+                r2 = r * r
+                diff[i + 1] += r2
+                diff[j + 1] -= r2
+    return diff
+
+
+_cost_diff_dense_jit = _jit(_cost_diff_dense)
+_cost_diff_sparse_jit = _jit(_cost_diff_sparse)
+
+
+def optimal_ld_blocks(corr, max_size, min_size=1, window=None):
+    """Split a region into near-independent LD blocks (Prive 2022, Bioinformatics).
+
+    Implements the optimal LD-splitting idea behind bigsnpr's ``snp_ldsplit``:
+    choose consecutive block boundaries that **minimise the total squared LD
+    falling between blocks** (the LD discarded when blocks are treated as
+    independent), subject to ``min_size <= block size <= max_size``. Boundaries
+    therefore land in low-LD valleys (recombination hotspots), so a
+    block-diagonal approximation loses far less LD than fixed-size blocks of the
+    same maximum size -- improving accuracy and shrinking per-block storage.
+
+    The cost of a boundary ``b`` is ``sum r^2`` over pairs ``(i, j)`` with
+    ``i < b <= j`` and ``j - i <= window``. Total cost is additive over
+    boundaries when ``min_size >= window`` (no LD pair straddles two boundaries),
+    which an O(m) dynamic program then minimises exactly (a good approximation
+    otherwise). Ref: https://doi.org/10.1093/bioinformatics/btab519
+
+    Parameters
+    ----------
+    corr : ndarray (m, m) or SparseLD
+        LD matrix for a single region / chromosome.
+    max_size : int
+        Maximum block size (variants).
+    min_size : int
+        Minimum block size. For an exact cost, use ``min_size >= window``.
+    window : int or None
+        LD window: the max ``|i-j|`` with non-negligible LD. Defaults to
+        ``max_size``.
+
+    Returns
+    -------
+    blocks : list of (start, end)
+        Block boundaries (``end`` exclusive) tiling ``0 .. m``.
+    cost : float
+        Total discarded between-block LD^2 for the chosen split.
+    """
+    if window is None:
+        window = max_size
+    if isinstance(corr, SparseLD):
+        m = corr.m
+        diff = _cost_diff_sparse_jit(corr.indptr, corr.indices, corr.data,
+                                     int(window), m)
+    else:
+        corr = np.ascontiguousarray(corr, dtype=np.float64)
+        m = corr.shape[0]
+        diff = _cost_diff_dense_jit(corr, int(window), m)
+    if m == 0:
+        return [], 0.0
+    cost_cut = np.cumsum(diff)[:m + 1]
+    cost_cut[m] = 0.0                      # closing the final block costs nothing
+    max_size = min(int(max_size), m)
+    min_size = max(1, min(int(min_size), max_size))
+
+    # DP: E[b] = min cost to split [0, b) into valid blocks ending with a
+    # boundary at b. Sliding-window minimum of E[a] over the allowed previous
+    # boundaries a in [b - max_size, b - min_size].
+    INF = np.inf
+    E = np.full(m + 1, INF)
+    E[0] = 0.0
+    back = np.zeros(m + 1, dtype=np.int64)
+    from collections import deque
+    dq = deque()                           # indices a with increasing E[a]
+    for b in range(1, m + 1):
+        a_new = b - min_size
+        if a_new >= 0 and E[a_new] < INF:
+            while dq and E[dq[-1]] >= E[a_new]:
+                dq.pop()
+            dq.append(a_new)
+        lo = b - max_size
+        while dq and dq[0] < lo:
+            dq.popleft()
+        if dq:
+            a = dq[0]
+            E[b] = E[a] + cost_cut[b]
+            back[b] = a
+
+    # Backtrack the boundaries.
+    bounds = []
+    b = m
+    while b > 0:
+        a = int(back[b])
+        bounds.append((a, b))
+        b = a
+    bounds.reverse()
+    return bounds, float(E[m])
 
 
 def ldpred2_inf(corr, beta_hat, n_eff, h2):

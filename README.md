@@ -17,8 +17,36 @@ LD (linkage-disequilibrium) correlation matrix.
 | `ldpred2_auto`    | Point-normal, estimates `h2` and `p` automatically | none (self-tuning)   |
 
 Helpers: `standardize_betas` (put GWAS effects on the correlation scale),
-`ldpred2_by_blocks` (run a model per LD block, genome-wide) and
-`block_diagonal_ld` (assemble blocks into one matrix).
+`ldpred2_by_blocks` (run a model per LD block, genome-wide),
+`block_diagonal_ld` (assemble blocks into one matrix) and `optimal_ld_blocks`
+(choose LD block boundaries, below).
+
+### Optimal LD block splitting
+
+Fixed-size LD blocks cut arbitrarily through high-LD regions. `optimal_ld_blocks`
+implements [Privé (2022), *Bioinformatics*](https://doi.org/10.1093/bioinformatics/btab519)
+(`snp_ldsplit`): a dynamic program that places boundaries to **minimise the
+squared LD discarded between blocks**, subject to a maximum block size — so cuts
+land in low-LD valleys (recombination hotspots).
+
+```python
+blocks, discarded_ld2 = optimal_ld_blocks(corr, max_size=1000, window=300)
+```
+
+On a simulated chromosome with recombination hotspots (within-300 LD window):
+
+| scheme | max block | LD retained |
+|--------|-----------|-------------|
+| fixed 500 | 500 | 87.7 % |
+| optimal (max 500) | 499 | **94.4 %** |
+| fixed 1000 | 1000 | 94.6 % |
+| optimal (max 1000) | 900 | **97.7 %** |
+
+Optimal blocks discard less than half the LD of fixed blocks of the same size —
+and `optimal(max 500)` retains as much LD as `fixed(1000)`, i.e. the same fidelity
+at half the block size (≈4× less per-block O(k²) work and memory). The downstream
+prediction gain is modest; the win is mainly computational/validity, as in the
+paper.
 
 ### Global hyper-parameters for `-auto`
 

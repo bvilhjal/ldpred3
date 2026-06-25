@@ -22,6 +22,7 @@ from ldpred2 import (  # noqa: E402
     ldpred2_by_blocks,
     ldpred2_grid,
     ldpred2_inf,
+    optimal_ld_blocks,
     sparsify_ld,
     standardize_betas,
 )
@@ -213,6 +214,40 @@ def test_global_auto_recovers_signal():
     beta = ldpred2_by_blocks(blocks, bhat, n, method="auto",
                              burn_in=50, num_iter=150, seed=1, global_hyper=True)
     assert _corr(beta, true_beta) > _corr(bhat, true_beta)
+
+
+def _discarded_ld2(R, blocks, window):
+    blk = np.empty(R.shape[0], int)
+    for bi, (a, b) in enumerate(blocks):
+        blk[a:b] = bi
+    s = 0.0
+    m = R.shape[0]
+    for i in range(m):
+        for j in range(i + 1, min(i + window + 1, m)):
+            if blk[i] != blk[j]:
+                s += R[i, j] ** 2
+    return s
+
+
+def test_optimal_ld_blocks():
+    """Optimal LD splitting finds the natural boundary and beats fixed blocks."""
+    k1, k2 = 100, 150
+    R = np.zeros((k1 + k2, k1 + k2))
+    R[:k1, :k1] = _ar1_corr(k1, 0.6)
+    R[k1:, k1:] = _ar1_corr(k2, 0.6)
+    np.fill_diagonal(R, 1.0)
+    m = k1 + k2
+
+    blocks, cost = optimal_ld_blocks(R, max_size=200, min_size=20, window=50)
+    # boundary placed exactly at the LD gap -> ~zero discarded LD
+    assert cost < 1e-8
+    assert (0, k1) in blocks and (k1, m) in blocks
+    # valid tiling within the size bounds
+    assert blocks[0][0] == 0 and blocks[-1][1] == m
+    assert all(20 <= b - a <= 200 for a, b in blocks)
+    # optimal never discards more LD than fixed blocks of the same max size
+    fixed = [(i, min(i + 120, m)) for i in range(0, m, 120)]
+    assert cost <= _discarded_ld2(R, fixed, 50) + 1e-9
 
 
 if __name__ == "__main__":
