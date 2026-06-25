@@ -5,9 +5,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from genotype_io import (         # noqa: E402
+from pyldpred2.genotype_io import (         # noqa: E402
     VariantTable, SampleTable, read_plink, write_plink, read_bed,
     _BED_MAGIC, _BED_SNP_MAJOR,
 )
@@ -49,6 +48,25 @@ def test_roundtrip_all_genotype_states(tmp_path):
     np.testing.assert_array_equal(g.variants.pos, variants.pos)
     np.testing.assert_array_equal(g.variants.a1, variants.a1)
     np.testing.assert_array_equal(g.samples.iid, samples.iid)
+
+
+def test_read_plink_variant_subset_via_seek(tmp_path):
+    rng = np.random.default_rng(7)
+    n_samples, n_variants = 17, 12
+    dosage = rng.integers(-1, 3, size=(n_samples, n_variants)).astype(np.int8)
+    variants, samples = _make_tables(n_samples, n_variants, rng)
+    prefix = str(tmp_path / "geno")
+    write_plink(prefix, dosage, variants, samples)
+
+    wanted = ["rs2", "rs5", "rs9"]                 # subset, out of order
+    g = read_plink(prefix, variant_ids=wanted)
+    # Returned in file order (rs2, rs5, rs9 -> columns 2, 5, 9).
+    np.testing.assert_array_equal(g.variants.id, ["rs2", "rs5", "rs9"])
+    np.testing.assert_array_equal(g.dosage, dosage[:, [2, 5, 9]])
+    # Unknown IDs are simply skipped.
+    g2 = read_plink(prefix, variant_ids=["rs5", "nope"])
+    np.testing.assert_array_equal(g2.variants.id, ["rs5"])
+    np.testing.assert_array_equal(g2.dosage, dosage[:, [5]])
 
 
 def test_bed_decode_known_bits(tmp_path):

@@ -11,9 +11,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from infer import ldpred2_auto_infer       # noqa: E402
+from pyldpred2.infer import ldpred2_auto_infer       # noqa: E402
 
 
 def _block_R(m, nblk, rng):
@@ -119,6 +118,43 @@ def test_polygenicity_tracks_truth_across_scales():
         res = ldpred2_auto_infer(R, beta_hat, N, n_chains=10, burn_in=200,
                                  num_iter=250, seed=7)
         assert 0.6 * true_p < res.p_est < 1.6 * true_p, (true_p, res.p_est)
+
+
+def test_parallel_chains_match_serial(tmp_path):
+    # ncores>1 runs chains in parallel processes; results are deterministic
+    # (seeded per chain) and must match the serial run.
+    rng = np.random.default_rng(3)
+    R = _block_R(400, 4, rng)
+    beta = np.zeros(400); c = rng.random(400) < 0.05
+    beta[c] = rng.normal(0, np.sqrt(0.5 / c.sum()), c.sum())
+    L = np.linalg.cholesky(R + 1e-4 * np.eye(400))
+    bhat = R @ beta + (L @ rng.standard_normal(400)) / np.sqrt(20000)
+    a = ldpred2_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
+                           num_iter=100, seed=1, ncores=1)
+    b = ldpred2_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
+                           num_iter=100, seed=1, ncores=2)
+    assert abs(a.h2_est - b.h2_est) < 1e-9
+    assert abs(a.r2_est - b.r2_est) < 1e-9
+
+
+def test_allow_jump_sign_stabilises():
+    # On near-singular LD with a fixed (over-large) h2, the sampler can diverge;
+    # forbidding within-step sign flips keeps the effects bounded.
+    from pyldpred2 import ldpred2_grid
+    rng = np.random.default_rng(0)
+    m = 150
+    # Strong, near-collinear LD block (poorly conditioned).
+    R = 0.95 ** np.abs(np.subtract.outer(np.arange(m), np.arange(m)))
+    beta = np.zeros(m); beta[::25] = 0.4
+    bhat = R @ beta + rng.standard_normal(m) / np.sqrt(2000)
+
+    free = ldpred2_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50, num_iter=150,
+                        seed=1, allow_jump_sign=True)
+    guarded = ldpred2_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50,
+                           num_iter=150, seed=1, allow_jump_sign=False)
+    # The guarded run stays finite and no larger than the unguarded one.
+    assert np.all(np.isfinite(guarded))
+    assert np.abs(guarded).max() <= np.abs(free).max() + 1e-6
 
 
 def test_needs_two_chains():

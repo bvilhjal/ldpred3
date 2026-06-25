@@ -37,23 +37,29 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from genotype_io import read_plink
-from bgen_io import read_bgen
-from sumstats import read_sumstats
-from harmonize import harmonize
-from ld import compute_ld_blocks
-from prs import prs_score, allele_frequency
-from qc import qc_sumstats, sd_consistency_mask
-from ldpred2 import standardize_betas, ldpred2_by_blocks
+from .genotype_io import read_plink
+from .bgen_io import read_bgen
+from .sumstats import read_sumstats
+from .harmonize import harmonize
+from .ld import compute_ld_blocks
+from .prs import prs_score, allele_frequency
+from .qc import qc_sumstats, sd_consistency_mask
+from .ldpred2 import standardize_betas, ldpred2_by_blocks
+from .infer import ldpred2_auto_infer
 
 __all__ = ["PRSResult", "run_ldpred2_prs", "load_genotypes"]
 
 
-def load_genotypes(path, *, sample_path=None):
-    """Read genotypes from a PLINK prefix or a ``.bgen`` file (auto-detected)."""
+def load_genotypes(path, *, sample_path=None, variant_ids=None):
+    """Read genotypes from a PLINK prefix or a ``.bgen`` file (auto-detected).
+
+    ``variant_ids`` restricts the read to those variants (by rsID) — via seek
+    for PLINK, via a filtered scan for BGEN — so only the requested SNPs are
+    loaded from a biobank-scale fileset.
+    """
     if str(path).endswith(".bgen"):
-        return read_bgen(path, sample_path=sample_path)
-    return read_plink(path)
+        return read_bgen(path, sample_path=sample_path, variant_ids=variant_ids)
+    return read_plink(path, variant_ids=variant_ids)
 
 
 @dataclass
@@ -67,12 +73,14 @@ class PRSResult:
     var_index: np.ndarray       # genotype columns the weights apply to
     harmonize_log: dict
     qc_log: dict = None         # sumstats + SD-consistency QC counts
+    inference: dict = None      # h2/p/r2 estimates (+CIs) if infer=True
 
 
 def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     n_eff=None, ld_prefix=None, ld_ridge=0.0,
-                    sample_path=None, ld_sample_path=None,
+                    sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
                     qc=True, qc_params=None, sd_check=True,
+                    infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred2_kwargs):
     """Run the full sumstats -> LDpred2 -> PRS pipeline.
 
@@ -109,7 +117,6 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     -------
     PRSResult
     """
-    geno = load_genotypes(plink, sample_path=sample_path)
     ss = read_sumstats(sumstats, n_eff=n_eff, **(sumstats_cols or {}))
 
     qc_log = {}
@@ -118,6 +125,13 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
         ss = ss.subset(keep)
         if len(ss) == 0:
             raise ValueError("all GWAS variants were removed by sumstats QC")
+
+    # Read only the (QC'd) GWAS variants from the genotypes when possible.
+    vids = set(ss.id) if subset_to_sumstats else None
+    geno = load_genotypes(plink, sample_path=sample_path, variant_ids=vids)
+    if subset_to_sumstats and geno.n_variants == 0:
+        # IDs didn't line up (e.g. chr:pos-style genotype IDs) — read in full.
+        geno = load_genotypes(plink, sample_path=sample_path)
 
     h = harmonize(ss, geno.variants)
     if len(h) == 0:
@@ -129,7 +143,10 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
 
     # LD reference: external panel (matched to the same variants) or in-sample.
     if ld_prefix is not None:
-        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
+        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path,
+                             variant_ids=vids)
+        if subset_to_sumstats and ref.n_variants == 0:
+            ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
         href = harmonize(ss, ref.variants)
         # Restrict to variants present in both target-matched and ref-matched.
         common = np.intersect1d(geno.variants.id[h.var_index],
@@ -165,6 +182,26 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     beta_adj = ldpred2_by_blocks(blocks, beta_std, h.n_eff, method=method,
                                  **ldpred2_kwargs)
     scores = prs_score(target_dos, beta_adj, standardize=True)
+
+    inference = None
+    if infer:
+        m_tot = len(h)
+        if m_tot > infer_max_variants:
+            raise ValueError(
+                f"inference assembles a dense {m_tot}x{m_tot} LD matrix; that "
+                f"exceeds infer_max_variants={infer_max_variants}. Run it on a "
+                f"chromosome / curated SNP set, or raise the limit.")
+        dense = np.zeros((m_tot, m_tot), dtype=np.float32)
+        for R, idx in blocks:
+            dense[np.ix_(idx, idx)] = R
+        res = ldpred2_auto_infer(dense, beta_std, h.n_eff,
+                                 ncores=ldpred2_kwargs.get("ncores", 1),
+                                 **(infer_params or {}))
+        inference = {"h2_est": res.h2_est, "h2_ci": res.h2_ci,
+                     "p_est": res.p_est, "p_ci": res.p_ci,
+                     "r2_est": res.r2_est, "r2_ci": res.r2_ci,
+                     "n_chains_kept": res.n_chains_kept}
+
     return PRSResult(
         scores=scores,
         sample_fid=geno.samples.fid,
@@ -173,11 +210,12 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
         var_index=h.var_index,
         harmonize_log=h.log,
         qc_log=qc_log,
+        inference=inference,
     )
 
 
 def _subset_harmonized(h, mask):
-    from harmonize import Harmonized
+    from .harmonize import Harmonized
     return Harmonized(
         var_index=h.var_index[mask], beta=h.beta[mask], se=h.se[mask],
         n_eff=h.n_eff[mask], flipped=h.flipped[mask], log=h.log)
@@ -200,6 +238,9 @@ def _main(argv=None):
     ap.add_argument("--no-qc", action="store_true", help="skip sumstats QC")
     ap.add_argument("--no-sd-check", action="store_true",
                     help="skip the SD-consistency QC")
+    ap.add_argument("--infer", action="store_true",
+                    help="also infer h2 / polygenicity / predictive r2 "
+                         "(dense; for chromosome / curated-SNP scale)")
     ap.add_argument("--out", required=True, help="output scores file")
     args = ap.parse_args(argv)
 
@@ -207,7 +248,7 @@ def _main(argv=None):
         args.sumstats, args.plink or args.bgen, method=args.method,
         block_size=args.block_size, n_eff=args.n_eff, sample_path=args.sample,
         ld_prefix=args.ld_prefix, ld_ridge=args.ld_ridge, ncores=args.ncores,
-        qc=not args.no_qc, sd_check=not args.no_sd_check)
+        qc=not args.no_qc, sd_check=not args.no_sd_check, infer=args.infer)
 
     with open(args.out, "w") as fh:
         fh.write("FID\tIID\tPRS\n")
@@ -227,6 +268,12 @@ def _main(argv=None):
           f"({log['n_flipped']} flipped, {log['n_dropped_ambiguous']} ambiguous,"
           f" {log['n_dropped_mismatch']} mismatched, "
           f"{log['n_unmatched']} unmatched)")
+    if res.inference is not None:
+        i = res.inference
+        print(f"inferred h2={i['h2_est']:.3f} {tuple(round(x, 3) for x in i['h2_ci'])}"
+              f"  p={i['p_est']:.4f} {tuple(round(x, 4) for x in i['p_ci'])}"
+              f"  predictive r2={i['r2_est']:.3f} "
+              f"{tuple(round(x, 3) for x in i['r2_ci'])}")
     print(f"wrote {len(res.scores)} PRS to {args.out}")
 
 

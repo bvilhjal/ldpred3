@@ -52,7 +52,7 @@ The picture is method-dependent — there is no blanket "N× faster":
 
 ## Genotype-level simulation
 
-`src/simulate.py` is a full end-to-end simulation: it generates genotypes with
+`pyldpred2/simulate.py` is a full end-to-end simulation: it generates genotypes with
 block LD, simulates a phenotype under a chosen heritability and polygenicity,
 runs a marginal GWAS, estimates the LD matrix from the training sample, fits
 LDpred2, and reports **out-of-sample** prediction R² on a held-out test set. It
@@ -79,9 +79,9 @@ LDpred2's advantage over the raw marginal PRS is *larger* under realistic LD
 score that LDpred2's LD-adjustment removes.
 
 ```bash
-python src/simulate.py --quick                        # fast (AR(1))
-python src/simulate.py --quick --ld-model coalescent  # realistic LD (needs msprime)
-python src/simulate.py --csv sim.csv                  # full accuracy grid, save results
+python -m pyldpred2.simulate --quick                        # fast (AR(1))
+python -m pyldpred2.simulate --quick --ld-model coalescent  # realistic LD (needs msprime)
+python -m pyldpred2.simulate --csv sim.csv                  # full accuracy grid, save results
 ```
 
 Representative results (m=10000 SNPs, blocks of 200, AR(1) LD; prediction R² vs

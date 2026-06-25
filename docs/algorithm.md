@@ -57,7 +57,7 @@ sparse (CSR) and the sampler/solver need only touch non-zero neighbours
 and pass it to any model (or `ldpred2_by_blocks(..., sparsify=True)`):
 
 ```python
-from ldpred2 import sparsify_ld, ldpred2_inf, ldpred2_auto
+from pyldpred2 import sparsify_ld, ldpred2_inf, ldpred2_auto
 ld = sparsify_ld(corr, threshold=1e-3)        # drop |r| < 1e-3 (and/or max_dist=…)
 beta = ldpred2_inf(ld, beta_hat, n_eff, h2)   # sparse CG solve; samplers also accept ld
 ```
@@ -96,6 +96,17 @@ Two important caveats:
   how many sweeps were used. On a fast-mixing block this reached the same
   accuracy as a fixed 2000-iteration run in ~100 iterations (~10× faster), with
   no loss (corr 1.000 vs the long run).
+
+## Robustness: `allow_jump_sign`
+
+`ldpred2_grid` / `ldpred2_auto` / `ldpred2_auto_infer` accept
+`allow_jump_sign` (default `True`). Setting it `False` forbids a variant's
+effect from flipping sign within a single Gibbs step (a sampled effect of the
+opposite sign to the current one is set to zero instead). On noisy or
+ill-conditioned LD this is a major source of divergence, and the guard — as in
+the LDpred2-auto inference workflow (Privé et al.) — keeps the chain bounded.
+It is exact for well-behaved problems (no flips occur) and only bites when the
+sampler would otherwise oscillate.
 
 ## Performance & Numba
 

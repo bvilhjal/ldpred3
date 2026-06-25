@@ -5,10 +5,9 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from sumstats import Sumstats                              # noqa: E402
-from qc import qc_sumstats, sd_consistency_mask            # noqa: E402
+from pyldpred2.sumstats import Sumstats                              # noqa: E402
+from pyldpred2.qc import qc_sumstats, sd_consistency_mask            # noqa: E402
 
 
 def _ss(n, **over):

@@ -5,11 +5,10 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
-from bgen_io import write_bgen                                   # noqa: E402
-from pipeline import run_ldpred2_prs                             # noqa: E402
+from pyldpred2.genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
+from pyldpred2.bgen_io import write_bgen                                   # noqa: E402
+from pyldpred2.pipeline import run_ldpred2_prs                             # noqa: E402
 
 
 def _simulate(tmp_path, n_train=4000, n_target=1500, m=600, p_causal=0.1,
@@ -101,6 +100,41 @@ def test_end_to_end_inf_runs(tmp_path):
     res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200)
     r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
     assert r2 > 0.10
+
+
+def test_pipeline_infer_reports_h2_p_r2(tmp_path):
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=4)
+    res = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+                          num_iter=120, burn_in=60, seed=1,
+                          infer=True, infer_params={"n_chains": 6,
+                                                    "burn_in": 100,
+                                                    "num_iter": 120})
+    assert res.inference is not None
+    inf = res.inference
+    assert 0 < inf["h2_est"] < 1.5
+    assert 0 < inf["p_est"] <= 1
+    assert inf["r2_ci"][0] <= inf["r2_est"] <= inf["r2_ci"][1]
+
+
+def test_pipeline_infer_size_guard(tmp_path):
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=5)
+    try:
+        run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200,
+                        infer=True, infer_max_variants=100)
+    except ValueError as e:
+        assert "infer_max_variants" in str(e)
+    else:
+        raise AssertionError("expected size-guard ValueError")
+
+
+def test_subset_to_sumstats_matches_full_read(tmp_path):
+    # Reading only the GWAS variants must give the same PRS as a full read.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=7)
+    full = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,
+                           subset_to_sumstats=False)
+    sub = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,
+                          subset_to_sumstats=True)
+    np.testing.assert_allclose(full.scores, sub.scores, rtol=1e-6, atol=1e-6)
 
 
 def test_allele_flip_is_corrected(tmp_path):

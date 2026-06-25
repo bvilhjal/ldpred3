@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from prs import standardize_dosage
+from .prs import standardize_dosage
 
 __all__ = ["compute_ld_blocks"]
 

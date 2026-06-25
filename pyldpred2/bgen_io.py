@@ -26,7 +26,7 @@ import zlib
 
 import numpy as np
 
-from genotype_io import VariantTable, SampleTable, Genotypes
+from .genotype_io import VariantTable, SampleTable, Genotypes
 
 __all__ = ["read_bgen", "write_bgen"]
 
@@ -84,12 +84,18 @@ def _decode_probs_to_dosage(block, n_samples):
     return dosage.astype(np.float32)
 
 
-def read_bgen(path, sample_path=None):
+def read_bgen(path, sample_path=None, variant_ids=None):
     """Read a BGEN v1.2 (layout 2) file into a :class:`Genotypes` bundle.
 
     ``sample_path`` (an Oxford ``.sample`` file) supplies sample IDs when the
     BGEN itself has no embedded sample-identifier block.
+
+    ``variant_ids`` (an iterable of rsIDs / variant IDs) keeps only the matching
+    variants: the file is scanned sequentially but the expensive probability
+    decode (and the output matrix memory) is paid **only for wanted variants** —
+    so reading the GWAS SNPs from a biobank BGEN avoids decoding the rest.
     """
+    wanted = set(variant_ids) if variant_ids is not None else None
     with open(path, "rb") as fh:
         data = fh.read()
 
@@ -124,7 +130,7 @@ def read_bgen(path, sample_path=None):
     pos = 4 + offset                              # start of variant blocks
 
     chrom, vid, posn, a1, a2 = [], [], [], [], []
-    dosage = np.empty((n_samples, n_variants), dtype=np.float32)
+    dosage_cols = []
 
     def read_str():
         nonlocal pos
@@ -135,27 +141,33 @@ def read_bgen(path, sample_path=None):
         return s
 
     for v in range(n_variants):
-        vid.append(read_str())                    # variant ID
+        this_vid = read_str()                     # variant ID
         rsid = read_str()                         # rsID
-        vid[-1] = rsid or vid[-1]
-        chrom.append(read_str())
-        posn.append(struct.unpack_from("<I", data, pos)[0]); pos += 4
+        this_id = rsid or this_vid
+        this_chrom = read_str()
+        this_pos = struct.unpack_from("<I", data, pos)[0]; pos += 4
         k = struct.unpack_from("<H", data, pos)[0]; pos += 2
         alleles = []
         for _ in range(k):
             ln = struct.unpack_from("<I", data, pos)[0]; pos += 4
             alleles.append(data[pos:pos + ln].decode()); pos += ln
-        a1.append(alleles[0]); a2.append(alleles[1] if k > 1 else "")
 
         clen = struct.unpack_from("<I", data, pos)[0]; pos += 4
-        if compression != 0:
-            ulen = struct.unpack_from("<I", data, pos)[0]
-            comp = data[pos + 4:pos + clen]
-            block = _decompress(compression, comp, ulen)
-        else:
-            block = data[pos:pos + clen]
-        pos += clen
-        dosage[:, v] = _decode_probs_to_dosage(block, n_samples)
+        keep = wanted is None or this_id in wanted or this_vid in wanted
+        if keep:
+            if compression != 0:
+                ulen = struct.unpack_from("<I", data, pos)[0]
+                block = _decompress(compression, data[pos + 4:pos + clen], ulen)
+            else:
+                block = data[pos:pos + clen]
+            dosage_cols.append(_decode_probs_to_dosage(block, n_samples))
+            vid.append(this_id); chrom.append(this_chrom); posn.append(this_pos)
+            a1.append(alleles[0]); a2.append(alleles[1] if k > 1 else "")
+        pos += clen                               # always advance past the block
+
+    n_kept = len(dosage_cols)
+    dosage = (np.empty((n_samples, 0), dtype=np.float32) if n_kept == 0
+              else np.ascontiguousarray(np.column_stack(dosage_cols)))
 
     if sample_ids is None:
         sample_ids = _read_sample_file(sample_path, n_samples)
@@ -168,7 +180,7 @@ def read_bgen(path, sample_path=None):
     variants = VariantTable(
         chrom=np.array(chrom, dtype=object),
         id=np.array(vid, dtype=object),
-        cm=np.zeros(n_variants),
+        cm=np.zeros(n_kept),
         pos=np.array(posn, dtype=np.int64),
         a1=np.array(a1, dtype=object),
         a2=np.array(a2, dtype=object))

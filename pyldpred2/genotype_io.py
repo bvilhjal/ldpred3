@@ -69,6 +69,13 @@ class VariantTable:
     def __len__(self):
         return len(self.id)
 
+    def subset(self, idx):
+        """Return a new VariantTable keeping only the rows in ``idx``."""
+        idx = np.asarray(idx)
+        return VariantTable(
+            chrom=self.chrom[idx], id=self.id[idx], cm=self.cm[idx],
+            pos=self.pos[idx], a1=self.a1[idx], a2=self.a2[idx])
+
 
 @dataclass
 class SampleTable:
@@ -160,12 +167,17 @@ def read_fam(path):
     )
 
 
-def read_bed(path, n_samples, n_variants):
+def read_bed(path, n_samples, n_variants, variant_idx=None):
     """Decode a PLINK 1 ``.bed`` file into an ``int8`` dosage matrix.
 
-    Returns an array of shape ``(n_samples, n_variants)`` counting A1, with
-    ``-1`` for missing. ``n_samples`` and ``n_variants`` come from the matching
+    Returns an array of shape ``(n_samples, n_kept)`` counting A1, with ``-1``
+    for missing. ``n_samples`` and ``n_variants`` come from the matching
     ``.fam`` and ``.bim``.
+
+    ``variant_idx`` (an array of variant positions into ``0..n_variants-1``)
+    reads **only those variants** by seeking to their fixed-stride byte offsets,
+    so a HapMap3-sized subset of a biobank ``.bed`` is read without touching the
+    rest of the file. ``None`` reads every variant.
     """
     bytes_per_variant = (n_samples + 3) // 4
     with open(path, "rb") as fh:
@@ -175,25 +187,54 @@ def read_bed(path, n_samples, n_variants):
             raise ValueError(f"{path}: not a PLINK .bed file (bad magic)")
         if mode != bytes([_BED_SNP_MAJOR]):
             raise ValueError(f"{path}: only SNP-major .bed files are supported")
-        raw = np.fromfile(fh, dtype=np.uint8)
-    expected = bytes_per_variant * n_variants
-    if raw.size != expected:
-        raise ValueError(
-            f"{path}: expected {expected} genotype bytes for "
-            f"{n_variants} variants x {n_samples} samples, got {raw.size}")
-    raw = raw.reshape(n_variants, bytes_per_variant)
+        if variant_idx is None:
+            raw = np.fromfile(fh, dtype=np.uint8)
+            expected = bytes_per_variant * n_variants
+            if raw.size != expected:
+                raise ValueError(
+                    f"{path}: expected {expected} genotype bytes for "
+                    f"{n_variants} variants x {n_samples} samples, got {raw.size}")
+            nv = n_variants
+            raw = raw.reshape(nv, bytes_per_variant)
+        else:
+            idx = np.asarray(variant_idx, dtype=np.int64)
+            if idx.size and (idx.min() < 0 or idx.max() >= n_variants):
+                raise ValueError("variant_idx out of range")
+            nv = idx.size
+            raw = np.empty((nv, bytes_per_variant), dtype=np.uint8)
+            for r, v in enumerate(idx):
+                fh.seek(3 + int(v) * bytes_per_variant)
+                block = np.fromfile(fh, dtype=np.uint8, count=bytes_per_variant)
+                if block.size != bytes_per_variant:
+                    raise ValueError(f"{path}: truncated at variant {v}")
+                raw[r] = block
     # Expand each byte to its 4 samples, then trim padding to n_samples.
-    dos = _BYTE_TO_DOSAGES[raw].reshape(n_variants, bytes_per_variant * 4)
+    dos = _BYTE_TO_DOSAGES[raw].reshape(nv, bytes_per_variant * 4)
     dos = dos[:, :n_samples]
-    return np.ascontiguousarray(dos.T)        # -> (n_samples, n_variants)
+    return np.ascontiguousarray(dos.T)        # -> (n_samples, n_kept)
 
 
-def read_plink(prefix):
-    """Read a full PLINK 1 fileset given a path prefix (with or without ext)."""
+def read_plink(prefix, variant_ids=None):
+    """Read a PLINK 1 fileset given a path prefix (with or without ext).
+
+    If ``variant_ids`` is given (an iterable of rsIDs), only those variants are
+    read — via seek, so unrequested variants are never loaded — keeping them in
+    the file's order. Useful to read just the GWAS variants from a biobank-scale
+    fileset.
+    """
     prefix = _strip_ext(prefix)
     variants = read_bim(prefix + ".bim")
     samples = read_fam(prefix + ".fam")
-    dosage = read_bed(prefix + ".bed", len(samples), len(variants))
+    n_total = len(variants)
+    if variant_ids is None:
+        dosage = read_bed(prefix + ".bed", len(samples), n_total)
+    else:
+        wanted = set(variant_ids)
+        idx = np.array([i for i in range(n_total)
+                        if variants.id[i] in wanted], dtype=np.int64)
+        variants = variants.subset(idx)
+        dosage = read_bed(prefix + ".bed", len(samples), n_total,
+                          variant_idx=idx)
     return Genotypes(dosage=dosage, variants=variants, samples=samples)
 
 
