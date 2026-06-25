@@ -45,21 +45,39 @@ machine. (`*` at 2M `-auto` needs `warm_start=True` / more iterations to converg
 its hyper-parameters. bigsnpr's RAM here reflects an in-RAM dense-block matrix;
 its production on-disk banded LD uses less.)
 
-#### Single- vs multi-core (`-auto`)
+#### Single- vs multi-core (`-auto`), realistic LD
 
-![pyLDpred2 1 & 4 cores vs bigsnpr](benchmarks/cores_benchmark.png)
+The benchmark below uses **realistic LD** — each block is a `k`-SNP correlation
+matrix from a coalescent-with-recombination simulation (msprime: haplotype
+plateaus, recombination valleys, a heavy decay tail and perfect-LD duplicates),
+not idealized AR(1). It compares the 1-core streaming sampler, the 4-core packed
+sampler, and bigsnpr at 1 core.
 
-The plot (regenerate with `benchmarks/plot_cores.py`; data in
-`benchmarks/cores_benchmark.csv`) compares the 1-core streaming sampler, the
-4-core packed sampler, and bigsnpr at 1 core:
+![Realistic LD: pyLDpred2 1 & 4 cores vs bigsnpr](benchmarks/cores_realistic_benchmark.png)
 
-- **Memory:** the 1-core streaming path holds only one block's dense LD at a
-  time and stays ~3–3.5× below bigsnpr at every size (4 GB vs OOM at 2M).
-- **4 cores only wins at 2M** (57 s → 34 s). Below that the packed kernel's
-  setup cost isn't amortised, so it's *slower* than 1 core and uses ~3× the RAM
-  (the whole LD is packed in memory: 11.4 GB at 2M).
-- Use the default `ncores=1` streaming path up to ~1M SNPs; reach for
-  `ncores=4` only at the multi-million-SNP scale.
+| #SNPs | pyLDpred2 1c | pyLDpred2 4c | bigsnpr 1c | pyLDpred2 1c RAM | bigsnpr RAM |
+|-------|-------------:|-------------:|-----------:|-----------------:|------------:|
+| 200k  | 1.4 s  | 4.8 s  | 2.1 s | **0.73 GB** | 3.24 GB |
+| 500k  | 3.4 s  | 12.4 s | 5.2 s | **1.31 GB** | 7.71 GB |
+| 1M    | 7.6 s  | 21.3 s | OOM   | **2.29 GB** | >8 GB |
+| 2M    | 20.6 s | 42.2 s | OOM   | **4.25 GB** | — |
+
+Prediction R²_pheno matches bigsnpr where both run (0.493 vs 0.491 at 200k,
+0.481 vs 0.478 at 500k; h²=0.5).
+
+- **Memory is the headline, and realistic LD widens the gap.** pyLDpred2 stores
+  fixed dense `k×k` blocks, so its footprint is independent of LD *density*;
+  bigsnpr's LD store grows with the number of retained correlations, so the
+  denser realistic blocks push its RAM up ~4–5× and it **OOMs at 1M** here
+  (it reached 2M on idealized AR(1) blocks). pyLDpred2 1-core stays ~4× leaner
+  and finishes 2M in ~4 GB.
+- **1-core streaming wins outright** on both time and memory across this whole
+  range. The 4-core packed path is *slower* everywhere (packing + thread setup
+  isn't amortised when 1-core auto already converges quickly) and uses ~3× the
+  RAM. Reach for `ncores=4` only at the multi-million-SNP scale where per-sweep
+  compute dominates.
+- Regenerate with `benchmarks/plot_cores_realistic.py` (data in
+  `benchmarks/cores_realistic_benchmark.csv`).
 
 ### Models implemented
 
