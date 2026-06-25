@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [master, "claude/**"]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+        numba: ["with-numba", "no-numba"]
+    name: py${{ matrix.python-version }} / ${{ matrix.numba }}
+    env:
+      # Pin BLAS / OMP threads so numeric results are deterministic.
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (with Numba)
+        if: matrix.numba == 'with-numba'
+        run: pip install -e ".[test,fast]"
+
+      - name: Install (pure NumPy, no Numba)
+        if: matrix.numba == 'no-numba'
+        run: pip install -e ".[test]"
+
+      - name: Run tests (with Numba — full suite)
+        if: matrix.numba == 'with-numba'
+        run: pytest -q
+
+      - name: Run tests (no Numba — core suite; skip slow pure-Python samplers)
+        if: matrix.numba == 'no-numba'
+        # The heavy multi-chain inference / end-to-end pipeline tests are slow
+        # without the JIT and are fully covered by the with-numba job; the
+        # pure-Python sampler itself is still exercised by test_ldpred2.
+        run: pytest -q --ignore=tests/test_infer.py --ignore=tests/test_pipeline.py
