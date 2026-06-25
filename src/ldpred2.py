@@ -899,6 +899,161 @@ def _gibbs_blocks(blocks, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
         init_beta, float(tol), int(check_every), n_const)
 
 
+def _gibbs_one_sweep(corr, beta_hat, n, curr_beta, Rb, post_means, unif, gauss,
+                     c1, log_prior_odds, sparse, n_const, n0, resync):
+    """One point-normal Gibbs sweep over a single dense block (in place).
+
+    Operates on length-k slices of the global state, so the caller can stream
+    blocks without materialising a packed copy. Returns this block's
+    ``(nb_causal, beta^T R beta)`` so the driver can pool h2/p globally.
+    """
+    k = beta_hat.shape[0]
+    if resync:
+        for li in range(k):
+            Rb[li] = 0.0
+        for lj in range(k):
+            bj = curr_beta[lj]
+            if bj != 0.0:
+                cj = corr[lj]
+                for li in range(k):
+                    Rb[li] += cj[li] * bj
+
+    if n_const:
+        nc1 = n0 * c1
+        pv0 = c1 / (nc1 + 1.0)
+        psd0 = np.sqrt(pv0)
+        half0 = 0.5 * np.log1p(nc1)
+        npv0 = n0 * pv0
+
+    nb_causal = 0
+    for lj in range(k):
+        old = curr_beta[lj]
+        res_beta_j = beta_hat[lj] - Rb[lj] + old
+        if n_const:
+            pv = pv0
+            psd = psd0
+            half = half0
+            post_mean = npv0 * res_beta_j
+        else:
+            nj = n[lj]
+            nc1 = nj * c1
+            pv = c1 / (nc1 + 1.0)
+            psd = np.sqrt(pv)
+            half = 0.5 * np.log1p(nc1)
+            post_mean = nj * pv * res_beta_j
+        log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
+        postp = 1.0 / (1.0 + np.exp(log_odds))
+        post_means[lj] = postp * post_mean
+
+        if sparse and postp < 0.5:
+            new = 0.0
+        elif unif[lj] < postp:
+            new = post_mean + gauss[lj] * psd
+            nb_causal += 1
+        else:
+            new = 0.0
+
+        delta = new - old
+        if delta != 0.0:
+            cj = corr[lj]
+            for li in range(k):
+                Rb[li] += cj[li] * delta
+            curr_beta[lj] = new
+
+    gv = 0.0
+    for i in range(k):
+        gv += curr_beta[i] * Rb[i]
+    return nb_causal, gv
+
+
+_gibbs_one_sweep_jit = _jit(_gibbs_one_sweep)
+
+
+def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
+                         sparse, seed, estimate_hyper, h2_bounds,
+                         warm_start=False, tol=0.0, check_every=50):
+    """Streaming global-hyper sampler: process blocks one at a time.
+
+    Keeps the LD blocks in place (a float32 copy per distinct block; shared
+    blocks are de-duplicated by identity) instead of packing them into one big
+    contiguous array, so peak memory is the LD itself plus O(m) state -- not the
+    ~2-3x packing peak. h2/p are pooled across all blocks each sweep (global
+    hyper-parameters). Returns ``(avg_beta, h2_path, p_path, count)``.
+    """
+    beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
+    n = np.ascontiguousarray(n, dtype=np.float64)
+    m = beta_hat.shape[0]
+    h2_min, h2_max = h2_bounds
+    rng = np.random.default_rng(seed)
+    n_const = bool(n.size > 0 and n.min() == n.max())
+    n0 = float(n[0]) if n_const else 0.0
+
+    # float32 blocks, de-duplicated by object identity (shared blocks -> 1 copy).
+    cache = {}
+    fblocks = []
+    for cb, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
+        key = id(cb)
+        if key not in cache:
+            cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
+        idx = np.asarray(idx)
+        fblocks.append((cache[key], int(idx[0]), int(idx.shape[0])))
+
+    curr_beta = np.zeros(m)
+    if warm_start:
+        for cbf, start, k in fblocks:
+            sl = slice(start, start + k)
+            curr_beta[sl] = ldpred2_inf(cbf, beta_hat[sl], n[sl], h2 * k / m)
+    Rb = np.zeros(m)
+    avg_beta = np.zeros(m)
+    post_means = np.zeros(m)
+    prev_mean = np.zeros(m)
+    h2_path = np.empty(num_iter)
+    p_path = np.empty(num_iter)
+    count = 0
+
+    for it in range(burn_in + num_iter):
+        c1 = h2 / (m * p)
+        log_prior_odds = np.log1p(-p) - np.log(p)
+        unif = rng.random(m)
+        gauss = rng.standard_normal(m)
+        resync = (it % 100 == 0)
+        nb_causal = 0
+        gv = 0.0
+        for cbf, start, k in fblocks:
+            sl = slice(start, start + k)
+            nbc, gvb = _gibbs_one_sweep_jit(
+                cbf, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
+                unif[sl], gauss[sl], c1, log_prior_odds, bool(sparse),
+                n_const, n0, resync)
+            nb_causal += nbc
+            gv += gvb
+
+        if estimate_hyper:
+            p = float(rng.beta(1.0 + nb_causal, 1.0 + m - nb_causal))
+            h2 = min(max(gv, h2_min), h2_max)
+
+        if it >= burn_in:
+            if sparse:
+                avg_beta += curr_beta
+            else:
+                avg_beta += post_means
+            h2_path[count] = h2
+            p_path[count] = p
+            count += 1
+            if tol > 0.0 and count % check_every == 0:
+                cm = avg_beta / count
+                num = float(np.sum((cm - prev_mean) ** 2))
+                den = float(np.sum(cm * cm))
+                prev_mean = cm
+                if count > check_every and num <= tol * tol * den:
+                    break
+
+    if count == 0:
+        count = 1
+    avg_beta /= count
+    return avg_beta, h2_path[:count], p_path[:count], count
+
+
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr,
                    warm_start=False, tol=0.0, check_every=50):
@@ -1128,7 +1283,7 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
     # to per-block when global_hyper is off.
     if method == "auto" and global_hyper:
         kwargs.pop("h2", None)                       # auto estimates h2 itself
-        avg_beta, _, _, _ = _gibbs_blocks(
+        avg_beta, _, _, _ = _gibbs_blocks_stream(
             [(cb, np.asarray(idx)) for cb, idx in blocks], beta_hat, n,
             kwargs.pop("h2_init", 0.1), kwargs.pop("p_init", 0.1),
             burn_in=kwargs.pop("burn_in", 200),
