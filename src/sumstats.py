@@ -55,6 +55,8 @@ _ALIASES = {
               "n_samples", "n_total"],
     "eaf": ["eaf", "freq", "frq", "effect_allele_frequency", "a1freq",
             "freq1", "maf", "af", "effect_allele_freq"],
+    "info": ["info", "imputation_info", "imp_info", "rsq", "r2", "info_score",
+             "imputation_quality", "minimac_r2"],
 }
 
 
@@ -71,9 +73,17 @@ class Sumstats:
     se: np.ndarray
     n_eff: np.ndarray
     eaf: np.ndarray
+    info: np.ndarray
 
     def __len__(self):
         return len(self.beta)
+
+    def subset(self, mask):
+        """Return a new Sumstats keeping only rows where ``mask`` is True."""
+        mask = np.asarray(mask)
+        return Sumstats(*(getattr(self, f)[mask] for f in (
+            "id", "chrom", "pos", "ea", "oa", "beta", "se", "n_eff",
+            "eaf", "info")))
 
 
 def _open(path):
@@ -153,7 +163,7 @@ def read_sumstats(path, *, n_eff=None, **col_overrides):
                 f"no sample-size column found in {path}; pass n_eff=...")
 
         ids, chroms, poss, eas, oas = [], [], [], [], []
-        betas, ses, ns, eafs = [], [], [], []
+        betas, ses, ns, eafs, infos = [], [], [], [], []
 
         def get(fields, key, default=""):
             i = colmap.get(key)
@@ -189,6 +199,7 @@ def read_sumstats(path, *, n_eff=None, **col_overrides):
             oas.append(get(f, "oa").upper())
             betas.append(beta); ses.append(se); ns.append(n)
             eafs.append(_to_float(get(f, "eaf")) if "eaf" in colmap else math.nan)
+            infos.append(_to_float(get(f, "info")) if "info" in colmap else math.nan)
 
     return Sumstats(
         id=np.array(ids, dtype=object),
@@ -200,4 +211,5 @@ def read_sumstats(path, *, n_eff=None, **col_overrides):
         se=np.array(ses, dtype=float),
         n_eff=np.array(ns, dtype=float),
         eaf=np.array(eafs, dtype=float),
+        info=np.array(infos, dtype=float),
     )

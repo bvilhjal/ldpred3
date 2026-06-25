@@ -18,49 +18,63 @@ float32 / fused Gibbs sampler, Rao-Blackwellized estimates, warm-start and
 adaptive stopping, a sparse/banded LD backend with an iterative `inf` solver,
 optimal LD-block splitting (Privé 2022), and global hyper-parameters for `-auto`
 via a **streaming** sampler that never materialises a genome-wide LD matrix.
-Across 200k–2M SNPs (single core) it matches bigsnpr's accuracy while running
-**~1.2–1.7× faster and using ~2× less memory**; both scale to 2M SNPs
-single-threaded (pyLDpred2 in ~4 GB, bigsnpr in ~8 GB). Optional multicore for
-global `-auto` (`ldpred2_by_blocks(..., ncores=k)`) parallelises the per-sweep
-block loop with `numba.prange` (≈3× kernel speed-up at 4 cores); on this
-memory-bandwidth-bound workload the net gain over the fast streaming single-core
-path is modest, and it trades the streaming sampler's low memory for a packed LD
-matrix. See the benchmark below for the head-to-head against `bigsnpr`.
+Across 200k–2M SNPs (single core) it matches bigsnpr's accuracy exactly while
+using **~2× less memory**, and is competitive on speed in a method-dependent way:
+`-auto` is ~1.1–1.4× faster, `-inf` is roughly on par, and `-grid` is ~2× slower
+than bigsnpr's compiled C++ sampler. Both scale to 2M SNPs single-threaded
+(pyLDpred2 in ~4 GB, bigsnpr in ~8 GB). An optional multicore path for global
+`-auto` (`ldpred2_by_blocks(..., ncores=k)`) parallelises the per-sweep block
+loop with `numba.prange`, but the benchmarks below compare **single-core**
+throughout. See the head-to-head against `bigsnpr` below.
 
 ### Benchmark vs bigsnpr (realistic LD, 200k–2M SNPs, single core)
 
-The benchmark below uses **realistic LD** — each block is a `k`-SNP correlation
-matrix from a coalescent-with-recombination simulation (msprime: haplotype
-plateaus, recombination valleys, a heavy decay tail and perfect-LD duplicates),
-not idealized AR(1). It compares the 1-core streaming sampler, the 4-core packed
-sampler, and bigsnpr at 1 core.
+The benchmark uses **realistic LD** — each block is a `k`-SNP correlation matrix
+from a coalescent-with-recombination simulation (msprime: haplotype plateaus,
+recombination valleys, a heavy decay tail and perfect-LD duplicates), not
+idealized AR(1). Every method runs on a **single core** for both tools (NumPy
+BLAS and R BLAS pinned to one thread); bigsnpr's on-disk SFBM is assembled
+**incrementally** block-by-block (`as_SFBM` + `$add_columns()`, as in the
+LDpred2 vignette) so the full correlation never sits in RAM.
 
-![Realistic LD: pyLDpred2 1 & 4 cores vs bigsnpr](benchmarks/cores_realistic_benchmark.png)
+![1-core method comparison vs bigsnpr](benchmarks/cores_1core_benchmark.png)
 
-| #SNPs | pyLDpred2 1c | pyLDpred2 4c | bigsnpr 1c | pyLDpred2 1c RAM | bigsnpr RAM |
-|-------|-------------:|-------------:|-----------:|-----------------:|------------:|
-| 200k  | 1.4 s  | 4.8 s  | 2.3 s  | **0.73 GB** | 1.06 GB |
-| 500k  | 3.4 s  | 12.4 s | 5.6 s  | **1.31 GB** | 2.24 GB |
-| 1M    | 7.6 s  | 21.3 s | 11.5 s | **2.29 GB** | 4.24 GB |
-| 2M    | 20.6 s | 42.2 s | 23.9 s | **4.25 GB** | 8.24 GB |
+Wall-clock time (s), single core:
 
-Prediction R²_pheno matches bigsnpr at every size (0.493/0.490 at 200k,
-0.481/0.479 at 500k, 0.464/0.461 at 1M, 0.422/0.422 at 2M; h²=0.5).
+| #SNPs | inf py / big | grid py / big | auto py / big |
+|-------|-------------:|--------------:|--------------:|
+| 200k  | **3.1** / 5.0 | 3.4 / **1.5** | **1.8** / 2.5 |
+| 500k  | **5.2** / 8.9 | 8.1 / **3.5** | **4.2** / 6.2 |
+| 1M    | **10.4** / 13.3 | 16.0 / **6.9** | **9.1** / 12.4 |
+| 2M    | 20.7 / **18.2** | 32.0 / **13.9** | **21.7** / 25.0 |
 
-- **Both scale to 2M single-threaded.** bigsnpr is run the way it is meant to be
-  used: its on-disk SFBM is assembled **incrementally** block-by-block
-  (`as_SFBM` + `$add_columns()`, as in the LDpred2 vignette), so the full
-  correlation never sits in RAM — see `benchmarks/bench_bigsnpr_blocks.R`.
-- **pyLDpred2 1-core is ~1.2–1.7× faster and ~2× leaner.** The memory edge comes
-  from storing LD as `float32` and streaming one block at a time; bigsnpr's SFBM
-  keeps `float64` values plus per-entry row indices. It's a real but modest
-  constant-factor win, not an order-of-magnitude one.
-- **1-core streaming beats the 4-core packed path here** on both time and memory:
-  when 1-core auto already converges quickly, packing + thread setup isn't
-  amortised and the packed kernel uses ~3× the RAM. Reach for `ncores=4` only at
-  the multi-million-SNP scale where per-sweep compute dominates.
-- Regenerate with `benchmarks/plot_cores_realistic.py` (data in
-  `benchmarks/cores_realistic_benchmark.csv`).
+Peak memory (GB) — LD-dominated, so ~equal across the three methods:
+
+| #SNPs | pyLDpred2 | bigsnpr |
+|-------|----------:|--------:|
+| 200k  | **0.73** | 1.06 |
+| 500k  | **1.33** | 2.24 |
+| 1M    | **2.31** | 4.24 |
+| 2M    | **4.28** | 8.24 |
+
+**Prediction accuracy is identical** between the two at every size and method
+(e.g. auto R²_pheno 0.493/0.492 at 200k → 0.421/0.421 at 2M; h²=0.5).
+
+The picture is method-dependent — there is no blanket "N× faster":
+
+- **Memory:** pyLDpred2 is **~2× leaner** everywhere (`float32` LD + one block
+  resident; bigsnpr's SFBM stores `float64` values plus per-entry indices).
+- **`-auto`:** pyLDpred2 is **~1.1–1.4× faster** — its streaming global-hyper
+  sampler is the strongest path.
+- **`-inf`:** roughly on par — pyLDpred2 faster up to 1M, bigsnpr slightly faster
+  at 2M.
+- **`-grid`:** **bigsnpr is ~2× faster** here; its compiled C++ grid sampler
+  beats pyLDpred2's per-block Python-orchestrated one. This is pyLDpred2's weak
+  spot at fixed hyper-parameters.
+
+Regenerate with `benchmarks/plot_methods_1core.py` (data in
+`benchmarks/cores_1core_benchmark.csv`, R side in
+`benchmarks/bench_bigsnpr_blocks.R`).
 
 ### End-to-end PRS pipeline (real data)
 
@@ -69,7 +83,9 @@ genotype files to one polygenic score per individual — no R, NumPy-only:
 
 ```
 GWAS sumstats + genotypes (PLINK/BGEN)
+  → QC sumstats (N / MAF / INFO / duplicates / chi-sq outliers)
   → read & harmonise (align effect alleles to A1, drop ambiguous/mismatched)
+  → SD-consistency QC vs the reference panel
   → per-block LD from a reference panel (in-sample or external)
   → ldpred2 (inf / grid / auto)
   → per-individual PRS
@@ -98,9 +114,23 @@ Supporting modules, each usable on its own:
 | `genotype_io`   | Read/write PLINK 1 `.bed/.bim/.fam` (2-bit decode, NumPy-only)         |
 | `bgen_io`       | Read BGEN v1.2/layout-2 (uncompressed or zlib; biallelic diploid)      |
 | `sumstats`      | Parse GWAS files with flexible column aliases (OR→β, SE-from-p)        |
+| `qc`            | Sumstats QC: N / MAF / INFO / duplicate / chi-sq + SD-consistency      |
 | `harmonize`     | Match variants + align effect alleles (swap-flip, strand, palindrome) |
 | `ld`            | Per-block LD correlation matrices from a genotype panel               |
 | `prs`           | Weighted polygenic scores with missing-call imputation                |
+
+**Sumstats QC** runs by default (`qc=True`, disable with `--no-qc`). Two stages,
+following the bigsnpr / LDpred2 tutorial:
+
+* **Sumstats-only** (`qc.qc_sumstats`, before harmonisation): drop non-finite or
+  non-positive-SE rows, duplicated variants, low-`N` variants (`N < 0.7·max N`),
+  low-MAF (`< 0.01`, when an EAF column is present), low-INFO (`< 0.7`, when
+  present) and chi-square outliers (optional `max_chisq`).
+* **SD-consistency** (`qc.sd_consistency_mask`, after harmonisation): compare the
+  SD implied by the sumstats, `sd_ss ≈ 1/√(N·se² + β²)`, against the reference
+  genotype SD `sd_ref = √(2·f·(1−f))`, and drop variants where the ratio leaves
+  `[0.5, 2]`. This catches a wrong `N`, allele errors or bad imputation that
+  harmonisation cannot. `PRSResult.qc_log` reports the per-filter counts.
 
 **Format notes.** Dosages count the A1 (first) allele; missing calls are `-1`
 (PLINK, hard calls) or `NaN` (BGEN, dosages in `[0,2]`). Strand-ambiguous
@@ -247,11 +277,13 @@ wide runs.
 pip install numba      # optional but strongly recommended
 ```
 
-On a single core, the JIT-compiled `grid`/`auto` samplers are competitive with —
-and on dense blocks ~3–5× faster than — bigsnpr's C++ `snp_ldpred2_{grid,auto}`
-at equal problem size, producing matching effects (r ≥ 0.999). bigsnpr's
-infinitesimal solver and its sparse-LD / multicore handling remain faster at
-genome-wide scale.
+On a single core (see the benchmark table above for the full head-to-head),
+the JIT-compiled samplers produce effects identical to bigsnpr's C++
+`snp_ldpred2_{grid,auto}` (matching accuracy at every size). On speed the result
+is method-dependent: `-auto` is ~1.1–1.4× faster than bigsnpr and `-inf` is on
+par, but `-grid` is ~2× slower — bigsnpr's compiled fixed-hyper-parameter grid
+sampler is hard to beat from Python. pyLDpred2's edge is memory (~2× leaner) and
+the streaming global-`auto` path.
 
 ### Conventions
 
@@ -324,18 +356,21 @@ python src/simulate.py --quick --ld-model coalescent  # realistic LD (needs mspr
 python src/simulate.py --csv sim.csv      # full accuracy grid, save results
 ```
 
-Representative results (m=1000 SNPs, blocks of 100; prediction R² vs phenotype):
+Representative results (m=10000 SNPs, blocks of 200, AR(1) LD; prediction R² vs
+phenotype, from `python src/simulate.py --csv …`):
 
 | N | h² | p (causal) | marginal | inf | grid | auto | ceiling |
 |---|----|-----------|---------|-----|------|------|---------|
-| 5000 | 0.5 | 0.005 | 0.280 | 0.331 | 0.452 | 0.451 | 0.455 |
-| 5000 | 0.5 | 0.05  | 0.320 | 0.377 | 0.491 | 0.482 | 0.501 |
-| 10000 | 0.5 | 0.5  | 0.368 | 0.460 | 0.475 | 0.471 | 0.537 |
-| 10000 | 0.2 | 0.05 | 0.128 | 0.142 | 0.196 | 0.197 | 0.203 |
+| 5000  | 0.5 | 0.001 | 0.097 | 0.100 | 0.465 | 0.465 | 0.475 |
+| 20000 | 0.5 | 0.001 | 0.254 | 0.262 | 0.489 | 0.489 | 0.489 |
+| 20000 | 0.5 | 0.1   | 0.245 | 0.265 | 0.417 | 0.417 | 0.512 |
+| 20000 | 0.3 | 0.01  | 0.135 | 0.139 | 0.301 | 0.300 | 0.311 |
 
 Takeaways: LDpred2 always beats the raw marginal baseline; accuracy rises with
 heritability and sample size; `grid`/`auto` approach the ceiling for sparse
-architectures, while `inf` is competitive for highly polygenic traits.
+architectures and remain the best across the grid. The infinitesimal model only
+modestly beats the marginal score here — its all-causal prior leaves accuracy on
+the table whenever the trait is even mildly sparse.
 
 ### Scaling: what the algorithm actually depends on
 
