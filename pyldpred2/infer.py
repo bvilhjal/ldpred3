@@ -62,9 +62,29 @@ def _prep_corr(corr, shrink_corr):
     return corr
 
 
+# Worker state for parallel chains. Set once per process by the pool
+# initializer so the (read-only) LD matrix is not re-pickled per chain.
+_WORKER = {}
+
+
+def _chain_init(corr, beta_hat, n, h2_init, burn_in, num_iter, lo, hi, sample_every):
+    _WORKER.update(corr=corr, beta_hat=beta_hat, n=n, h2_init=h2_init,
+                   burn_in=burn_in, num_iter=num_iter, lo=lo, hi=hi,
+                   sample_every=sample_every)
+
+
+def _chain_run(p_init_and_seed):
+    p_init, seed = p_init_and_seed
+    w = _WORKER
+    return _gibbs_kernel_sample_jit(
+        w["corr"], w["beta_hat"], w["n"], float(w["h2_init"]), float(p_init),
+        int(w["burn_in"]), int(w["num_iter"]), float(w["lo"]), float(w["hi"]),
+        int(seed), int(w["sample_every"]))
+
+
 def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
                        p_init_range=(1e-4, 0.2), h2_init=0.1,
-                       burn_in=200, num_iter=200, sample_every=5,
+                       burn_in=200, num_iter=200, sample_every=5, ncores=1,
                        shrink_corr=1.0, h2_bounds=(1e-4, 1.0),
                        qc=True, qc_frac=0.95, qc_quantile=0.95, seed=None):
     """Multi-chain LDpred2-auto with h²/p/r² inference.
@@ -116,12 +136,22 @@ def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
     ss = np.random.SeedSequence(seed)
     seeds = [int(s.generate_state(1)[0]) for s in ss.spawn(n_chains)]
 
+    work = list(zip(p_inits, seeds))
+    if ncores and ncores > 1 and n_chains > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        initargs = (corr, beta_hat, n, float(h2_init), int(burn_in),
+                    int(num_iter), float(lo), float(hi), int(sample_every))
+        with ProcessPoolExecutor(max_workers=int(ncores),
+                                 initializer=_chain_init,
+                                 initargs=initargs) as ex:
+            results = list(ex.map(_chain_run, work))
+    else:
+        _chain_init(corr, beta_hat, n, float(h2_init), int(burn_in),
+                    int(num_iter), float(lo), float(hi), int(sample_every))
+        results = [_chain_run(w) for w in work]
+
     betas, h2_paths, p_paths, samples = [], [], [], []
-    for c in range(n_chains):
-        avg_beta, h2_path, p_path, bsamp, _ = _gibbs_kernel_sample_jit(
-            corr, beta_hat, n, float(h2_init), float(p_inits[c]),
-            int(burn_in), int(num_iter), float(lo), float(hi),
-            seeds[c], int(sample_every))
+    for avg_beta, h2_path, p_path, bsamp, _ in results:
         betas.append(avg_beta)
         h2_paths.append(h2_path)
         p_paths.append(p_path)

@@ -120,6 +120,23 @@ def test_polygenicity_tracks_truth_across_scales():
         assert 0.6 * true_p < res.p_est < 1.6 * true_p, (true_p, res.p_est)
 
 
+def test_parallel_chains_match_serial(tmp_path):
+    # ncores>1 runs chains in parallel processes; results are deterministic
+    # (seeded per chain) and must match the serial run.
+    rng = np.random.default_rng(3)
+    R = _block_R(400, 4, rng)
+    beta = np.zeros(400); c = rng.random(400) < 0.05
+    beta[c] = rng.normal(0, np.sqrt(0.5 / c.sum()), c.sum())
+    L = np.linalg.cholesky(R + 1e-4 * np.eye(400))
+    bhat = R @ beta + (L @ rng.standard_normal(400)) / np.sqrt(20000)
+    a = ldpred2_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
+                           num_iter=100, seed=1, ncores=1)
+    b = ldpred2_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
+                           num_iter=100, seed=1, ncores=2)
+    assert abs(a.h2_est - b.h2_est) < 1e-9
+    assert abs(a.r2_est - b.r2_est) < 1e-9
+
+
 def test_needs_two_chains():
     rng = np.random.default_rng(0)
     R = _block_R(200, 2, rng)

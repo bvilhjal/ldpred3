@@ -23,7 +23,27 @@ res.r2_est, res.r2_ci      # predicted out-of-sample r² + 95% CI
 ```
 
 It operates on a dense LD matrix (one block, or a block-diagonal genome via
-`block_diagonal_ld`).
+`block_diagonal_ld`). Pass `ncores=k` to run the chains in parallel processes.
+
+## From the pipeline
+
+The end-to-end pipeline can run inference directly on the fitted LD with
+`infer=True` (CLI `--infer`), reporting h²/p/r² alongside the scores:
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink chr1 --infer --out prs.txt
+# ... inferred h2=0.41 (0.39, 0.43)  p=0.012 (...)  predictive r2=0.18 (...)
+```
+
+```python
+res = run_ldpred2_prs("gwas.txt.gz", "chr1", method="auto", infer=True)
+res.inference   # {"h2_est", "h2_ci", "p_est", "p_ci", "r2_est", "r2_ci", ...}
+```
+
+Because the estimator is dense, the pipeline assembles a dense block-diagonal LD
+and guards on size (`infer_max_variants`, default 30000) — so use it at
+**chromosome / curated-SNP scale**. Streaming genome-wide inference (millions of
+SNPs, as in bigsnpr's SFBM) is a future extension.
 
 ## Validation
 

@@ -102,6 +102,31 @@ def test_end_to_end_inf_runs(tmp_path):
     assert r2 > 0.10
 
 
+def test_pipeline_infer_reports_h2_p_r2(tmp_path):
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=4)
+    res = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+                          num_iter=120, burn_in=60, seed=1,
+                          infer=True, infer_params={"n_chains": 6,
+                                                    "burn_in": 100,
+                                                    "num_iter": 120})
+    assert res.inference is not None
+    inf = res.inference
+    assert 0 < inf["h2_est"] < 1.5
+    assert 0 < inf["p_est"] <= 1
+    assert inf["r2_ci"][0] <= inf["r2_est"] <= inf["r2_ci"][1]
+
+
+def test_pipeline_infer_size_guard(tmp_path):
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=5)
+    try:
+        run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200,
+                        infer=True, infer_max_variants=100)
+    except ValueError as e:
+        assert "infer_max_variants" in str(e)
+    else:
+        raise AssertionError("expected size-guard ValueError")
+
+
 def test_subset_to_sumstats_matches_full_read(tmp_path):
     # Reading only the GWAS variants must give the same PRS as a full read.
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=7)
