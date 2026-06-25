@@ -45,6 +45,22 @@ machine. (`*` at 2M `-auto` needs `warm_start=True` / more iterations to converg
 its hyper-parameters. bigsnpr's RAM here reflects an in-RAM dense-block matrix;
 its production on-disk banded LD uses less.)
 
+#### Single- vs multi-core (`-auto`)
+
+![pyLDpred2 1 & 4 cores vs bigsnpr](benchmarks/cores_benchmark.png)
+
+The plot (regenerate with `benchmarks/plot_cores.py`; data in
+`benchmarks/cores_benchmark.csv`) compares the 1-core streaming sampler, the
+4-core packed sampler, and bigsnpr at 1 core:
+
+- **Memory:** the 1-core streaming path holds only one block's dense LD at a
+  time and stays ~3–3.5× below bigsnpr at every size (4 GB vs OOM at 2M).
+- **4 cores only wins at 2M** (57 s → 34 s). Below that the packed kernel's
+  setup cost isn't amortised, so it's *slower* than 1 core and uses ~3× the RAM
+  (the whole LD is packed in memory: 11.4 GB at 2M).
+- Use the default `ncores=1` streaming path up to ~1M SNPs; reach for
+  `ncores=4` only at the multi-million-SNP scale.
+
 ### Models implemented
 
 | Function          | Model                                              | Hyper-parameters     |
