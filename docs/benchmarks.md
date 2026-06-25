@@ -50,6 +50,24 @@ The picture is method-dependent — there is no blanket "N× faster":
   beats pyLDpred2's per-block Python-orchestrated one. This is pyLDpred2's weak
   spot at fixed hyper-parameters.
 
+## End-to-end pipeline vs bigsnpr
+
+Beyond the per-block accuracy check above, the **whole pipeline** was validated
+against bigsnpr: the same simulated PLINK target + GWAS sumstats + in-sample LD
+were run through pyLDpred2's complete pipeline (QC → harmonise → per-block LD →
+`-auto` → scoring) and through bigsnpr's `snp_ldpred2_auto`, and the
+per-individual polygenic scores compared.
+
+| metric | result |
+|--------|--------|
+| PRS correlation (pyLDpred2 vs bigsnpr) | **r = 0.9995** |
+| R² vs true genetic value | 0.567 (pyLDpred2) / 0.575 (bigsnpr) |
+
+So the pipeline glue — allele harmonisation, QC, LD construction and scoring —
+reproduces bigsnpr's polygenic scores essentially exactly. (Validation against a
+downloaded public GWAS + 1000 Genomes reference is the natural next step; it adds
+real-data quirks the simulation can't, but needs multi-GB inputs.)
+
 ## Genotype-level simulation
 
 `pyldpred2/simulate.py` is a full end-to-end simulation: it generates genotypes with
