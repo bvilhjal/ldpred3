@@ -97,6 +97,17 @@ Two important caveats:
   accuracy as a fixed 2000-iteration run in ~100 iterations (~10× faster), with
   no loss (corr 1.000 vs the long run).
 
+## Robustness: `allow_jump_sign`
+
+`ldpred2_grid` / `ldpred2_auto` / `ldpred2_auto_infer` accept
+`allow_jump_sign` (default `True`). Setting it `False` forbids a variant's
+effect from flipping sign within a single Gibbs step (a sampled effect of the
+opposite sign to the current one is set to zero instead). On noisy or
+ill-conditioned LD this is a major source of divergence, and the guard — as in
+the LDpred2-auto inference workflow (Privé et al.) — keeps the chain bounded.
+It is exact for well-behaved problems (no flips occur) and only bites when the
+sampler would otherwise oscillate.
+
 ## Performance & Numba
 
 The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an

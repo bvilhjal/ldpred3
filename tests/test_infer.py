@@ -137,6 +137,26 @@ def test_parallel_chains_match_serial(tmp_path):
     assert abs(a.r2_est - b.r2_est) < 1e-9
 
 
+def test_allow_jump_sign_stabilises():
+    # On near-singular LD with a fixed (over-large) h2, the sampler can diverge;
+    # forbidding within-step sign flips keeps the effects bounded.
+    from pyldpred2 import ldpred2_grid
+    rng = np.random.default_rng(0)
+    m = 150
+    # Strong, near-collinear LD block (poorly conditioned).
+    R = 0.95 ** np.abs(np.subtract.outer(np.arange(m), np.arange(m)))
+    beta = np.zeros(m); beta[::25] = 0.4
+    bhat = R @ beta + rng.standard_normal(m) / np.sqrt(2000)
+
+    free = ldpred2_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50, num_iter=150,
+                        seed=1, allow_jump_sign=True)
+    guarded = ldpred2_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50,
+                           num_iter=150, seed=1, allow_jump_sign=False)
+    # The guarded run stays finite and no larger than the unguarded one.
+    assert np.all(np.isfinite(guarded))
+    assert np.abs(guarded).max() <= np.abs(free).max() + 1e-6
+
+
 def test_needs_two_chains():
     rng = np.random.default_rng(0)
     R = _block_R(200, 2, rng)

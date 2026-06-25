@@ -492,7 +492,7 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
 
 def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
                   estimate_hyper, h2_min, h2_max, seed, init_beta, tol,
-                  check_every):
+                  check_every, allow_jump_sign):
     """Numeric core of the point-normal Gibbs sampler (JIT-compiled if numba).
 
     Takes only plain numeric / array arguments so it compiles under
@@ -581,6 +581,14 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             else:
                 new = 0.0
 
+            # Robustness guard (Privé et al.): forbid an effect flipping sign in
+            # one step -- a major source of divergence on noisy / ill-conditioned
+            # LD. The proposal is set to zero instead.
+            if (not allow_jump_sign and old != 0.0 and new != 0.0
+                    and (new > 0.0) != (old > 0.0)):
+                new = 0.0
+                nb_causal -= 1
+
             delta = new - old
             if delta != 0.0:
                 # Rank-1 update of Rb = R @ curr_beta. Fused element loop (no
@@ -640,7 +648,7 @@ _gibbs_kernel_jit = _jit(_gibbs_kernel)
 
 
 def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
-                         h2_min, h2_max, seed, sample_every):
+                         h2_min, h2_max, seed, sample_every, allow_jump_sign):
     """Auto Gibbs kernel that also retains thinned *sampled* effect vectors.
 
     A trimmed copy of :func:`_gibbs_kernel` (dense, ``estimate_hyper`` always on,
@@ -701,6 +709,10 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
                 nb_causal += 1
             else:
                 new = 0.0
+            if (not allow_jump_sign and old != 0.0 and new != 0.0
+                    and (new > 0.0) != (old > 0.0)):
+                new = 0.0
+                nb_causal -= 1
             delta = new - old
             if delta != 0.0:
                 cj = corr[j]
@@ -738,7 +750,7 @@ _gibbs_kernel_sample_jit = _jit(_gibbs_kernel_sample)
 
 def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
                          num_iter, sparse, estimate_hyper, h2_min, h2_max, seed,
-                         init_beta, tol, check_every):
+                         init_beta, tol, check_every, allow_jump_sign):
     """Sparse (CSR) counterpart of :func:`_gibbs_kernel`.
 
     Identical point-normal Gibbs / Rao-Blackwellized sampler (incl. warm start
@@ -800,6 +812,11 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
                 nb_causal += 1
             else:
                 new = 0.0
+
+            if (not allow_jump_sign and old != 0.0 and new != 0.0
+                    and (new > 0.0) != (old > 0.0)):
+                new = 0.0
+                nb_causal -= 1
 
             delta = new - old
             if delta != 0.0:
@@ -1355,7 +1372,8 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
 
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr,
-                   warm_start=False, tol=0.0, check_every=50):
+                   warm_start=False, tol=0.0, check_every=50,
+                   allow_jump_sign=True):
     """Prepare arguments and dispatch to the (optionally JIT-compiled) kernel.
 
     ``corr`` may be a dense ndarray or a :class:`SparseLD`; the matching dense or
@@ -1383,7 +1401,7 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
             corr.indptr, corr.indices, corr.data, beta_hat, n, float(h2),
             float(p), int(burn_in), int(num_iter), bool(sparse),
             bool(estimate_hyper), float(h2_min), float(h2_max), int(seed),
-            init_beta, float(tol), int(check_every),
+            init_beta, float(tol), int(check_every), bool(allow_jump_sign),
         )
 
     # Single-precision, contiguous LD matrix. ``corr`` is symmetric, so row j
@@ -1404,12 +1422,13 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
         corr, beta_hat, n, float(h2), float(p), int(burn_in), int(num_iter),
         bool(sparse), bool(estimate_hyper), float(h2_min), float(h2_max),
         int(seed), init_beta, float(tol), int(check_every),
+        bool(allow_jump_sign),
     )
 
 
 def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
                  sparse=False, shrink_corr=1.0, warm_start=False, tol=0.0,
-                 check_every=50, seed=None):
+                 check_every=50, allow_jump_sign=True, seed=None):
     """LDpred2 grid model: point-normal prior, fixed hyper-parameters.
 
     The prior is spike-and-slab: with probability ``p`` a variant is causal
@@ -1458,6 +1477,7 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
         burn_in=burn_in, num_iter=num_iter, sparse=sparse, seed=seed,
         estimate_hyper=False, h2_bounds=(1e-6, 1.0), shrink_corr=shrink_corr,
         warm_start=warm_start, tol=tol, check_every=check_every,
+        allow_jump_sign=allow_jump_sign,
     )
     return avg_beta
 
@@ -1477,7 +1497,7 @@ class AutoResult:
 def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
                  burn_in=200, num_iter=200, shrink_corr=1.0,
                  h2_bounds=(1e-4, 1.0), warm_start=False, tol=0.0,
-                 check_every=50, seed=None):
+                 check_every=50, allow_jump_sign=True, seed=None):
     """LDpred2-auto: fit the point-normal model and estimate ``h2`` and ``p``.
 
     Unlike :func:`ldpred2_grid`, no validation set is needed: the proportion of
@@ -1523,6 +1543,7 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
         burn_in=burn_in, num_iter=num_iter, sparse=False, seed=seed,
         estimate_hyper=True, h2_bounds=h2_bounds, shrink_corr=shrink_corr,
         warm_start=warm_start, tol=tol, check_every=check_every,
+        allow_jump_sign=allow_jump_sign,
     )
     return AutoResult(
         beta_est=avg_beta,
