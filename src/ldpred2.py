@@ -694,6 +694,211 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
 _gibbs_kernel_sparse_jit = _jit(_gibbs_kernel_sparse)
 
 
+def _gibbs_kernel_batched(block_data, block_offsets, snp_offsets, sizes,
+                          beta_hat, n, h2, p, burn_in, num_iter, sparse,
+                          estimate_hyper, h2_min, h2_max, seed, init_beta, tol,
+                          check_every, n_const):
+    """Process all (dense) LD blocks in a single compiled sweep loop.
+
+    Blocks are packed contiguously (``block_data`` = each block's k*k matrix,
+    row-major; ``block_offsets`` index into it; ``snp_offsets``/``sizes`` give
+    each block's global SNP range). This keeps the fast *dense contiguous* rank-1
+    update (no CSR index indirection) while estimating ``h2``/``p`` GLOBALLY --
+    ``nb_causal`` and ``beta^T R beta`` are pooled across all blocks each sweep --
+    and avoids one Python call per block. Same point-normal / Rao-Blackwellized
+    sampler, warm start and adaptive stopping as the other kernels.
+    """
+    np.random.seed(seed)
+    m = beta_hat.shape[0]
+    nblk = sizes.shape[0]
+
+    curr_beta = init_beta.copy()
+    avg_beta = np.zeros(m)
+    post_means = np.zeros(m)
+    Rb = np.zeros(m)
+    prev_mean = np.zeros(m)
+
+    h2_path = np.empty(num_iter)
+    p_path = np.empty(num_iter)
+    n_iter_total = burn_in + num_iter
+    count = 0
+
+    # When N is constant the per-SNP posterior constants collapse to scalars;
+    # computing them once per sweep avoids m sqrt/log calls and length-m
+    # allocations -- a big saving at genome scale. Vectors are kept for the rare
+    # per-variant-N case.
+    post_var = np.zeros(m)
+    post_sd = np.zeros(m)
+    half_log_term = np.zeros(m)
+    n_post_var = np.zeros(m)
+
+    for it in range(n_iter_total):
+        c1 = h2 / (m * p)
+        log_prior_odds = np.log1p(-p) - np.log(p)
+        if n_const:
+            nc1 = n[0] * c1
+            pv0 = c1 / (nc1 + 1.0)
+            psd0 = np.sqrt(pv0)
+            half0 = 0.5 * np.log1p(nc1)
+            npv0 = n[0] * pv0
+        else:
+            post_var = c1 / (n * c1 + 1.0)
+            post_sd = np.sqrt(post_var)
+            half_log_term = 0.5 * np.log1p(n * c1)
+            n_post_var = n * post_var
+        nb_causal = 0
+
+        # Resync Rb at it == 0 (from warm start) and periodically; within-block.
+        if it % 100 == 0:
+            Rb[:] = 0.0
+            for b in range(nblk):
+                base = snp_offsets[b]
+                k = sizes[b]
+                boff = block_offsets[b]
+                for lj in range(k):
+                    bj = curr_beta[base + lj]
+                    if bj != 0.0:
+                        rowoff = boff + lj * k
+                        for li in range(k):
+                            Rb[base + li] += block_data[rowoff + li] * bj
+
+        unif = np.random.random(m)
+        gauss = np.random.standard_normal(m)
+
+        for b in range(nblk):
+            base = snp_offsets[b]
+            k = sizes[b]
+            boff = block_offsets[b]
+            for lj in range(k):
+                gj = base + lj
+                old = curr_beta[gj]
+                res_beta_j = beta_hat[gj] - Rb[gj] + old
+                if n_const:
+                    pv = pv0
+                    psd = psd0
+                    half = half0
+                    post_mean = npv0 * res_beta_j
+                else:
+                    pv = post_var[gj]
+                    psd = post_sd[gj]
+                    half = half_log_term[gj]
+                    post_mean = n_post_var[gj] * res_beta_j
+                log_odds = (log_prior_odds + half
+                            - 0.5 * post_mean * post_mean / pv)
+                postp = 1.0 / (1.0 + np.exp(log_odds))
+                post_means[gj] = postp * post_mean
+
+                if sparse and postp < 0.5:
+                    new = 0.0
+                elif unif[gj] < postp:
+                    new = post_mean + gauss[gj] * psd
+                    nb_causal += 1
+                else:
+                    new = 0.0
+
+                delta = new - old
+                if delta != 0.0:
+                    rowoff = boff + lj * k       # contiguous float32 block row
+                    for li in range(k):
+                        Rb[base + li] += block_data[rowoff + li] * delta
+                    curr_beta[gj] = new
+
+        if estimate_hyper:
+            # GLOBAL hyper-parameter updates pooled across all blocks.
+            p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
+            h2 = 0.0
+            for i in range(m):
+                h2 += curr_beta[i] * Rb[i]
+            if h2 < h2_min:
+                h2 = h2_min
+            elif h2 > h2_max:
+                h2 = h2_max
+
+        if it >= burn_in:
+            if sparse:
+                avg_beta += curr_beta
+            else:
+                avg_beta += post_means
+            h2_path[count] = h2
+            p_path[count] = p
+            count += 1
+            if tol > 0.0 and count % check_every == 0:
+                num = 0.0
+                den = 0.0
+                for i in range(m):
+                    cm = avg_beta[i] / count
+                    d = cm - prev_mean[i]
+                    num += d * d
+                    den += cm * cm
+                    prev_mean[i] = cm
+                if count > check_every and num <= tol * tol * den:
+                    break
+
+    if count == 0:
+        count = 1
+    avg_beta /= count
+    return avg_beta, h2_path[:count], p_path[:count], count
+
+
+_gibbs_kernel_batched_jit = _jit(_gibbs_kernel_batched)
+
+
+def _pack_blocks(blocks):
+    """Pack dense LD blocks into contiguous arrays for the batched kernel.
+
+    Blocks must tile ``0 .. m-1`` contiguously. Returns
+    ``(block_data, block_offsets, snp_offsets, sizes, m)``.
+    """
+    blocks = sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0]))
+    data_parts = []
+    sizes = []
+    for cb, idx in blocks:
+        k = int(np.asarray(idx).shape[0])
+        cb = np.ascontiguousarray(cb, dtype=np.float32)
+        if cb.shape != (k, k):
+            raise ValueError("each block must be a dense (k, k) matrix")
+        data_parts.append(cb.ravel())
+        sizes.append(k)
+    sizes = np.asarray(sizes, dtype=np.int32)
+    snp_offsets = np.zeros(sizes.shape[0], dtype=np.int32)
+    if sizes.shape[0] > 1:
+        np.cumsum(sizes[:-1], out=snp_offsets[1:])
+    block_offsets = np.zeros(sizes.shape[0], dtype=np.int64)
+    if sizes.shape[0] > 1:
+        np.cumsum(sizes[:-1].astype(np.int64) ** 2, out=block_offsets[1:])
+    block_data = (np.concatenate(data_parts) if data_parts
+                  else np.empty(0, np.float32)).astype(np.float32)
+    return block_data, block_offsets, snp_offsets, sizes, int(sizes.sum())
+
+
+def _gibbs_blocks(blocks, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
+                  seed, estimate_hyper, h2_bounds, warm_start=False, tol=0.0,
+                  check_every=50):
+    """Run the batched single-call sampler over a list of dense LD blocks."""
+    beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
+    n = np.ascontiguousarray(n, dtype=np.float64)
+    block_data, block_offsets, snp_offsets, sizes, m = _pack_blocks(blocks)
+    h2_min, h2_max = h2_bounds
+    if seed is None:
+        seed = np.random.SeedSequence().generate_state(1)[0]
+
+    if warm_start:
+        init_beta = np.zeros(m)
+        for cb, idx in blocks:
+            idx = np.asarray(idx)
+            k = idx.shape[0]
+            init_beta[idx] = ldpred2_inf(cb, beta_hat[idx], n[idx], h2 * k / m)
+    else:
+        init_beta = np.zeros(m)
+
+    n_const = bool(n.size > 0 and n.min() == n.max())
+    return _gibbs_kernel_batched_jit(
+        block_data, block_offsets, snp_offsets, sizes, beta_hat, n,
+        float(h2), float(p), int(burn_in), int(num_iter), bool(sparse),
+        bool(estimate_hyper), float(h2_min), float(h2_max), int(seed),
+        init_beta, float(tol), int(check_every), n_const)
+
+
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr,
                    warm_start=False, tol=0.0, check_every=50):
@@ -922,9 +1127,17 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
     # all variants (matching bigsnpr) rather than noisily per block. Falls back
     # to per-block when global_hyper is off.
     if method == "auto" and global_hyper:
-        ld = block_diagonal_ld([(cb, np.asarray(idx)) for cb, idx in blocks])
         kwargs.pop("h2", None)                       # auto estimates h2 itself
-        return ldpred2_auto(ld, beta_hat, n, **kwargs).beta_est
+        avg_beta, _, _, _ = _gibbs_blocks(
+            [(cb, np.asarray(idx)) for cb, idx in blocks], beta_hat, n,
+            kwargs.pop("h2_init", 0.1), kwargs.pop("p_init", 0.1),
+            burn_in=kwargs.pop("burn_in", 200),
+            num_iter=kwargs.pop("num_iter", 200), sparse=False,
+            seed=kwargs.pop("seed", None), estimate_hyper=True,
+            h2_bounds=kwargs.pop("h2_bounds", (1e-4, 1.0)),
+            warm_start=kwargs.pop("warm_start", False),
+            tol=kwargs.pop("tol", 0.0), check_every=kwargs.pop("check_every", 50))
+        return avg_beta
 
     # Total h2 (if given) is split across blocks proportionally to block size.
     total_h2 = kwargs.pop("h2", None)
