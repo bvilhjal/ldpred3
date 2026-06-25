@@ -225,12 +225,15 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
     train_rows = slice(0, n_train)
     test_rows = slice(n_train, n_total)
 
-    # True sparse effects on the standardized-genotype scale.
+    # True sparse effects on the standardized-genotype scale. Guarantee at least
+    # one causal variant so very low polygenicity (p) still yields signal (which
+    # also requires m >= ~1/p for the realised fraction to match p).
     is_causal = rng.random(m) < p
-    m_causal = max(int(is_causal.sum()), 1)
+    if not is_causal.any():
+        is_causal[rng.integers(m)] = True
+    m_causal = int(is_causal.sum())
     true_beta = np.zeros(m)
-    true_beta[is_causal] = rng.normal(0.0, np.sqrt(h2 / m_causal),
-                                      size=int(is_causal.sum()))
+    true_beta[is_causal] = rng.normal(0.0, np.sqrt(h2 / m_causal), size=m_causal)
 
     # Pass 1: training mean/sd per SNP + genetic values (train & test).
     mean = np.empty(m)
@@ -326,16 +329,19 @@ def _warmup():
 # Modes
 # --------------------------------------------------------------------------- #
 def run_grid(args):
+    # Realistic complex-trait architectures: heritability 0.3-0.5 and
+    # polygenicity (fraction of causal variants) 1e-4 to 0.1. m is chosen large
+    # enough (>= ~1/p) that the lowest polygenicity has causal variants.
     if args.quick:
-        polygenicities = [0.01, 0.5]
+        polygenicities = [0.001, 0.1]
         heritabilities = [0.5]
-        sample_sizes = [3000]
-        m, block_size = 500, 100
+        sample_sizes = [5000]
+        m, block_size = 5000, 200
     else:
-        polygenicities = [0.005, 0.05, 0.5]
-        heritabilities = [0.2, 0.5]
-        sample_sizes = [2000, 5000, 10000]
-        m, block_size = 1000, 100
+        polygenicities = [0.0001, 0.001, 0.01, 0.1]
+        heritabilities = [0.3, 0.5]
+        sample_sizes = [5000, 20000]
+        m, block_size = 10000, 200
 
     methods = ["marginal", "inf", "grid", "auto", "ceiling(h2)"]
     header = f"{'N':>7} {'h2':>5} {'p':>7} | " + " ".join(f"{x:>11}" for x in methods)

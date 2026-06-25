@@ -71,6 +71,22 @@ except ImportError:  # pragma: no cover - exercised only without numba
         pass
 
 
+def _stable_postp(log_odds):
+    """P(causal) = 1 / (1 + exp(log_odds)), computed without overflow.
+
+    ``log_odds`` is the log-odds of null vs causal; for large positive values a
+    naive ``exp(log_odds)`` overflows. This branch keeps the argument of ``exp``
+    non-positive.
+    """
+    if log_odds >= 0.0:
+        e = np.exp(-log_odds)
+        return e / (1.0 + e)
+    return 1.0 / (1.0 + np.exp(log_odds))
+
+
+_stable_postp = _jit(_stable_postp)
+
+
 __all__ = [
     "standardize_betas",
     "ldpred2_inf",
@@ -117,18 +133,35 @@ def standardize_betas(beta, beta_se, n_eff):
     beta = np.asarray(beta, dtype=float)
     beta_se = np.asarray(beta_se, dtype=float)
     n_eff = np.asarray(n_eff, dtype=float)
+    if np.any(beta_se < 0):
+        raise ValueError("beta_se must be non-negative")
+    if np.any(n_eff <= 0):
+        raise ValueError("n_eff must be positive")
     scale = np.sqrt(n_eff * beta_se ** 2 + beta ** 2)
-    return beta / scale, scale
+    # Guard the degenerate beta == 0 and beta_se == 0 case (scale == 0) -> 0.
+    beta_std = np.divide(beta, scale, out=np.zeros_like(beta, dtype=float),
+                         where=scale > 0)
+    return beta_std, scale
 
 
 def _as_n_vector(n_eff, m):
-    """Coerce ``n_eff`` into a length-``m`` float vector."""
+    """Coerce ``n_eff`` into a length-``m`` positive float vector."""
     n_eff = np.asarray(n_eff, dtype=float)
     if n_eff.ndim == 0:
-        return np.full(m, float(n_eff))
-    if n_eff.shape != (m,):
+        n_eff = np.full(m, float(n_eff))
+    elif n_eff.shape != (m,):
         raise ValueError(f"n_eff must be a scalar or length-{m} vector")
+    if np.any(n_eff <= 0):
+        raise ValueError("n_eff must be positive")
     return n_eff
+
+
+def _check_h2_p(h2=None, p=None):
+    """Validate heritability and causal-fraction hyper-parameters."""
+    if h2 is not None and not h2 > 0:
+        raise ValueError("h2 must be > 0")
+    if p is not None and not 0.0 < p <= 1.0:
+        raise ValueError("p must be in (0, 1]")
 
 
 @dataclass
@@ -393,6 +426,7 @@ def ldpred2_inf(corr, beta_hat, n_eff, h2):
     ndarray, shape (m,)
         Adjusted (posterior-mean) standardized effects.
     """
+    _check_h2_p(h2=h2)
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
@@ -431,8 +465,11 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
     r = b.copy()                       # residual = b - A@0
     pvec = r.copy()
     rs = float(r @ r)
+    if rs == 0.0:                      # b is all zeros -> x = 0
+        return x
     Ap = np.empty(m)
     tol2 = tol * tol * float(b @ b)
+    converged = False
     for _ in range(max_iter):
         _sparse_matvec_jit(indptr, indices, data, pvec, Ap)
         Ap += ridge * pvec
@@ -441,9 +478,15 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
         r -= alpha * Ap
         rs_new = float(r @ r)
         if rs_new <= tol2:
+            converged = True
             break
         pvec = r + (rs_new / rs) * pvec
         rs = rs_new
+    if not converged:
+        import warnings
+        warnings.warn(f"ldpred2_inf conjugate gradient did not converge in "
+                      f"{max_iter} iterations (residual {rs_new ** 0.5:.2e})",
+                      RuntimeWarning)
     return x
 
 
@@ -522,7 +565,7 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             # Posterior inclusion probability via the log-odds of null vs causal.
             log_odds = (log_prior_odds + half_log_term[j]
                         - 0.5 * post_mean * post_mean / pv)
-            postp = 1.0 / (1.0 + np.exp(log_odds))
+            postp = _stable_postp(log_odds)
 
             # Rao-Blackwellized estimate: accumulate the conditional posterior
             # mean E[beta_j | rest] = postp * post_mean rather than the sampled
@@ -650,7 +693,7 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
             post_mean = n_post_var[j] * res_beta_j
             log_odds = (log_prior_odds + half_log_term[j]
                         - 0.5 * post_mean * post_mean / pv)
-            postp = 1.0 / (1.0 + np.exp(log_odds))
+            postp = _stable_postp(log_odds)
             post_means[j] = postp * post_mean
 
             if sparse and postp < 0.5:
@@ -799,7 +842,7 @@ def _gibbs_kernel_batched(block_data, block_offsets, snp_offsets, sizes,
                     post_mean = n_post_var[gj] * res_beta_j
                 log_odds = (log_prior_odds + half
                             - 0.5 * post_mean * post_mean / pv)
-                postp = 1.0 / (1.0 + np.exp(log_odds))
+                postp = _stable_postp(log_odds)
                 post_means[gj] = postp * post_mean
 
                 if sparse and postp < 0.5:
@@ -937,7 +980,7 @@ def _gibbs_kernel_batched_par(block_data, block_offsets, snp_offsets, sizes,
                     post_mean = n_post_var[gj] * res_beta_j
                 log_odds = (log_prior_odds + half
                             - 0.5 * post_mean * post_mean / pv)
-                postp = 1.0 / (1.0 + np.exp(log_odds))
+                postp = _stable_postp(log_odds)
                 post_means[gj] = postp * post_mean
 
                 if sparse and postp < 0.5:
@@ -1101,7 +1144,7 @@ def _gibbs_one_sweep(corr, beta_hat, n, curr_beta, Rb, post_means, unif, gauss,
             half = 0.5 * np.log1p(nc1)
             post_mean = nj * pv * res_beta_j
         log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
-        postp = 1.0 / (1.0 + np.exp(log_odds))
+        postp = _stable_postp(log_odds)
         post_means[lj] = postp * post_mean
 
         if sparse and postp < 0.5:
@@ -1307,13 +1350,12 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
     ndarray, shape (m,)
         Posterior-mean standardized effects.
     """
+    _check_h2_p(h2=h2, p=p)
     if not isinstance(corr, SparseLD):
         corr = np.asarray(corr, dtype=float)
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
-    if not 0.0 < p <= 1.0:
-        raise ValueError("p must be in (0, 1]")
     avg_beta, _, _, _ = _gibbs_sampler(
         corr, beta_hat, n, h2, p,
         burn_in=burn_in, num_iter=num_iter, sparse=sparse, seed=seed,
@@ -1370,6 +1412,10 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
         With fields ``beta_est``, ``h2_est``, ``p_est`` and the full sampling
         paths ``h2_path`` / ``p_path``.
     """
+    _check_h2_p(h2=h2_init, p=p_init)
+    lo, hi = h2_bounds
+    if not (0 < lo <= hi):
+        raise ValueError("h2_bounds must satisfy 0 < lower <= upper")
     if not isinstance(corr, SparseLD):
         corr = np.asarray(corr, dtype=float)
     beta_hat = np.asarray(beta_hat, dtype=float)
@@ -1441,8 +1487,21 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
     # all variants (matching bigsnpr) rather than noisily per block. Falls back
     # to per-block when global_hyper is off.
     if method == "auto" and global_hyper:
+        if sparsify:
+            raise NotImplementedError(
+                "sparsify=True is not supported with global_hyper=True; "
+                "use global_hyper=False or pass already-sparse blocks")
         kwargs.pop("h2", None)                       # auto estimates h2 itself
         blk = [(cb, np.asarray(idx)) for cb, idx in blocks]
+        # The streaming/packed global path assumes blocks tile 0..m-1 contiguously.
+        expected = 0
+        for _, idx in sorted(blk, key=lambda bi: int(bi[1][0]) if bi[1].size else 0):
+            if not np.array_equal(idx, np.arange(expected, expected + idx.shape[0])):
+                raise ValueError("global_hyper=True requires contiguous blocks "
+                                 "tiling 0..m-1; use global_hyper=False otherwise")
+            expected += idx.shape[0]
+        if expected != m:
+            raise ValueError("blocks do not tile beta_hat (global_hyper=True)")
         common = dict(
             burn_in=kwargs.pop("burn_in", 200),
             num_iter=kwargs.pop("num_iter", 200), sparse=False,

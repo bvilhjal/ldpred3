@@ -15,6 +15,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import pytest  # noqa: E402
+
 import ldpred2  # noqa: E402
 from ldpred2 import (  # noqa: E402
     block_diagonal_ld,
@@ -259,6 +261,73 @@ def test_optimal_ld_blocks():
     # optimal never discards more LD than fixed blocks of the same max size
     fixed = [(i, min(i + 120, m)) for i in range(0, m, 120)]
     assert cost <= _discarded_ld2(R, fixed, 50) + 1e-9
+
+
+# --------------------------------------------------------------------------- #
+# Input validation / robustness
+# --------------------------------------------------------------------------- #
+def test_standardize_betas_validation_and_zero_guard():
+    # n_eff must be positive; beta_se non-negative
+    with pytest.raises(ValueError):
+        standardize_betas(np.array([0.1]), np.array([0.01]), np.array([0.0]))
+    with pytest.raises(ValueError):
+        standardize_betas(np.array([0.1]), np.array([-0.01]), np.array([1000.0]))
+    # beta == 0 and beta_se == 0 -> 0, not NaN
+    bstd, scale = standardize_betas(np.array([0.0, 0.1]),
+                                    np.array([0.0, 0.02]),
+                                    np.array([1000.0, 1000.0]))
+    assert np.all(np.isfinite(bstd)) and bstd[0] == 0.0
+
+
+def test_hyperparameter_validation():
+    corr, beta_hat, _, n = simulate(m=50, seed=1)
+    nv = np.full(50, float(n))
+    with pytest.raises(ValueError):
+        ldpred2_inf(corr, beta_hat, nv, h2=0.0)
+    with pytest.raises(ValueError):
+        ldpred2_grid(corr, beta_hat, nv, h2=-1.0, p=0.05)
+    with pytest.raises(ValueError):
+        ldpred2_grid(corr, beta_hat, nv, h2=0.5, p=1.5)
+    with pytest.raises(ValueError):
+        ldpred2_auto(corr, beta_hat, nv, p_init=0.0)
+    with pytest.raises(ValueError):
+        ldpred2_auto(corr, beta_hat, nv, h2_init=-0.1)
+    with pytest.raises(ValueError):
+        ldpred2_auto(corr, beta_hat, nv, h2_bounds=(0.5, 0.1))
+    with pytest.raises(ValueError):       # non-positive n_eff
+        ldpred2_inf(corr, beta_hat, np.zeros(50), h2=0.5)
+
+
+def test_global_auto_rejects_bad_blocks():
+    blocks, bhat, _, n = _make_blocks(nb=3, seed=1)
+    # non-contiguous: drop the middle block -> indices no longer tile 0..m-1
+    bad = [blocks[0], blocks[2]]
+    with pytest.raises(ValueError):
+        ldpred2_by_blocks(bad, bhat, n, method="auto", global_hyper=True,
+                          burn_in=5, num_iter=5)
+    # sparsify with global auto is not supported
+    with pytest.raises(NotImplementedError):
+        ldpred2_by_blocks(blocks, bhat, n, method="auto", global_hyper=True,
+                          sparsify=True, burn_in=5, num_iter=5)
+
+
+def test_inf_zero_beta_is_finite():
+    corr, _, _, n = simulate(m=80, seed=2)
+    nv = np.full(80, float(n))
+    zero = np.zeros(80)
+    dense = ldpred2_inf(corr, zero, nv, h2=0.5)
+    sparse = ldpred2_inf(sparsify_ld(corr, threshold=0.0), zero, nv, h2=0.5)
+    assert np.allclose(dense, 0.0) and np.allclose(sparse, 0.0)
+
+
+def test_extreme_params_no_overflow():
+    # huge effects + tiny p drive log_odds large; the stable sigmoid must not
+    # produce NaN/inf in the posterior-mean estimate.
+    corr, beta_hat, _, n = simulate(m=60, seed=3)
+    nv = np.full(60, 1e7)
+    out = ldpred2_grid(corr, beta_hat * 50, nv, h2=0.9, p=1e-6,
+                       burn_in=10, num_iter=20, seed=1)
+    assert np.all(np.isfinite(out))
 
 
 if __name__ == "__main__":
