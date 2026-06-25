@@ -58,6 +58,20 @@ def test_bgen_embedded_sample_ids(tmp_path):
     np.testing.assert_array_equal(g.samples.iid, samples.iid)
 
 
+def test_bgen_variant_subset(tmp_path):
+    rng = np.random.default_rng(9)
+    n_samples, n_variants = 14, 10
+    dosage = rng.integers(0, 3, size=(n_samples, n_variants)).astype(np.int8)
+    variants, samples = _tables(n_samples, n_variants)
+    path = str(tmp_path / "g.bgen")
+    write_bgen(path, dosage, variants, samples)
+
+    full = read_bgen(path)
+    sub = read_bgen(path, variant_ids=["rs1", "rs7", "rs8"])
+    np.testing.assert_array_equal(sub.variants.id, ["rs1", "rs7", "rs8"])
+    np.testing.assert_allclose(sub.dosage, full.dosage[:, [1, 7, 8]], atol=1e-4)
+
+
 def test_bgen_matches_plink_dosage(tmp_path):
     """Same genotypes via PLINK and BGEN must give identical dosages."""
     rng = np.random.default_rng(3)

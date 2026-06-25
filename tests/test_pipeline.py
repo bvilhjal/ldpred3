@@ -102,6 +102,16 @@ def test_end_to_end_inf_runs(tmp_path):
     assert r2 > 0.10
 
 
+def test_subset_to_sumstats_matches_full_read(tmp_path):
+    # Reading only the GWAS variants must give the same PRS as a full read.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=7)
+    full = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,
+                           subset_to_sumstats=False)
+    sub = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,
+                          subset_to_sumstats=True)
+    np.testing.assert_allclose(full.scores, sub.scores, rtol=1e-6, atol=1e-6)
+
+
 def test_allele_flip_is_corrected(tmp_path):
     """Swapping A1/A2 in the sumstats must not change the PRS (sign realigned)."""
     prefix, ss_path, g_te = _simulate(tmp_path, m=300, seed=3)

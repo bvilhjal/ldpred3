@@ -49,11 +49,16 @@ from .ldpred2 import standardize_betas, ldpred2_by_blocks
 __all__ = ["PRSResult", "run_ldpred2_prs", "load_genotypes"]
 
 
-def load_genotypes(path, *, sample_path=None):
-    """Read genotypes from a PLINK prefix or a ``.bgen`` file (auto-detected)."""
+def load_genotypes(path, *, sample_path=None, variant_ids=None):
+    """Read genotypes from a PLINK prefix or a ``.bgen`` file (auto-detected).
+
+    ``variant_ids`` restricts the read to those variants (by rsID) — via seek
+    for PLINK, via a filtered scan for BGEN — so only the requested SNPs are
+    loaded from a biobank-scale fileset.
+    """
     if str(path).endswith(".bgen"):
-        return read_bgen(path, sample_path=sample_path)
-    return read_plink(path)
+        return read_bgen(path, sample_path=sample_path, variant_ids=variant_ids)
+    return read_plink(path, variant_ids=variant_ids)
 
 
 @dataclass
@@ -71,7 +76,7 @@ class PRSResult:
 
 def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     n_eff=None, ld_prefix=None, ld_ridge=0.0,
-                    sample_path=None, ld_sample_path=None,
+                    sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
                     qc=True, qc_params=None, sd_check=True,
                     sumstats_cols=None, **ldpred2_kwargs):
     """Run the full sumstats -> LDpred2 -> PRS pipeline.
@@ -109,7 +114,6 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     -------
     PRSResult
     """
-    geno = load_genotypes(plink, sample_path=sample_path)
     ss = read_sumstats(sumstats, n_eff=n_eff, **(sumstats_cols or {}))
 
     qc_log = {}
@@ -118,6 +122,13 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
         ss = ss.subset(keep)
         if len(ss) == 0:
             raise ValueError("all GWAS variants were removed by sumstats QC")
+
+    # Read only the (QC'd) GWAS variants from the genotypes when possible.
+    vids = set(ss.id) if subset_to_sumstats else None
+    geno = load_genotypes(plink, sample_path=sample_path, variant_ids=vids)
+    if subset_to_sumstats and geno.n_variants == 0:
+        # IDs didn't line up (e.g. chr:pos-style genotype IDs) — read in full.
+        geno = load_genotypes(plink, sample_path=sample_path)
 
     h = harmonize(ss, geno.variants)
     if len(h) == 0:
@@ -129,7 +140,10 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
 
     # LD reference: external panel (matched to the same variants) or in-sample.
     if ld_prefix is not None:
-        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
+        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path,
+                             variant_ids=vids)
+        if subset_to_sumstats and ref.n_variants == 0:
+            ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
         href = harmonize(ss, ref.variants)
         # Restrict to variants present in both target-matched and ref-matched.
         common = np.intersect1d(geno.variants.id[h.var_index],
