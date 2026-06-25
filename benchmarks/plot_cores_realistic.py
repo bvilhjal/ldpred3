@@ -31,10 +31,6 @@ for col, ax, ttl, ylab in [(0, ax_t, "Running time (auto model)", "Wall-clock ti
     ax.set_title(ttl); ax.set_xlabel("Number of SNPs (millions)")
     ax.set_ylabel(ylab); ax.grid(alpha=0.3); ax.legend(frameon=False, fontsize=9)
 
-# bigsnpr OOMs at 1M with realistic (denser) LD
-ax_t.annotate("bigsnpr OOM\n≥1M", (1.0, 7), color="#2ca02c", fontsize=8.5, ha="center")
-ax_m.annotate("bigsnpr OOM\n≥1M", (1.0, 9), color="#2ca02c", fontsize=8.5, ha="center")
-
 fig.suptitle("Realistic LD (coalescent/msprime) — pyLDpred2 vs bigsnpr, N=100k, h²=0.5",
              fontsize=11)
 fig.tight_layout(rect=(0, 0, 1, 0.96))
