@@ -1,12 +1,45 @@
 # iprs
 iPSYCH PRS
 
-## LDpred2 (Python)
+## pyLDpred2
 
-`src/ldpred2.py` is a small, dependency-light (NumPy only) Python implementation
-of the core [LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029)
-polygenic-score models. LDpred2 re-weights GWAS marginal effect sizes using an
-LD (linkage-disequilibrium) correlation matrix.
+**pyLDpred2** (`src/ldpred2.py`) is a small, dependency-light (NumPy only, optional
+Numba) Python implementation of the core
+[LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029) polygenic-score
+models. It re-weights GWAS marginal effect sizes using an LD
+(linkage-disequilibrium) correlation matrix.
+
+### Summary
+
+pyLDpred2 reproduces LDpred2-inf/-grid/-auto in pure Python and matches the
+reference R implementation (`bigsnpr`) on prediction accuracy, while being much
+more memory-efficient. It adds Numba JIT acceleration, a running-residual /
+float32 / fused Gibbs sampler, Rao-Blackwellized estimates, warm-start and
+adaptive stopping, a sparse/banded LD backend with an iterative `inf` solver,
+optimal LD-block splitting (Privé 2022), and global hyper-parameters for `-auto`
+via a **streaming** sampler that never materialises a genome-wide LD matrix.
+Across 200k–2M SNPs (single core) it matches bigsnpr's accuracy at **~3.5× less
+memory**, scales linearly to **2M SNPs in ~4 GB where bigsnpr runs out of RAM**,
+and is competitive on runtime (`-auto` faster-to-parity; `-grid` ~2× slower,
+pending a streaming rewrite). The remaining speed lever is multicore (`prange`).
+
+### Benchmark vs bigsnpr (200k–2M SNPs, single core, distinct LD blocks)
+
+Runtime and peak memory; prediction R² is identical between the two
+(0.991 / 0.964 / 0.929 at 200k / 500k / 1M).
+
+| #SNPs | pyLDpred2 grid | pyLDpred2 auto | **pyLDpred2 RAM** | bigsnpr grid | bigsnpr auto | bigsnpr RAM |
+|-------|---------------|----------------|-------------------|--------------|--------------|-------------|
+| 200k  | 2.6 s  | 1.2 s  | **0.53 GB** | 1.3 s | 1.9 s | 1.79 GB |
+| 500k  | 6.3 s  | 3.6 s  | **1.11 GB** | 3.1 s | 4.8 s | 4.02 GB |
+| 1M    | 12.2 s | 9.2 s  | **2.06 GB** | 6.0 s | 9.4 s | 7.84 GB |
+| 2M    | 24.7 s | 43.1 s* | **3.98 GB** | OOM  | OOM  | >15 GB |
+
+Memory scales linearly (~2 GB per 1M SNPs) and is 3.4–3.8× below bigsnpr; at 2M
+pyLDpred2 finishes in ~4 GB while bigsnpr's dense matrix build exceeds the 15 GB
+machine. (`*` at 2M `-auto` needs `warm_start=True` / more iterations to converge
+its hyper-parameters. bigsnpr's RAM here reflects an in-RAM dense-block matrix;
+its production on-disk banded LD uses less.)
 
 ### Models implemented
 
