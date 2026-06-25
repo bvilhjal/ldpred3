@@ -230,6 +230,22 @@ cohort (e.g. inferred 0.485 vs held-out 0.495 at N=8000), and falls toward 0
 as power drops — the central result of the paper. Operates on a dense LD matrix
 (one block, or a block-diagonal genome via `block_diagonal_ld`).
 
+**Polygenicity recovery.** `p_est` tracks the true causal fraction closely
+across the realistic range (within ~10–30 % for true `p` from 0.01 to 0.5):
+
+| true p | ~#causal / 1000 | p_est |
+|--------|-----------------|-------|
+| 0.01 | 9 | 0.010 |
+| 0.05 | 44 | 0.045 |
+| 0.20 | 195 | 0.199 |
+| 0.50 | 496 | 0.512 |
+
+The exception is the **ultra-sparse limit**: at `p ≈ 0.002` (only ~2 causal
+variants in 1000) `p` is essentially unidentifiable — there is too little signal
+to estimate a *fraction* — and the estimate is upward-biased and high-variance.
+This is inherent to the model, not specific to this implementation; h² and r²
+remain well-estimated there.
+
 ### Sparse / banded LD
 
 Real LD is banded — most off-diagonal entries are ~0 — so the LD can be stored

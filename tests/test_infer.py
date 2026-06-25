@@ -91,15 +91,34 @@ def test_infer_recovers_h2_and_p():
     beta = np.zeros(m)
     beta[causal] = rng.normal(0, np.sqrt(h2 / causal.sum()), causal.sum())
     true_h2 = float(beta @ (R @ beta))
+    true_p = causal.mean()
     L = np.linalg.cholesky(R + 1e-4 * np.eye(m))
     beta_hat = R @ beta + (L @ rng.standard_normal(m)) / np.sqrt(N)
 
     res = ldpred2_auto_infer(R, beta_hat, N, n_chains=8, burn_in=150,
                              num_iter=200, seed=4)
     assert abs(res.h2_est - true_h2) < 0.12
-    assert 0 < res.p_est < 0.5
+    # Polygenicity is recovered to within ~50% and its 95% CI covers the truth.
+    assert abs(res.p_est - true_p) < 0.5 * true_p + 0.01
+    assert res.p_ci[0] <= true_p <= res.p_ci[1]
     for est, ci in ((res.h2_est, res.h2_ci), (res.p_est, res.p_ci)):
         assert ci[0] <= est <= ci[1]
+
+
+def test_polygenicity_tracks_truth_across_scales():
+    # p_est tracks the true causal fraction across a 4x range (p >= 0.01).
+    for true_p in (0.05, 0.2):
+        rng = np.random.default_rng(11)
+        m, nblk, h2, N = 1000, 8, 0.5, 50000
+        R = _block_R(m, nblk, rng)
+        causal = rng.random(m) < true_p
+        beta = np.zeros(m)
+        beta[causal] = rng.normal(0, np.sqrt(h2 / causal.sum()), causal.sum())
+        L = np.linalg.cholesky(R + 1e-4 * np.eye(m))
+        beta_hat = R @ beta + (L @ rng.standard_normal(m)) / np.sqrt(N)
+        res = ldpred2_auto_infer(R, beta_hat, N, n_chains=10, burn_in=200,
+                                 num_iter=250, seed=7)
+        assert 0.6 * true_p < res.p_est < 1.6 * true_p, (true_p, res.p_est)
 
 
 def test_needs_two_chains():
