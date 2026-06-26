@@ -264,3 +264,47 @@ dilute the fixed GWAS power — `grid` degrades gracefully while raw
 Practical takeaway: for dense data with long-range / large LD blocks, the dense
 per-block LD storage and the infinitesimal solve become the bottleneck, which
 motivates the banded / sparse-LD backend (see [algorithm.md](algorithm.md)).
+
+## Robustness: LD reference quality & sample size
+
+How sensitive is the PRS to two things you don't control perfectly in practice —
+the LD reference panel and the GWAS sample size? Both fit LDpred2-`auto` on
+summary statistics generated from the true coalescent LD (m=6000, h²=0.5,
+p=0.01, N=50000) and report the held-out **genetic R²** and the fitted genetic
+variance (an h² proxy). Regenerate with `benchmarks/robustness_ld_and_n.py`.
+
+**LD reference panel size** (`Nref`), the dominant real-world error — the LD is
+estimated from `Nref` reference individuals rather than known exactly:
+
+| Nref | pred R² | h² proxy |
+|------|--------:|---------:|
+| 500   | 0.825 | 0.910 |
+| 1000  | 0.912 | 0.672 |
+| 2000  | 0.965 | 0.560 |
+| 5000  | 0.984 | 0.521 |
+| 10000 | 0.989 | 0.514 |
+| ∞ (true LD) | 0.992 | 0.493 |
+
+A **small panel is actively harmful**: at Nref=500 the noisy LD makes the sampler
+over-fit, inflating h² to 0.91 (true 0.5) and dropping R² to 0.83. Accuracy is
+near-clean only by **Nref≈5000**; a 1000-Genomes-scale panel (~2000) already
+costs ~3% R² and a ~12% h² over-estimate. This is the systematic bias behind the
+0% interval coverage in [inference.md](inference.md#interval-calibration) — use
+the largest matched-ancestry panel you can.
+
+**Sample-size misspecification** — fitting with the wrong `N` (Nref=2000):
+
+| N_used / N_true | pred R² | h² proxy |
+|-----------------|--------:|---------:|
+| 0.70 | 0.979 | 0.533 |
+| 0.85 | 0.972 | 0.547 |
+| 1.00 | 0.965 | 0.560 |
+| 1.15 | 0.958 | 0.574 |
+| 1.30 | 0.951 | 0.586 |
+
+LDpred2-`auto` is **fairly robust to N**: ±30% changes R² by only ~±1.5% and
+moves the h² proxy roughly in proportion to `N_used`. There is even a mild twist
+— slightly *under*-stating `N` (0.70–0.85) predicts a touch **better** here,
+because the extra shrinkage offsets the over-fit that noisy reference LD induces.
+A correct (or mildly conservative) `N` is fine; a wildly wrong one mostly
+mis-scales the heritability.
