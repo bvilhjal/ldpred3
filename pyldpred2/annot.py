@@ -35,14 +35,15 @@ __all__ = ["AnnotResult", "ldpred2_auto_annot"]
 # --------------------------------------------------------------------------- #
 # Jitted effect-update kernel for a chunk of sweeps at a fixed per-SNP p_j.
 # --------------------------------------------------------------------------- #
-def _annot_chunk(corr, beta_hat, n, p_j, h2, h2_min, h2_max, n_sweeps, seed,
+def _annot_chunk(corr, beta_hat, n, p_j, slab_j, h2_min, h2_max, n_sweeps, seed,
                  init_beta):
-    """Run ``n_sweeps`` point-normal sweeps with a fixed per-SNP causal prob.
+    """Run ``n_sweeps`` point-normal sweeps at fixed per-SNP causal prob ``p_j``
+    and per-SNP slab variance ``slab_j``.
 
-    Returns ``(curr_beta, h2, pip_sum, rb_sum)`` where ``pip_sum`` /
-    ``rb_sum`` accumulate the per-SNP posterior inclusion probability and the
-    Rao-Blackwellised effect over the chunk. ``Rb`` is resynced from
-    ``init_beta`` at the start (chunks are short and infrequent).
+    Returns ``(curr_beta, h2, pip_sum, rb_sum, m2_sum)``: the per-SNP posterior
+    inclusion probability, the Rao-Blackwellised effect, and the posterior
+    second moment ``postp*(mean^2 + var)`` (used to learn the variance map),
+    summed over the chunk. ``Rb`` is resynced from ``init_beta`` at the start.
     """
     np.random.seed(seed)
     m = beta_hat.shape[0]
@@ -55,23 +56,19 @@ def _annot_chunk(corr, beta_hat, n, p_j, h2, h2_min, h2_max, n_sweeps, seed,
             for i in range(m):
                 Rb[i] += ck[i] * bk
 
-    pbar = 0.0
-    for j in range(m):
-        pbar += p_j[j]
-    pbar /= m
-    c1 = h2 / (pbar * m)
-    post_var = c1 / (n * c1 + 1.0)
+    post_var = slab_j / (n * slab_j + 1.0)
     post_sd = np.sqrt(post_var)
-    half_log = 0.5 * np.log1p(n * c1)
+    half_log = 0.5 * np.log1p(n * slab_j)
     n_post_var = n * post_var
     lpo = np.log1p(-p_j) - np.log(p_j)
 
     pip_sum = np.zeros(m)
     rb_sum = np.zeros(m)
+    m2_sum = np.zeros(m)
+    h2 = 0.0
     for it in range(n_sweeps):
         unif = np.random.random(m)
         gauss = np.random.standard_normal(m)
-        nb_causal = 0
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
@@ -81,9 +78,9 @@ def _annot_chunk(corr, beta_hat, n, p_j, h2, h2_min, h2_max, n_sweeps, seed,
             postp = _stable_postp(log_odds)
             pip_sum[j] += postp
             rb_sum[j] += postp * post_mean
+            m2_sum[j] += postp * (post_mean * post_mean + pv)
             if unif[j] < postp:
                 new = post_mean + gauss[j] * post_sd[j]
-                nb_causal += 1
             else:
                 new = 0.0
             delta = new - old
@@ -99,7 +96,7 @@ def _annot_chunk(corr, beta_hat, n, p_j, h2, h2_min, h2_max, n_sweeps, seed,
             h2 = h2_min
         elif h2 > h2_max:
             h2 = h2_max
-    return curr_beta, h2, pip_sum, rb_sum
+    return curr_beta, h2, pip_sum, rb_sum, m2_sum
 
 
 _annot_chunk_jit = _jit(_annot_chunk)
@@ -166,14 +163,23 @@ class AnnotResult:
 
     beta_est: np.ndarray            # posterior-mean effects
     h2_est: float                   # SNP heritability
-    theta: np.ndarray               # learned annotation coefficients (incl intercept)
+    theta: np.ndarray               # inclusion-map coefficients (incl intercept)
+    phi: np.ndarray = None          # variance-map coefficients (if learn_variance)
     annotation_names: list = None   # column labels (incl "intercept")
 
     @property
     def enrichment(self):
-        """``{name: coefficient}`` for the non-intercept annotations."""
+        """``{name: coefficient}`` for the non-intercept inclusion coefficients."""
         names = self.annotation_names or [f"annot_{i}" for i in range(len(self.theta))]
         return {nm: float(t) for nm, t in zip(names[1:], self.theta[1:])}
+
+    @property
+    def variance_enrichment(self):
+        """``{name: coefficient}`` for the effect-variance map (or None)."""
+        if self.phi is None:
+            return None
+        names = self.annotation_names or [f"annot_{i}" for i in range(len(self.phi))]
+        return {nm: float(t) for nm, t in zip(names[1:], self.phi[1:])}
 
     def __repr__(self):
         items = sorted(self.enrichment.items(), key=lambda kv: -abs(kv[1]))
@@ -195,9 +201,9 @@ def _add_intercept(A):
 
 
 def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
-                       h2_init=0.1, p_init=0.1, burn_in=200, num_iter=200,
-                       theta_every=10, ridge=5.0, h2_bounds=(1e-4, 1.0),
-                       annotation_names=None, seed=None):
+                       learn_variance=False, h2_init=0.1, p_init=0.1,
+                       burn_in=200, num_iter=200, theta_every=10, ridge=5.0,
+                       h2_bounds=(1e-4, 1.0), annotation_names=None, seed=None):
     """LDpred2-auto that learns a per-SNP prior from functional annotations.
 
     Each SNP's causal probability is ``p_j = sigmoid(a_j . theta)`` and ``theta``
@@ -218,6 +224,13 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
     learn : {"eb", "probit"}, default "eb"
         ``"eb"`` ridge-logistic (Newton/IRLS) update on the posterior inclusion
         probabilities, or ``"probit"`` fully-Bayesian Albert-Chib update.
+    learn_variance : bool, default False
+        Also learn an annotation -> effect-*variance* map ``sigma2_j ∝
+        exp(a_j . phi)`` (the second half of SBayesRC). ``phi`` is fit by ridge
+        regression of the per-causal second moment on the annotations and
+        returned in ``AnnotResult.phi`` / ``.variance_enrichment``. Because it is
+        learned, it harmlessly collapses to ~0 when effect size is
+        annotation-independent.
     h2_init, p_init : float
         Initial heritability and baseline causal fraction (the latter sets the
         intercept).
@@ -288,6 +301,7 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
 
     theta = np.zeros(K)
     theta[0] = np.log(p_init / (1 - p_init))
+    phi = np.zeros(K)                              # variance-map coefficients
     pen = np.ones(K); pen[0] = 0.0
     ss = np.random.SeedSequence(seed)
     rng = np.random.default_rng(ss)
@@ -299,15 +313,18 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
     while done < burn_in + num_iter:
         ns = min(theta_every, burn_in + num_iter - done)
         p_j = np.clip(1.0 / (1.0 + np.exp(-(A @ theta))), 1e-5, 0.99)
-        curr, h2, pip_sum, rb_sum = _annot_chunk_jit(
-            corr, beta_hat, n, p_j, float(h2), float(lo), float(hi),
+        # per-SNP slab variance: exp(A phi) normalised so sum_j p_j slab_j = h2.
+        rel = np.exp(np.clip(A @ phi, -10, 10)) if learn_variance else np.ones(m)
+        slab_j = h2 * rel / max(np.sum(p_j * rel), 1e-12)
+        curr, h2, pip_sum, rb_sum, m2_sum = _annot_chunk_jit(
+            corr, beta_hat, n, p_j, slab_j, float(lo), float(hi),
             int(ns), int(chunk_seeds[r % len(chunk_seeds)]), curr)
         if done >= burn_in:                       # post-burn-in: accumulate
             avg += rb_sum / ns
             avg_rounds += 1
         done += ns; r += 1
 
-        # --- update theta ---
+        # --- update theta (inclusion map) ---
         pip = np.clip(pip_sum / ns, 1e-6, 1 - 1e-6)
         if learn == "eb":
             s = 1.0 / (1.0 + np.exp(-(A @ theta)))
@@ -322,6 +339,18 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
             mean = V @ (A.T @ z)
             theta = mean + np.linalg.cholesky(V) @ rng.standard_normal(K)
 
+        # --- update phi (effect-variance map): ridge regression of the log
+        #     per-causal second moment E[beta^2 | causal] on the annotations. ---
+        if learn_variance:
+            e2 = np.clip(m2_sum / np.maximum(pip_sum, 1e-8), 1e-12, None)
+            wts = pip                              # weight by how causal a SNP is
+            y = np.log(e2)
+            WA = wts[:, None] * A
+            Hphi = A.T @ WA + ridge * np.diag(pen) + 1e-6 * np.eye(K)
+            gphi = A.T @ (wts * (y - A @ phi)) - ridge * pen * phi
+            phi = phi + np.linalg.solve(Hphi, gphi)
+
     beta_est = avg / max(avg_rounds, 1)
     return AnnotResult(beta_est=beta_est, h2_est=float(h2), theta=theta,
+                       phi=(phi if learn_variance else None),
                        annotation_names=names)

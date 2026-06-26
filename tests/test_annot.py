@@ -88,6 +88,37 @@ def test_continuous_annotation_recovered():
     assert res.enrichment["score"] > 0.2
 
 
+def test_learn_variance_recovers_effect_size_map():
+    # Functional SNPs have larger effects -> variance coefficient phi_func > 0.
+    pv = 0.0
+    for seed in range(4):
+        rng = np.random.default_rng(seed)
+        N, m, h2, p = 3000, 400, 0.5, 0.08
+        G = _geno(N, m, 0.6, rng); Z = standardize_dosage(G)
+        R = (Z.T @ Z) / N; np.fill_diagonal(R, 1.0)
+        func = (rng.random(m) < 0.2).astype(float)
+        causal = rng.random(m) < p
+        sd = np.where(func > 0, 3.0, 1.0)
+        beta = np.zeros(m)
+        beta[causal] = rng.normal(0, 1, causal.sum()) * sd[causal]
+        beta *= np.sqrt(h2 / (beta @ (R @ beta)))
+        y = Z @ beta + rng.normal(0, np.sqrt(0.5), N)
+        bhat = (Z.T @ y) / N
+        res = ldpred2_auto_annot(R, bhat, N, func[:, None], learn="eb",
+                                 learn_variance=True, burn_in=80, num_iter=200,
+                                 seed=1, annotation_names=["func"])
+        assert res.phi is not None
+        pv += res.variance_enrichment["func"]
+    assert pv / 4 > 0.25, pv / 4
+
+
+def test_variance_off_gives_no_phi():
+    R, bhat, N, A, _, _ = _data(0)
+    res = ldpred2_auto_annot(R, bhat, N, A, learn_variance=False, burn_in=40,
+                             num_iter=80, seed=1)
+    assert res.phi is None and res.variance_enrichment is None
+
+
 def test_intercept_only_runs_like_uniform():
     # No informative annotation (a constant column) -> still produces sane betas.
     R, bhat, N, A, ZB, yte = _data(0)
