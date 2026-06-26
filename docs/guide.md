@@ -1,0 +1,172 @@
+# User guide
+
+A task-oriented walkthrough: from a GWAS + a target dataset to a polygenic
+score, how to pick a model, and how to read the output. For the maths and
+internals see [algorithm.md](algorithm.md); for the full benchmarks see
+[benchmarks.md](benchmarks.md).
+
+## 1. What you need
+
+| Input | What it is | Notes |
+|-------|------------|-------|
+| **GWAS summary statistics** | per-variant marginal effect, SE (or p), allele(s), N | one text/`.gz` table; flexible column names (`sumstats` parses aliases, `OR→β`, SE-from-p) |
+| **Target genotypes** | the individuals you want to score | PLINK `.bed/.bim/.fam` or BGEN v1.2 |
+| **LD reference** | correlation between variants | by default computed **in-sample** from the target; or pass an external panel |
+
+You do **not** need a validation/tuning cohort: `auto` self-tunes its
+hyper-parameters, and `ldpred2_auto_infer` even estimates predictive r² without
+one.
+
+## 2. The one-command path (recommended)
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+```
+
+This runs the whole pipeline: QC → harmonise alleles → per-block LD → LDpred2 →
+one score per individual. The equivalent in Python, with the logs you should
+check:
+
+```python
+from pyldpred2 import run_ldpred2_prs
+res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
+
+res.scores          # np.ndarray, one PRS per individual (res.sample_iid for IDs)
+res.qc_log          # how many variants each QC filter dropped
+res.harmonize_log   # matched / flipped / ambiguous / mismatched counts
+```
+
+**Read the logs before trusting the scores.** If `harmonize_log` shows most
+variants `mismatched`, your sumstats and genotypes use different builds or allele
+codings; if `qc_log` drops almost everything, check the column mapping and `N`.
+See [pipeline.md](pipeline.md) for every filter and file-format detail.
+
+## 3. Choosing a model
+
+```
+                trait is ~infinitesimal (highly polygenic, no big loci)?
+                          │ yes                    │ no
+                     ┌────┴─────┐            sparse / has major loci
+                     │   inf    │                  │
+                     └──────────┘         do you have trustworthy
+                                          per-SNP functional annotations?
+                                            │ yes              │ no
+                                       ┌────┴────┐        ┌────┴────┐
+                                       │  annot  │        │  auto   │
+                                       └─────────┘        └─────────┘
+```
+
+| Model | When to use | Hyper-parameters |
+|-------|-------------|------------------|
+| **`auto`** | **the default** — self-tunes `h²` and `p`, matches the oracle `grid`, robust across architectures | none |
+| **`inf`** | you believe the trait is truly infinitesimal, or you want the cheapest/most-robust baseline | `h2` |
+| **`grid`** | you already know `h²` and `p` (e.g. from a previous fit) and want a fixed-hyper sampler | `h2`, `p` |
+| **`annot`** | you have functional annotations (coding, conserved, enhancers, …) and want to exploit them | none (learns the map) |
+
+Empirically (see [benchmarks.md](benchmarks.md)): the raw marginal PRS is always
+far behind; `inf` is robust but flat and only wins under a truly infinitesimal
+architecture; `grid`/`auto` win decisively on sparse / major-locus traits; `auto`
+matches the oracle `grid` with no tuning; `annot` matches `auto` when the
+annotation is uninformative and beats it when it carries signal.
+
+## 4. Working from your own LD blocks (library path)
+
+If you already have summary stats and an LD matrix for a region (or a whole
+genome split into blocks), skip the pipeline and call the model directly. Effects
+are on the **standardized scale** — `standardize_betas` converts reported GWAS
+effects to it and gives you the back-transform:
+
+```python
+import numpy as np
+from pyldpred2 import standardize_betas, ldpred2_auto, ldpred2_by_blocks
+
+# one block: beta/beta_se/n_eff are GWAS stats, corr is the (m x m) LD matrix
+beta_hat, scale = standardize_betas(beta, beta_se, n_eff)
+res = ldpred2_auto(corr, beta_hat, n_eff)
+adjusted_beta = res.beta_est * scale          # back to the input (per-allele) scale
+print(res)                                    # AutoResult(h2_est=…, p_est=…)
+
+# genome-wide: blocks is a list of (corr_block, index_array) tiling 0..m-1
+beta_est = ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto")
+```
+
+`ldpred2_by_blocks(method="auto")` streams blocks one at a time and pools `h²`/`p`
+globally, so the genome-wide LD is never materialised (this is the path that
+scales to millions of SNPs). Build blocks with `block_diagonal_ld` or, better,
+`optimal_ld_blocks` (cuts in recombination valleys — see [algorithm.md](algorithm.md)).
+
+## 5. Annotation-informed PRS (`annot`)
+
+Supply a per-SNP annotation table and the sampler learns an SBayesRC-style
+functional prior `p_j = sigmoid(a_jᵀθ)` genome-wide, returning the learned
+enrichment:
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method annot \
+    --annotations annot.tsv --out prs.txt
+# ... annotation enrichment: coding=+1.20, conserved=+0.80, ...
+```
+
+```python
+res = run_ldpred2_prs("gwas.txt.gz", "target", method="annot",
+                      annotations="annot.tsv")
+res.enrichment            # {"coding": 1.20, "conserved": 0.80, ...}
+```
+
+The annotation file is a delimited table with a SNP-id column (`SNP`/`rsid`/…)
+and numeric annotation columns; rows are matched to the GWAS variants by ID
+(variants absent from the file get all-zero annotations). A large positive
+coefficient means that annotation enriches for causal variants. Because the map
+is *learned*, an uninformative annotation harmlessly collapses to θ≈0 — there is
+no "garbage-in" penalty like a fixed bad prior would carry.
+
+**One knob that matters:** `theta_every` (how often the map is refit). The
+default `1` (refit every sweep) is what makes the map converge within a normal
+chain — don't raise it unless you have **many** annotations (≳50) and the
+`O(m·K²)` refit cost starts to dominate. See the convergence note in
+[benchmarks.md](benchmarks.md) for why.
+
+## 6. Inferring h², polygenicity and predictive r² (no validation set)
+
+To get heritability, polygenicity and the PRS's expected out-of-sample r² —
+each with a credible interval and **without** a held-out cohort:
+
+```python
+from pyldpred2 import ldpred2_auto_infer
+res = ldpred2_auto_infer(corr, beta_hat, n_eff, n_chains=10)
+res.h2_est, res.h2_ci     # heritability + 95% CI
+res.p_est,  res.p_ci      # polygenicity + 95% CI
+res.r2_est, res.r2_ci     # predicted out-of-sample r² + 95% CI
+```
+
+or from the pipeline with `infer=True` / `--infer`. The estimator is dense, so
+use it at chromosome / curated-SNP scale (it guards at `infer_max_variants`,
+default 30000). Full method and validation in [inference.md](inference.md).
+
+## 7. Scaling & performance
+
+- **Install Numba** (`pip install numba`). The inner sampler is JIT-compiled and
+  cached; without it you get identical results but a much slower pure-Python
+  loop — fine for CI, not for genome-wide runs.
+- **Memory** is dominated by the LD. `auto`'s streaming sampler keeps only one
+  block resident (float32), so peak memory is the LD plus `O(m)` state — ~4 GB at
+  2M SNPs. Prefer `ldpred2_by_blocks(method="auto")` (global hyper) at genome
+  scale.
+- **Sparse / banded LD** (`sparsify_ld`, or `ldpred2_by_blocks(..., sparsify=True)`)
+  makes `inf` a cheap CG solve and trims the samplers; band by **distance**
+  (`max_dist=`) since in-sample LD has a ~1/√N noise floor. See
+  [algorithm.md](algorithm.md).
+- **Fewer iterations:** `warm_start=True` and adaptive stopping (`tol=`) on the
+  samplers (algorithm.md).
+
+## 8. Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---------|--------------------|
+| Most variants dropped at **harmonisation** | build/allele-coding mismatch between sumstats and genotypes; check strand and that both are the same genome build |
+| Most variants dropped at **QC** | wrong column mapping (so `N`/SE parsed wrong), or a real `N`/MAF/INFO filter; inspect `res.qc_log` |
+| **SD-consistency** drops many variants | a wrong/!per-variant `N`, allele errors, or bad imputation — the check compares sumstats-implied SD to the reference (see pipeline.md) |
+| `auto` `p_est` looks too high for an **ultra-sparse** trait | `p` is unidentifiable below ~2 causal/1000 variants; `h²`/`r²` stay fine (inference.md) |
+| `annot` **underperforms** `auto` | almost always under-converged map — keep `theta_every=1` (the default); raise iterations before raising `theta_every` |
+| Sampler **diverges** on noisy/ill-conditioned LD | keep `allow_jump_sign=False` (default), or `sparsify_ld(..., shrink=<1)` to restore diagonal dominance (algorithm.md) |
+| It's **slow** | check Numba is installed and the JIT cache is warm (first call compiles); pin BLAS threads for reproducible single-core timing |
