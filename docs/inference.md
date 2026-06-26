@@ -69,3 +69,94 @@ variants in 1000) `p` is essentially unidentifiable — there is too little sign
 to estimate a *fraction* — and the estimate is upward-biased and high-variance.
 This is inherent to the model, not specific to this implementation; h² and r²
 remain well-estimated there.
+
+## Cross-check: LD Score regression
+
+The h² estimate has an independent external check — **LD Score regression**
+(LDSC; Bulik-Sullivan et al. 2015), implemented here in `pyldpred2.ldsc`. LDSC
+fits `E[χ²_j] = intercept + (N·h²/M)·ℓ_j` where `ℓ_j = Σ_k r²_jk` is the variant's
+LD score, recovering h² from the slope (the intercept measures confounding and
+should be ~1):
+
+```python
+from pyldpred2 import ld_scores, ldsc_h2
+ell = ld_scores(blocks)                       # per-block LD matrices -> LD scores
+res = ldsc_h2(n_eff * beta_hat**2, ell, n_eff)   # chi2 = (beta_hat/se)^2
+res.h2, res.h2_se, res.intercept              # h2 (+jackknife SE) and confounding
+```
+
+Both methods estimate h² from the **same** summary statistics. The benchmark is
+**realistic**: the GWAS is generated from the true population LD, but both methods
+are fitted with an LD matrix/scores estimated from a finite **reference panel**
+(`Nref=2000`) — the mismatch that dominates real-world error. On coalescent LD
+(m=6000, N=50000, 5 reps), against the known true h²:
+
+| architecture | h²_true | LDSC | LDpred2-auto |
+|--------------|--------:|-----:|-------------:|
+| infinitesimal | 0.20 | 0.215 ± 0.020 | 0.218 ± 0.002 |
+| infinitesimal | 0.50 | 0.541 ± 0.047 | 0.554 ± 0.001 |
+| sparse (p=0.01) | 0.20 | 0.239 ± 0.027 | 0.208 ± 0.004 |
+| sparse (p=0.01) | 0.50 | 0.606 ± 0.059 | 0.530 ± 0.009 |
+
+(± is the across-replicate SD.) Takeaways:
+
+- **Reference-panel LD mismatch biases both estimators upward** (e.g. true
+  h²=0.5 → ~0.54–0.55). This is the realistic regime — with the *true* LD both
+  are essentially unbiased, so the bias is an LD-quality effect, not a flaw in
+  either estimator. (LDSC is *more* biased under sparsity, 0.61 at sparse h²=0.5,
+  where its infinitesimal `E[χ²]` assumption is most stressed.)
+- **LDpred2-auto is much more precise** (often ~10× smaller SD): it uses the full
+  LD likelihood, whereas LDSC is a two-parameter moment regression that discards
+  most of the information. The trade-off is that its tiny SD makes the LD-mismatch
+  bias the dominant error — so treat the point estimate as having a systematic
+  component set by the LD reference quality, which the LDSC intercept and the
+  across-method agreement help diagnose.
+
+LDSC's value is its **robustness and speed** (a moment regression, no sampling)
+and its intercept as a confounding diagnostic; LDpred2-auto's is **efficiency**.
+Regenerate with `benchmarks/compare_ldsc_infer.py`.
+
+The same holds for the **genetic correlation** between two traits: `ldsc_rg`
+(cross-trait LD Score regression, `E[z₁z₂] = intercept + (√(N₁N₂)·ρ_g/M)·ℓ`)
+cross-checks the `r_g` from `ldpred2_auto_bivariate`. Under the same realistic
+reference-panel LD both are roughly unbiased and the bivariate sampler is ~2×
+more precise (at true r_g=0.9, LDSC 0.86 ± 0.07 vs bivariate LDpred2 0.90 ± 0.04).
+See [algorithm.md](algorithm.md#bivariate-two-trait-ldpred2) and
+`benchmarks/compare_bivariate_rg.py`.
+
+## Accuracy vs running time
+
+Both axes together, on the realistic reference-panel setup (single core, m=6000,
+N₁=50000, N₂=20000, 5 reps; Numba warmed up). `benchmarks/inference_benchmark.py`:
+
+| quantity | method | estimate (truth) | time / run |
+|----------|--------|-----------------:|-----------:|
+| h² = 0.50 | marginal — no LD | 9.60 ± 1.01 | **0.0001 s** |
+| h² = 0.50 | LDSC (`ldsc_h2`) | 0.65 ± 0.16 | 0.03 s |
+| h² = 0.50 | LDpred2-auto (`ldpred2_auto_infer`) | 0.54 ± 0.01 | 4.8 s |
+| r_g = 0.60 | marginal — no LD | 0.62 ± 0.10 | **0.0001 s** |
+| r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.57 ± 0.17 | 0.07 s |
+| r_g = 0.60 | bivariate LDpred2 (`ldpred2_auto_bivariate`) | 0.63 ± 0.08 | 0.4 s |
+
+("marginal — no LD" is the naive moment estimator that assumes SNPs are
+independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially free.)
+
+- **For h², the LD adjustment is the whole game.** The no-LD estimate is ~19×
+  too large (9.6 vs 0.5) because LD makes every causal variant's signal show up
+  in its correlated neighbours, which the naive sum double-counts. LDSC (the LD
+  scores) removes this for ~0.03 s; LDpred2-auto refines the point estimate
+  further at a real time cost.
+- **For r_g, LD matters far less.** The no-LD estimate (0.62 ± 0.10) is already
+  good — even tighter than LDSC — because LD inflates the cross-covariance and
+  both heritabilities *proportionally* and largely cancels in the ratio. So a
+  fast marginal r_g is a reasonable first pass, where a marginal h² is useless.
+- **The LDpred2 estimators are the most precise** (≈5–15× smaller SD than LDSC)
+  at a time cost: ~150× for **h²** (`ldpred2_auto_infer` runs many MCMC chains on
+  a *dense* LD) but only ~5× for **r_g**, because the bivariate sampler **streams
+  LD blocks**. The dense-only inference path is the bottleneck; a streaming
+  `-auto` inference (as for the bivariate sampler) would close most of the h²
+  time gap.
+
+Use a marginal pass for a quick `r_g` sanity check, LDSC for a fast LD-correct h²
+and the confounding intercept, and the LDpred2 estimators when precision matters
+(reading their point estimates with the LD-mismatch bias in mind).

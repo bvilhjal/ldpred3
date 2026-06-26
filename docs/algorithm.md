@@ -178,6 +178,78 @@ Two further options complete the SBayesRC picture:
   genome-wide LD is never materialised (it matches the dense version on
   block-diagonal LD). This is what the pipeline's `--method annot` uses.
 
+## Bivariate (two-trait) LDpred2
+
+`ldpred2_auto_bivariate` jointly fits **two traits that share one LD reference**.
+Each variant takes one of **four** states — causal for neither trait, trait 1
+only, trait 2 only, or **both** — with probabilities `(π₀₀, π₁₀, π₀₁, π₁₁)`. A
+trait-1-causal effect is `N(0, s₁)`, a trait-2-causal one `N(0, s₂)`, and a
+*both*-causal pair is `N(0, Σ)` with `Σ = [[s₁, s₁₂],[s₁₂, s₂]]`; the
+off-diagonal `s₁₂` is the genetic covariance and the only place the traits
+couple. Each Gibbs step evaluates the four bivariate-Gaussian likelihoods of the
+residual estimate, samples a state, and draws the effects; `π` and `s₁₂` are
+re-estimated each sweep, and `r_g = β₁ᵀRβ₂ / √(h²₁h²₂)` is reported.
+
+```python
+from pyldpred2 import ldpred2_auto_bivariate
+res = ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
+res.beta1_est, res.beta2_est      # adjusted effects for the two traits
+res.h2, res.rg                    # (h2_1, h2_2) and the genetic correlation
+```
+
+**Why per-trait states (and not one shared causal indicator).** An earlier
+prototype used a single shared indicator (both traits causal at the same SNPs).
+That helps when the assumption holds but **hurts** badly when it doesn't — with
+disjoint causal variants it forced sharing and dropped the weak trait's accuracy
+by ~0.1. The four-state model *learns* whether causal variants co-occur (`π₁₁`),
+so disjoint traits drive `π₁₁ → 0` and the joint fit reduces to the independent
+ones. Two further safeguards keep it honest: each trait's slab variance is capped
+by its own **univariate** heritability (the weak trait's variance is otherwise
+under-identified and inflates by borrowing from the strong one), and the variance
+updates are damped.
+
+The benchmark is **realistic**: the GWAS is generated from the true population
+(coalescent) LD but fitted with an LD matrix estimated from a finite reference
+panel (`Nref=2000`). For a genuinely under-powered trait 2 (N=2000, polygenic)
+vs a well-powered trait 1 (N=100000), the gain grows with `r_g` and there is **no
+harm** at low `r_g` or disjoint architectures:
+
+| architecture | trait-2 alone | trait-2 joint | gain | r_g est |
+|--------------|--------------:|--------------:|-----:|--------:|
+| shared, r_g=0.0 | 0.641 | 0.636 | −0.005 | +0.02 |
+| shared, r_g=0.3 | 0.647 | 0.641 | −0.006 | +0.39 |
+| shared, r_g=0.6 | 0.655 | 0.694 | +0.039 | +0.67 |
+| shared, r_g=0.9 | 0.658 | 0.830 | **+0.173** | +0.89 |
+| disjoint causal | 0.630 | 0.610 | −0.020 | −0.08 |
+
+The benefit is **real and large only where it should be** — a weak trait highly
+correlated with a strong one — and negligible otherwise. It scales with how
+under-powered trait 2 is: at N=1000 the rg=0.9 gain reaches ~+0.28, while for an
+already well-powered trait 2 there is little to borrow and a small overhead, so
+use the joint fit to boost an under-powered trait. (An earlier "fit with the true
+LD" benchmark overstated the gains — they shrink markedly under realistic
+reference-panel LD.) `ldpred2_auto_bivariate_blocks` is the streaming genome-wide
+version; both GWAS must use the same LD/ancestry, and sample overlap is handled
+via `cross_corr` (default 0). Regenerate with `benchmarks/bivariate_demo.py`.
+
+**Genetic correlation vs bivariate LDSC.** The reported `r_g` has an independent
+cross-check in `ldsc_rg` (cross-trait LD Score regression). Under the same
+realistic reference-panel LD both are roughly unbiased from the same summary
+statistics; bivariate LDpred2 is ~2× more precise (it uses the full LD
+likelihood):
+
+| true r_g | bivariate LDSC | bivariate LDpred2 |
+|---------:|---------------:|------------------:|
+| 0.0 | −0.04 ± 0.24 | −0.01 ± 0.15 |
+| 0.3 | 0.29 ± 0.18 | 0.30 ± 0.16 |
+| 0.6 | 0.59 ± 0.15 | 0.60 ± 0.13 |
+| 0.9 | 0.86 ± 0.07 | 0.90 ± 0.04 |
+
+(With the *true* LD the SEs are several-fold smaller and LDpred2's precision edge
+larger; the reference-panel mismatch is what makes both noisier and narrows the
+gap — the realistic picture.) Regenerate with
+`benchmarks/compare_bivariate_rg.py`.
+
 ## Robustness: `allow_jump_sign`
 
 `ldpred2_grid` / `ldpred2_auto` / `ldpred2_auto_infer` accept

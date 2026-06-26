@@ -175,6 +175,11 @@ globally, so the genome-wide LD is never materialised (this is the path that
 scales to millions of SNPs). Build blocks with `block_diagonal_ld` or, better,
 `optimal_ld_blocks` (cuts in recombination valleys — see [algorithm.md](algorithm.md)).
 
+**Two correlated traits?** `ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2,
+n1, n2)` fits both jointly, learning their genetic correlation so a well-powered
+trait sharpens a weaker correlated one (and reporting `res.rg`, `res.h2`). See
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred2).
+
 ## 6. Annotation-informed PRS (`annot`)
 
 Supply a per-SNP annotation table and the sampler learns an SBayesRC-style
@@ -221,7 +226,10 @@ res.r2_est, res.r2_ci     # predicted out-of-sample r² + 95% CI
 
 or from the pipeline with `infer=True` / `--infer`. The estimator is dense, so
 use it at chromosome / curated-SNP scale (it guards at `infer_max_variants`,
-default 30000). Full method and validation in [inference.md](inference.md).
+default 30000). For an independent h² check, `ldsc_h2` runs **LD Score
+regression** on the same summary statistics (it agrees with the LDpred2-auto h²
+but is less precise — see [inference.md](inference.md)). Full method and
+validation in [inference.md](inference.md).
 
 ## 8. Re-using work: saved weights & cached LD
 

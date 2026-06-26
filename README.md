@@ -87,7 +87,9 @@ res.h2_est, res.p_est, res.r2_est        # point estimates (+ *_ci for intervals
 ```
 
 The inferred r² tracks the PRS's held-out R² (e.g. 0.485 inferred vs 0.495
-held-out at N=8000). Details and validation in
+held-out at N=8000). The h² estimate has an independent cross-check —
+**LD Score regression** (`ld_scores` / `ldsc_h2`) — which agrees with it but is
+~5–15× less precise. Details and validation in
 [docs/inference.md](docs/inference.md).
 
 ### Performance vs bigsnpr (single core, realistic LD)
@@ -112,6 +114,12 @@ scaling studies and the genotype-level simulation are in
 - **Per-variant priors** (`prior_weights`) — annotation-informed causal
   probabilities, SBayesRC-style — either supplied, or **learned inside the
   sampler** (`ldpred2_auto_annot`, EB or probit) returning enrichment estimates.
+- **Bivariate (two-trait) LDpred2** (`ldpred2_auto_bivariate`) — jointly fits two
+  traits sharing an LD reference, learning their genetic correlation so a
+  well-powered trait sharpens a weaker correlated one.
+- **LD Score regression** (`ld_scores`, `ldsc_h2`, `ldsc_rg`) — fast moment-based
+  h² and genetic-correlation estimates (+ confounding intercept), as independent
+  cross-checks of the LDpred2-auto / bivariate estimates.
 - **Warm start & adaptive stopping** to cut iterations.
 
 All of these are described in [docs/algorithm.md](docs/algorithm.md).
