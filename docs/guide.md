@@ -5,6 +5,21 @@ score, how to pick a model, and how to read the output. For the maths and
 internals see [algorithm.md](algorithm.md); for the full benchmarks see
 [benchmarks.md](benchmarks.md).
 
+**Jump to:** [what you need](#1-what-you-need) ·
+[run it](#2-the-one-command-path-recommended) ·
+[is it any good?](#3-is-the-prs-any-good-evaluating) ·
+[choose a model](#4-choosing-a-model) ·
+[your own LD blocks](#5-working-from-your-own-ld-blocks-library-path) ·
+[annotations](#6-annotation-informed-prs-annot) ·
+[h²/p/r² inference](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set) ·
+[reuse work](#8-re-using-work-saved-weights--cached-ld) ·
+[scaling](#9-scaling--performance) · [troubleshooting](#10-troubleshooting)
+
+> **In one line:** `pip install numpy numba` then
+> `pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt`.
+> Everything below is detail on the inputs, the model choice, and reading the
+> output.
+
 ## 1. What you need
 
 | Input | What it is | Notes |
@@ -16,6 +31,20 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 You do **not** need a validation/tuning cohort: `auto` self-tunes its
 hyper-parameters, and `ldpred2_auto_infer` even estimates predictive r² without
 one.
+
+**LD reference & ancestry — the gotcha that quietly breaks PRS.** LDpred2's whole
+job is to undo LD, so the LD reference must match the GWAS *and* the target
+**ancestry**. Practical guidance:
+
+- **In-sample LD (default)** — computed from the target — is fine when the target
+  is reasonably large (thousands of individuals) and the same ancestry as the
+  GWAS. It is the simplest path.
+- **External panel** (`ld_prefix=` / `--ld-prefix`) — use a matched-ancestry
+  reference (e.g. the relevant 1000 Genomes superpopulation) when the target is
+  small, so the LD isn't estimated from a handful of people.
+- **Cross-ancestry** (GWAS and target differ in ancestry) is *out of scope* for a
+  single-population LDpred2 and will under-perform — that needs a cross-ancestry
+  method. Keep GWAS, LD reference and target ancestry aligned.
 
 ## 2. The one-command path (recommended)
 
@@ -51,11 +80,48 @@ pyldpred2-prs --sumstats gwas.txt.gz --plink target --dry-run
 # matched 31204 / 31875 to the target (12 flipped, 41 ambiguous, ...)
 ```
 
-If a required column is mis-detected, pass it explicitly via `sumstats_cols`
-(Python) or fix the header; a near-zero match rate means an ID/build mismatch.
-`preflight_prs(...)` returns the same report as a dict.
+If a required column is mis-detected, pass it explicitly — by column name or
+index — and re-check:
 
-## 3. Choosing a model
+```python
+run_ldpred2_prs("gwas.txt.gz", "target",
+                sumstats_cols={"beta": "EFFECT", "ea": "ALT", "n_eff": 8})
+```
+
+A near-zero match rate in the preflight almost always means an ID convention or
+build mismatch (e.g. `rs#` sumstats vs `chr:pos` genotype IDs — the pipeline
+falls back to position matching, but only within the same build).
+
+**Outputs.** The score file is a 3-column table, one row per individual:
+
+```
+FID     IID     PRS
+fam1    ind1    0.0421
+fam1    ind2   -0.0137
+```
+
+In Python the same numbers are `res.scores` (aligned to `res.sample_fid` /
+`res.sample_iid`). `res.beta_adjusted` holds the per-variant weights (see
+[§8](#8-re-using-work-saved-weights--cached-ld) to save and reuse them).
+
+## 3. Is the PRS any good? (evaluating)
+
+A PRS is only useful if it predicts. Two ways to judge it:
+
+- **With a phenotype** (the gold standard): correlate the scores with a measured
+  trait in the target or a held-out set. The squared Pearson correlation
+  `cor(PRS, phenotype)²` is the realised prediction R² (for a binary trait, use
+  the AUC or Nagelkerke R²). Always assess in individuals **not** in the GWAS.
+- **Without a phenotype:** `--infer` / `ldpred2_auto_infer` estimates the PRS's
+  expected out-of-sample r² from the summary statistics alone, with a credible
+  interval ([§7](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set)).
+  It tracks the realised R² closely and falls toward 0 as GWAS power drops, so
+  it's a useful a-priori check before you have outcome data.
+
+If accuracy is far below the inferred r², suspect an input problem (ancestry
+mismatch, wrong `N`, or LD that doesn't match the target) rather than the model.
+
+## 4. Choosing a model
 
 ```
                 trait is ~infinitesimal (highly polygenic, no big loci)?
@@ -83,7 +149,7 @@ architecture; `grid`/`auto` win decisively on sparse / major-locus traits; `auto
 matches the oracle `grid` with no tuning; `annot` matches `auto` when the
 annotation is uninformative and beats it when it carries signal.
 
-## 4. Working from your own LD blocks (library path)
+## 5. Working from your own LD blocks (library path)
 
 If you already have summary stats and an LD matrix for a region (or a whole
 genome split into blocks), skip the pipeline and call the model directly. Effects
@@ -109,7 +175,7 @@ globally, so the genome-wide LD is never materialised (this is the path that
 scales to millions of SNPs). Build blocks with `block_diagonal_ld` or, better,
 `optimal_ld_blocks` (cuts in recombination valleys — see [algorithm.md](algorithm.md)).
 
-## 5. Annotation-informed PRS (`annot`)
+## 6. Annotation-informed PRS (`annot`)
 
 Supply a per-SNP annotation table and the sampler learns an SBayesRC-style
 functional prior `p_j = sigmoid(a_jᵀθ)` genome-wide, returning the learned
@@ -140,7 +206,7 @@ chain — don't raise it unless you have **many** annotations (≳50) and the
 `O(m·K²)` refit cost starts to dominate. See the convergence note in
 [benchmarks.md](benchmarks.md) for why.
 
-## 6. Inferring h², polygenicity and predictive r² (no validation set)
+## 7. Inferring h², polygenicity and predictive r² (no validation set)
 
 To get heritability, polygenicity and the PRS's expected out-of-sample r² —
 each with a credible interval and **without** a held-out cohort:
@@ -157,7 +223,7 @@ or from the pipeline with `infer=True` / `--infer`. The estimator is dense, so
 use it at chromosome / curated-SNP scale (it guards at `infer_max_variants`,
 default 30000). Full method and validation in [inference.md](inference.md).
 
-## 7. Re-using work: saved weights & cached LD
+## 8. Re-using work: saved weights & cached LD
 
 Two flags avoid redoing the expensive parts when you score more cohorts or
 re-run with different settings.
@@ -191,7 +257,7 @@ The cache records the variant set it was built for; if your inputs/QC change so
 the harmonised variants differ, the run stops with a clear error rather than
 silently using stale LD — rebuild it with `--ld-out`.
 
-## 8. Scaling & performance
+## 9. Scaling & performance
 
 - **Install Numba** (`pip install numba`). The inner sampler is JIT-compiled and
   cached; without it you get identical results but a much slower pure-Python
@@ -207,7 +273,7 @@ silently using stale LD — rebuild it with `--ld-out`.
 - **Fewer iterations:** `warm_start=True` and adaptive stopping (`tol=`) on the
   samplers (algorithm.md).
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|

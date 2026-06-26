@@ -57,7 +57,7 @@ formats and the module breakdown are in [docs/pipeline.md](docs/pipeline.md).
 | `ldpred2_auto_annot` | `auto` + a learned functional-annotation prior     | none (learns the map)|
 
 `ldpred2_auto` is the default for most uses; reach for `ldpred2_auto_annot` when
-you have per-SNP annotations. The [user guide](docs/guide.md#3-choosing-a-model)
+you have per-SNP annotations. The [user guide](docs/guide.md#4-choosing-a-model)
 has a decision tree. Helpers: `standardize_betas`, `ldpred2_by_blocks` (run a
 model per LD block, genome-wide), `block_diagonal_ld`, `optimal_ld_blocks`.
 
