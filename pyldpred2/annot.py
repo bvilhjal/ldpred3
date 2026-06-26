@@ -296,7 +296,7 @@ def _add_intercept(A):
 
 def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
                        learn_variance=False, h2_init=0.1, p_init=0.1,
-                       burn_in=200, num_iter=200, theta_every=10, ridge=5.0,
+                       burn_in=200, num_iter=200, theta_every=1, ridge=5.0,
                        h2_bounds=(1e-4, 1.0), annotation_names=None, seed=None):
     """LDpred2-auto that learns a per-SNP prior from functional annotations.
 
@@ -330,8 +330,15 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
         intercept).
     burn_in, num_iter : int
         Burn-in and sampling sweeps.
-    theta_every : int, default 10
-        Effect sweeps between annotation-coefficient updates.
+    theta_every : int, default 1
+        Effect sweeps between annotation-coefficient updates. Updating every
+        sweep (the default) lets the map and the effects co-adapt and is what
+        makes the learned prior converge within a normal-length chain — with
+        lazy updates (e.g. 10) the annotation map under-converges at low power /
+        large ``m``, over-estimates the global ``p`` and *over-shrinks* the
+        effects, so ``annot`` can fall below plain ``auto``. The θ-update is an
+        ``O(m·K²)`` IRLS solve, so raise this only when there are many (≳50)
+        annotations and the per-sweep θ cost starts to dominate the effect sweep.
     ridge : float, default 5.0
         Ridge penalty on the non-intercept coefficients (stabilises many /
         collinear annotations).
@@ -412,7 +419,7 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
 def ldpred2_auto_annot_blocks(blocks, beta_hat, n_eff, annotations, *,
                               learn="eb", learn_variance=False, h2_init=0.1,
                               p_init=0.1, burn_in=200, num_iter=200,
-                              theta_every=10, ridge=5.0, h2_bounds=(1e-4, 1.0),
+                              theta_every=1, ridge=5.0, h2_bounds=(1e-4, 1.0),
                               annotation_names=None, seed=None):
     """Genome-wide (streaming) version of :func:`ldpred2_auto_annot`.
 

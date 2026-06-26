@@ -153,6 +153,20 @@ learned one automatically down-weights unhelpful annotations (no "garbage-in"
 penalty), and the learned θ are directly interpretable as functional-enrichment
 estimates.
 
+**Update the map every sweep (`theta_every=1`, the default).** The `θ`-update
+and the effect sweep are coupled — `θ` sets the per-SNP `p_j` the sweep uses, and
+the sweep's posterior inclusion probabilities feed the next `θ`-update — so they
+must co-adapt. With a *lazy* update (e.g. `theta_every=10`) the map lags the
+chain and, at low per-SNP power with large `m`, settles at an inflated global `p`
+(it reads the prior-smeared inclusion probabilities of null SNPs as signal),
+which **over-shrinks** the effects: in the architecture benchmark this made
+`annot` fall *below* plain `auto` at N=10k (enriched 0.60 vs 0.64). Updating `θ`
+every sweep removes the lag — the learned enrichment reaches its true value and
+`annot` recovers to ≥ `auto` everywhere (see
+[benchmarks.md](benchmarks.md)). The IRLS step is an `O(m·K²)` solve, so it is
+negligible for a handful of annotations; raise `theta_every` only when `K` is
+large enough (≳50) that the per-sweep `θ` cost rivals the effect sweep.
+
 Two further options complete the SBayesRC picture:
 
 * **`learn_variance=True`** additionally learns an annotation → effect-*variance*

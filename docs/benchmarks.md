@@ -86,21 +86,21 @@ Genetic R² at **N = 10,000** (the lower-power regime separates the methods):
 
 | architecture | marginal | inf | grid | auto | annot |
 |--------------|---------:|----:|-----:|-----:|------:|
-| infinitesimal       | 0.451 | **0.532** | 0.531 | 0.526 | 0.526 |
-| sparse (p=0.01)     | 0.460 | 0.541 | **0.747** | 0.746 | 0.661 |
-| polygenic (p=0.2)   | 0.442 | 0.530 | **0.530** | 0.528 | 0.529 |
-| major locus         | 0.459 | 0.533 | **0.685** | 0.672 | 0.661 |
-| annotation-enriched | 0.457 | 0.536 | **0.646** | 0.644 | 0.604 |
+| infinitesimal       | 0.451 | **0.532** | 0.531 | 0.526 | 0.527 |
+| sparse (p=0.01)     | 0.460 | 0.541 | **0.747** | 0.746 | 0.747 |
+| polygenic (p=0.2)   | 0.442 | 0.530 | **0.531** | 0.528 | 0.529 |
+| major locus         | 0.459 | 0.533 | **0.684** | 0.672 | 0.672 |
+| annotation-enriched | 0.457 | 0.536 | 0.646 | 0.644 | **0.662** |
 
 Genetic R² at **N = 50,000** (higher power; everything shifts up and compresses):
 
 | architecture | marginal | inf | grid | auto | annot |
 |--------------|---------:|----:|-----:|-----:|------:|
-| infinitesimal       | 0.565 | **0.794** | 0.792 | 0.789 | 0.784 |
-| sparse (p=0.01)     | 0.575 | 0.797 | 0.942 | 0.942 | **0.942** |
-| polygenic (p=0.2)   | 0.559 | 0.791 | 0.797 | **0.797** | 0.796 |
-| major locus         | 0.574 | 0.794 | **0.905** | 0.903 | 0.905 |
-| annotation-enriched | 0.577 | 0.796 | 0.901 | 0.901 | **0.906** |
+| infinitesimal       | 0.565 | **0.794** | 0.792 | 0.789 | 0.789 |
+| sparse (p=0.01)     | 0.575 | 0.797 | 0.941 | 0.942 | **0.942** |
+| polygenic (p=0.2)   | 0.559 | 0.791 | **0.797** | 0.797 | 0.796 |
+| major locus         | 0.574 | 0.794 | **0.904** | 0.903 | 0.903 |
+| annotation-enriched | 0.577 | 0.796 | 0.900 | 0.901 | **0.908** |
 
 Takeaways:
 
@@ -110,20 +110,28 @@ Takeaways:
   truly infinitesimal (or near-infinitesimal polygenic) architecture, and leaves
   large gains on the table whenever the trait is sparse or has major loci.
 - **`grid`/`auto` win decisively on sparse and major-locus** architectures
-  (e.g. 0.75/0.69 vs 0.53 for `inf` at N=10k) — the spike-and-slab captures
+  (e.g. 0.75/0.68 vs 0.53 for `inf` at N=10k) — the spike-and-slab captures
   concentrated signal. **`auto` matches the oracle `grid`** (handed the true
   `h²` and `p`) without any hyper-parameters — the practical default.
-- **`annot` is power-dependent.** At **N = 50,000** it tracks `auto`/`grid` and
-  edges ahead when the annotation is informative (annotation-enriched row,
-  0.906 vs 0.901). But at **N = 10,000 with 50k SNPs** the annotation learner
-  *underperforms* plain `grid`/`auto` on the concentrated architectures (sparse
-  0.66 vs 0.75; major-locus 0.66 vs 0.69; even the enriched row 0.60 vs 0.65).
-  Learning the global sparsity *and* the annotation map from the data is harder
-  at low per-SNP power and large `m`, so the self-tuned annotation prior is
-  noisier than a well-behaved fixed-`p` sampler there. The lesson matches
-  SBayesRC practice: annotation learning pays off with **many** calibrated
-  annotations and adequate power, not a single binary annotation in the
-  low-power corner — and it is not a free default below it.
+- **`annot` matches `auto` when the annotation is uninformative and beats it
+  when it carries signal.** On the annotation-enriched architecture it is the
+  best method at both power levels (N=10k: 0.662 vs grid 0.646; N=50k: 0.908 vs
+  0.901), and it never falls behind `auto` elsewhere. The lift from a *single*
+  binary annotation is modest — SBayesRC's larger real-data gains come from many
+  S-LDSC-calibrated annotations — but it is consistent and free of the
+  "garbage-in" penalty a *fixed* bad prior would carry.
+
+> **Convergence note (why this is the corrected table).** An earlier run with a
+> lazy annotation-map update (`theta_every=10`) had `annot` *underperforming*
+> `auto` at N=10k — e.g. enriched 0.60 vs 0.64. That was an artifact: with short
+> chains the `p_j = sigmoid(Aθ)` map had not converged, so it over-estimated the
+> global `p` (effective p ≈ 0.04 vs a true 0.02) and **over-shrank** the effects.
+> Updating `θ` every sweep (now the default — the IRLS step is cheap for a
+> handful of annotations) lets the map and the effects co-adapt; the learned
+> enrichment then reaches its true value (θ_func ≈ 1.7) and the anomaly
+> disappears. A diagnostic confirmed the fix is purely about convergence: more
+> iterations *without* frequent θ updates also fixed it, but added nothing on top
+> of `theta_every=1`.
 
 ## Genotype-level simulation
 
