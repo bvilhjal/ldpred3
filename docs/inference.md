@@ -69,3 +69,43 @@ variants in 1000) `p` is essentially unidentifiable — there is too little sign
 to estimate a *fraction* — and the estimate is upward-biased and high-variance.
 This is inherent to the model, not specific to this implementation; h² and r²
 remain well-estimated there.
+
+## Cross-check: LD Score regression
+
+The h² estimate has an independent external check — **LD Score regression**
+(LDSC; Bulik-Sullivan et al. 2015), implemented here in `pyldpred2.ldsc`. LDSC
+fits `E[χ²_j] = intercept + (N·h²/M)·ℓ_j` where `ℓ_j = Σ_k r²_jk` is the variant's
+LD score, recovering h² from the slope (the intercept measures confounding and
+should be ~1):
+
+```python
+from pyldpred2 import ld_scores, ldsc_h2
+ell = ld_scores(blocks)                       # per-block LD matrices -> LD scores
+res = ldsc_h2(n_eff * beta_hat**2, ell, n_eff)   # chi2 = (beta_hat/se)^2
+res.h2, res.h2_se, res.intercept              # h2 (+jackknife SE) and confounding
+```
+
+Both methods estimate h² from the **same** summary statistics. On coalescent LD
+(m=6000, N=50000, 5 reps), against the known true h²:
+
+| architecture | h²_true | LDSC | LDpred2-auto |
+|--------------|--------:|-----:|-------------:|
+| infinitesimal | 0.20 | 0.196 ± 0.017 | 0.199 ± 0.003 |
+| infinitesimal | 0.50 | 0.494 ± 0.040 | 0.499 ± 0.004 |
+| sparse (p=0.01) | 0.20 | 0.215 ± 0.031 | 0.199 ± 0.003 |
+| sparse (p=0.01) | 0.50 | 0.543 ± 0.071 | 0.497 ± 0.005 |
+
+(± is the across-replicate SD.) Two takeaways:
+
+- **They agree with the truth and with each other** — an independent validation
+  of the LDpred2-auto h². LDSC's intercept stays ~1 (no confounding simulated).
+- **LDpred2-auto is far more precise** (≈5–15× smaller SD): it uses the full LD
+  likelihood, whereas LDSC is a two-parameter moment regression that discards
+  most of the information. LDSC also degrades more under **sparsity** (SD 0.071
+  and a slight upward bias at sparse h²=0.5), because its infinitesimal
+  `E[χ²]` assumption is stressed and a few large effects lever the slope —
+  LDpred2-auto's spike-and-slab matches the architecture and stays tight.
+
+LDSC's value is its **robustness and speed** (a moment regression, no sampling)
+and its intercept as a confounding diagnostic; LDpred2-auto's is **efficiency**.
+Regenerate with `benchmarks/compare_ldsc_infer.py`.
