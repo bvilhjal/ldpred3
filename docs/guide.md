@@ -175,6 +175,11 @@ globally, so the genome-wide LD is never materialised (this is the path that
 scales to millions of SNPs). Build blocks with `block_diagonal_ld` or, better,
 `optimal_ld_blocks` (cuts in recombination valleys — see [algorithm.md](algorithm.md)).
 
+**Two correlated traits?** `ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2,
+n1, n2)` fits both jointly, learning their genetic correlation so a well-powered
+trait sharpens a weaker correlated one (and reporting `res.rg`, `res.h2`). See
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred2).
+
 ## 6. Annotation-informed PRS (`annot`)
 
 Supply a per-SNP annotation table and the sampler learns an SBayesRC-style

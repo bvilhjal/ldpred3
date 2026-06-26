@@ -178,6 +178,45 @@ Two further options complete the SBayesRC picture:
   genome-wide LD is never materialised (it matches the dense version on
   block-diagonal LD). This is what the pipeline's `--method annot` uses.
 
+## Bivariate (two-trait) LDpred2
+
+`ldpred2_auto_bivariate` jointly fits **two traits that share one LD reference**.
+Each variant is null (both effects zero) with probability `1 − p`, or causal with
+an effect *pair* `(β₁ⱼ, β₂ⱼ) ~ N(0, Σ)` for a learned 2×2 covariance `Σ` whose
+off-diagonal is the genetic covariance. The Gibbs step is an explicit 2×2
+mixture: a bivariate Bayes factor decides inclusion (`d ~ N(0, E+Σ)` vs
+`N(0, E)`, where `E` is the sampling-noise covariance of the two residual
+estimates), and a causal SNP draws from the bivariate posterior
+`N(VE⁻¹d, V)`, `V = (E⁻¹ + Σ⁻¹)⁻¹`. `p` and `Σ` are re-estimated each sweep
+(`Σ` from the sampled causal effect pairs), and the genetic correlation
+`r_g = β₁ᵀRβ₂ / √(h²₁h²₂)` is reported.
+
+```python
+from pyldpred2 import ldpred2_auto_bivariate
+res = ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
+res.beta1_est, res.beta2_est      # adjusted effects for the two traits
+res.h2, res.rg                    # (h2_1, h2_2) and the genetic correlation
+```
+
+When the traits are genetically correlated, the better-powered one sharpens the
+other's effects through the off-diagonal of `Σ` (and through the shared causal
+indicator, which pools *where* the signal is). On simulated data the recovered
+`r_g` is accurate and a low-powered trait predicts markedly better jointly than
+alone, with the gain growing in `r_g`:
+
+| true r_g | trait-2 alone | trait-2 joint | gain |
+|---------:|--------------:|--------------:|-----:|
+| 0.0 | 0.807 | 0.902 | +0.096 |
+| 0.6 | 0.802 | 0.907 | +0.105 |
+| 0.9 | 0.812 | 0.947 | +0.136 |
+
+(trait 2 at N=3000 vs trait 1 at N=100000, h²=0.5; the rg=0 gain comes from the
+shared causal *locations*, the rest from correlated effect sizes.)
+`ldpred2_auto_bivariate_blocks` is the streaming genome-wide version. Both GWAS
+must use the same LD/ancestry; sample overlap is handled via `cross_corr` (the
+cross-trait sampling-noise correlation, default 0 for independent samples).
+Regenerate the table with `benchmarks/bivariate_demo.py`.
+
 ## Robustness: `allow_jump_sign`
 
 `ldpred2_grid` / `ldpred2_auto` / `ldpred2_auto_infer` accept
