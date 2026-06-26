@@ -81,6 +81,34 @@ def test_rg_zero_is_recovered():
     assert abs(res.rg) < 0.25, res.rg
 
 
+def test_h2_cap_skips_prepass_and_validations():
+    import pytest
+    k, nb = 200, 8
+    blocks, chols, idxs = _blocks(nb, k, seed=9)
+    m = nb * k
+    rng = np.random.default_rng(0)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 40000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
+
+    # h2_cap path (skips the univariate pre-pass) still recovers rg
+    res = ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
+                                        burn_in=80, num_iter=120,
+                                        h2_cap=(0.5, 0.5), seed=1)
+    assert abs(res.rg - 0.6) < 0.25
+
+    with pytest.raises(ValueError, match="cross_corr"):
+        ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
+                                      cross_corr=1.0, h2_cap=(0.5, 0.5))
+
+    overlap = [(blocks[0][0], np.arange(0, k)),
+               (blocks[1][0], np.arange(k // 2, k // 2 + k))] + \
+        [(blocks[i][0], np.arange(i * k, (i + 1) * k)) for i in range(2, nb)]
+    with pytest.raises(ValueError, match="partition"):
+        ldpred2_auto_bivariate_blocks(overlap, bh1, bh2, 40000, 40000,
+                                      h2_cap=(0.5, 0.5))
+
+
 def test_borrows_strength_for_low_power_trait():
     """With high rg, a low-N trait should predict better jointly than alone."""
     k, nb = 200, 12

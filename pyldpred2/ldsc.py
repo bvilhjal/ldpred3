@@ -223,6 +223,9 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     Returns
     -------
     LDSCRgResult
+        ``rg`` is undefined when a marginal heritability estimate is
+        non-positive (low power / heavy noise); it is then large and not
+        meaningful, as with the reference LDSC. Check ``.h2`` in that case.
     """
     b1 = np.asarray(beta_hat1, dtype=float)
     b2 = np.asarray(beta_hat2, dtype=float)

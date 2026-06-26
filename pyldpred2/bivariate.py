@@ -240,14 +240,43 @@ class BivariateResult:
 def ldpred2_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
                                   h2_init=0.1, p_init=0.1, rg_init=0.0,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
-                                  h2_bounds=(1e-4, 1.0), seed=None):
+                                  h2_bounds=(1e-4, 1.0), h2_cap=None, seed=None):
     """Genome-wide (streaming) bivariate LDpred2-auto.
 
-    ``blocks`` is the ``[(R, idx), ...]`` list (contiguous ``idx`` tiling
+    ``blocks`` is the ``[(R, idx), ...]`` list (contiguous ``idx`` partitioning
     ``0..m-1``) used elsewhere; the two traits' summary statistics share it. The
-    effect sweeps run one block at a time while ``p`` and ``Sigma`` are pooled
+    effect sweeps run one block at a time while ``pi`` and ``Sigma`` are pooled
     globally, so the genome-wide LD is never materialised.
+
+    Parameters
+    ----------
+    blocks : list of (ndarray, ndarray)
+        Per-block LD ``(R, idx)`` partitioning ``0..m-1``.
+    beta_hat1, beta_hat2 : array_like (m,)
+        Standardized marginal effects for the two traits (same variant order).
+    n_eff1, n_eff2 : float or array_like
+        Per-trait GWAS sample sizes.
+    h2_init, p_init, rg_init : float
+        Initial heritability, causal fraction and genetic correlation.
+    cross_corr : float, default 0.0
+        Cross-trait correlation of the sampling noise (sample overlap); must lie
+        in ``(-1, 1)``. 0 assumes independent GWAS samples.
+    burn_in, num_iter : int
+        Burn-in and sampling sweeps.
+    h2_bounds : (float, float)
+        Clamp range for the per-trait heritabilities.
+    h2_cap : (float, float), optional
+        Per-trait heritability ceilings used to anchor the slab variances. If
+        omitted they are estimated with a univariate ``-auto`` pre-pass per trait
+        (two extra fits); pass known heritabilities to skip that cost.
+    seed : int or None
+
+    Returns
+    -------
+    BivariateResult
     """
+    if not -1.0 < cross_corr < 1.0:
+        raise ValueError("cross_corr must be in (-1, 1)")
     bh1 = np.ascontiguousarray(beta_hat1, dtype=np.float64)
     bh2 = np.ascontiguousarray(beta_hat2, dtype=np.float64)
     m = bh1.shape[0]
@@ -257,15 +286,17 @@ def ldpred2_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     n2 = _as_n_vector(n_eff2, m)
 
     fblocks = []
-    for R, idx in blocks:
+    for R, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
         idx = np.asarray(idx)
-        if idx.shape[0] > 1 and not np.array_equal(idx, np.arange(idx[0], idx[0] + idx.shape[0])):
-            raise ValueError("blocks must use contiguous indices")
+        if not np.array_equal(idx, np.arange(idx[0], idx[0] + idx.shape[0])):
+            raise ValueError("each block must use contiguous indices")
         fblocks.append((np.ascontiguousarray(R, dtype=np.float32),
                         int(idx[0]), int(idx.shape[0])))
-    covered = sum(k for _, _, k in fblocks)
-    if covered != m:
-        raise ValueError("blocks must tile 0..m-1 exactly once")
+    starts = [s for _, s, _ in fblocks]
+    ends = [s + k for _, s, k in fblocks]
+    if (sum(k for _, _, k in fblocks) != m or starts[0] != 0
+            or starts[1:] != ends[:-1] or ends[-1] != m):
+        raise ValueError("blocks must partition 0..m-1 exactly once")
 
     lo, hi = h2_bounds
     M = float(m)
@@ -273,13 +304,19 @@ def ldpred2_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # Anchor each trait's heritability ceiling to its own univariate-auto fit.
     # The weak trait's slab variance is poorly identified from its own data, so
     # without this it inflates by borrowing from a strong correlated trait; using
-    # the univariate h2 as the cap keeps the joint scale honest.
-    b1u = ldpred2_by_blocks(blocks, bh1, n1, method="auto",
-                            burn_in=burn_in, num_iter=num_iter, seed=seed)
-    b2u = ldpred2_by_blocks(blocks, bh2, n2, method="auto",
-                            burn_in=burn_in, num_iter=num_iter, seed=seed)
-    h2_1c = min(max(_gv_blocks(fblocks, b1u), lo), hi)
-    h2_2c = min(max(_gv_blocks(fblocks, b2u), lo), hi)
+    # the univariate h2 as the cap keeps the joint scale honest. A caller that
+    # already knows the heritabilities can pass h2_cap to skip the two fits.
+    if h2_cap is None:
+        b1u = ldpred2_by_blocks(blocks, bh1, n1, method="auto",
+                                burn_in=burn_in, num_iter=num_iter, seed=seed)
+        b2u = ldpred2_by_blocks(blocks, bh2, n2, method="auto",
+                                burn_in=burn_in, num_iter=num_iter, seed=seed)
+        h2_1c = _gv_blocks(fblocks, b1u)
+        h2_2c = _gv_blocks(fblocks, b2u)
+    else:
+        h2_1c, h2_2c = h2_cap
+    h2_1c = min(max(h2_1c, lo), hi)
+    h2_2c = min(max(h2_2c, lo), hi)
 
     rng = np.random.default_rng(seed)
     curr1 = np.zeros(m); curr2 = np.zeros(m)
