@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from pyldpred2 import ldpred2_auto_annot, ldpred2_auto
+from pyldpred2 import (ldpred2_auto_annot, ldpred2_auto_annot_blocks,
+                       ldpred2_auto)
 from pyldpred2.annot import _Phi, _Phi_inv, _truncnorm
 from pyldpred2.prs import standardize_dosage
 
@@ -88,6 +89,37 @@ def test_continuous_annotation_recovered():
     assert res.enrichment["score"] > 0.2
 
 
+def test_learn_variance_recovers_effect_size_map():
+    # Functional SNPs have larger effects -> variance coefficient phi_func > 0.
+    pv = 0.0
+    for seed in range(4):
+        rng = np.random.default_rng(seed)
+        N, m, h2, p = 3000, 400, 0.5, 0.08
+        G = _geno(N, m, 0.6, rng); Z = standardize_dosage(G)
+        R = (Z.T @ Z) / N; np.fill_diagonal(R, 1.0)
+        func = (rng.random(m) < 0.2).astype(float)
+        causal = rng.random(m) < p
+        sd = np.where(func > 0, 3.0, 1.0)
+        beta = np.zeros(m)
+        beta[causal] = rng.normal(0, 1, causal.sum()) * sd[causal]
+        beta *= np.sqrt(h2 / (beta @ (R @ beta)))
+        y = Z @ beta + rng.normal(0, np.sqrt(0.5), N)
+        bhat = (Z.T @ y) / N
+        res = ldpred2_auto_annot(R, bhat, N, func[:, None], learn="eb",
+                                 learn_variance=True, burn_in=80, num_iter=200,
+                                 seed=1, annotation_names=["func"])
+        assert res.phi is not None
+        pv += res.variance_enrichment["func"]
+    assert pv / 4 > 0.25, pv / 4
+
+
+def test_variance_off_gives_no_phi():
+    R, bhat, N, A, _, _ = _data(0)
+    res = ldpred2_auto_annot(R, bhat, N, A, learn_variance=False, burn_in=40,
+                             num_iter=80, seed=1)
+    assert res.phi is None and res.variance_enrichment is None
+
+
 def test_intercept_only_runs_like_uniform():
     # No informative annotation (a constant column) -> still produces sane betas.
     R, bhat, N, A, ZB, yte = _data(0)
@@ -148,6 +180,57 @@ def test_validation_errors():
         ldpred2_auto_annot(R, bhat, N, A, theta_every=0)
     with pytest.raises(ValueError, match="p_init"):
         ldpred2_auto_annot(R, bhat, N, A, p_init=1.5)
+
+
+def test_streaming_matches_dense_on_block_diagonal():
+    # Genome-wide streaming version == dense version on block-diagonal LD.
+    rng = np.random.default_rng(2)
+    m, nblk, N = 600, 3, 3000
+    k = m // nblk
+    blocks = []
+    Rfull = np.zeros((m, m))
+    G = np.empty((N, m))
+    for b in range(nblk):
+        Gb = _geno(N, k, 0.6, rng)
+        Zb = standardize_dosage(Gb)
+        Rb = (Zb.T @ Zb) / N; np.fill_diagonal(Rb, 1.0)
+        idx = np.arange(b * k, (b + 1) * k)
+        blocks.append((Rb.astype(np.float32), idx))
+        Rfull[np.ix_(idx, idx)] = Rb; G[:, idx] = Gb
+    Z = standardize_dosage(G)
+    func = (rng.random(m) < 0.2).astype(float)
+    causal = rng.random(m) < np.where(func > 0, 0.2, 0.01)
+    beta = np.zeros(m)
+    beta[causal] = rng.normal(0, np.sqrt(0.5 / causal.sum()), causal.sum())
+    y = Z @ beta + rng.normal(0, np.sqrt(0.5), N)
+    bhat = (Z.T @ y) / N
+    A = func[:, None]
+    d = ldpred2_auto_annot(Rfull, bhat, N, A, learn="eb", burn_in=60,
+                           num_iter=150, seed=1, annotation_names=["func"])
+    s = ldpred2_auto_annot_blocks(blocks, bhat, N, A, learn="eb", burn_in=60,
+                                  num_iter=150, seed=1, annotation_names=["func"])
+    assert np.corrcoef(d.beta_est, s.beta_est)[0, 1] > 0.99
+    assert abs(d.enrichment["func"] - s.enrichment["func"]) < 0.3
+    assert s.enrichment["func"] > 0.4
+
+
+def test_streaming_rejects_bad_blocks():
+    R = (0.5 ** np.abs(np.subtract.outer(np.arange(50), np.arange(50)))).astype(np.float32)
+    blocks = [(R, np.arange(50))]
+    with pytest.raises(ValueError, match="tile"):           # only covers 0..49
+        ldpred2_auto_annot_blocks(blocks, np.zeros(60), 5000, np.ones((60, 1)))
+
+
+def test_read_annotations_aligns_by_id(tmp_path):
+    from pyldpred2.annot import read_annotations
+    p = tmp_path / "annot.tsv"
+    p.write_text("SNP\tcoding\tconserved\n"
+                 "rs1\t1\t0.5\n"
+                 "rs3\t0\t0.2\n")               # rs0, rs2 absent -> zeros
+    A, names = read_annotations(str(p), ["rs0", "rs1", "rs2", "rs3"])
+    assert names == ["coding", "conserved"]
+    np.testing.assert_array_equal(A[:, 0], [0, 1, 0, 0])
+    np.testing.assert_allclose(A[:, 1], [0, 0.5, 0, 0.2])
 
 
 def test_sparse_ld_rejected():

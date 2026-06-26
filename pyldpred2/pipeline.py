@@ -46,6 +46,7 @@ from .prs import prs_score, allele_frequency
 from .qc import qc_sumstats, sd_consistency_mask
 from .ldpred2 import standardize_betas, ldpred2_by_blocks
 from .infer import ldpred2_auto_infer
+from .annot import ldpred2_auto_annot_blocks, read_annotations
 
 __all__ = ["PRSResult", "run_ldpred2_prs", "load_genotypes"]
 
@@ -74,6 +75,7 @@ class PRSResult:
     harmonize_log: dict
     qc_log: dict = None         # sumstats + SD-consistency QC counts
     inference: dict = None      # h2/p/r2 estimates (+CIs) if infer=True
+    enrichment: dict = None     # annotation enrichment if method="annot"
 
     def __repr__(self):
         nm = self.harmonize_log.get("n_matched", len(self.beta_adjusted))
@@ -82,6 +84,9 @@ class PRSResult:
             i = self.inference
             inf = (f", h2={i['h2_est']:.3f}, p={i['p_est']:.4g}, "
                    f"r2={i['r2_est']:.3f}")
+        if self.enrichment:
+            top = max(self.enrichment.items(), key=lambda kv: abs(kv[1]))
+            inf += f", top_annot={top[0]}={top[1]:+.2f}"
         return (f"PRSResult(n_samples={len(self.scores)}, "
                 f"n_variants={nm}{inf})")
 
@@ -90,6 +95,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     n_eff=None, ld_prefix=None, ld_ridge=0.0,
                     sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
                     qc=True, qc_params=None, sd_check=True,
+                    annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred2_kwargs):
     """Run the full sumstats -> LDpred2 -> PRS pipeline.
@@ -189,8 +195,24 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     blocks = compute_ld_blocks(ld_dos, chrom=chrom, block_size=block_size,
                                ridge=ld_ridge)
     beta_std, _ = standardize_betas(h.beta, h.se, h.n_eff)
-    beta_adj = ldpred2_by_blocks(blocks, beta_std, h.n_eff, method=method,
-                                 **ldpred2_kwargs)
+
+    enrichment = None
+    if method == "annot":
+        if annotations is None:
+            raise ValueError("method='annot' requires annotations=<file or array>")
+        matched_ids = geno.variants.id[h.var_index]
+        if isinstance(annotations, str):
+            A, annot_names = read_annotations(annotations, matched_ids)
+        else:
+            A, annot_names = np.asarray(annotations, dtype=float), None
+        ares = ldpred2_auto_annot_blocks(blocks, beta_std, h.n_eff, A,
+                                         annotation_names=annot_names,
+                                         **(annot_params or {}))
+        beta_adj = ares.beta_est
+        enrichment = ares.enrichment
+    else:
+        beta_adj = ldpred2_by_blocks(blocks, beta_std, h.n_eff, method=method,
+                                     **ldpred2_kwargs)
     scores = prs_score(target_dos, beta_adj, standardize=True)
 
     inference = None
@@ -221,6 +243,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
         harmonize_log=h.log,
         qc_log=qc_log,
         inference=inference,
+        enrichment=enrichment,
     )
 
 
@@ -239,7 +262,10 @@ def _main(argv=None):
     g.add_argument("--plink", help="target PLINK prefix (.bed/.bim/.fam)")
     g.add_argument("--bgen", help="target BGEN file (.bgen)")
     ap.add_argument("--sample", default=None, help="BGEN .sample file")
-    ap.add_argument("--method", default="auto", choices=["auto", "grid", "inf"])
+    ap.add_argument("--method", default="auto",
+                    choices=["auto", "grid", "inf", "annot"])
+    ap.add_argument("--annotations", default=None,
+                    help="per-SNP annotation table (for --method annot)")
     ap.add_argument("--block-size", type=int, default=500)
     ap.add_argument("--n-eff", type=float, default=None)
     ap.add_argument("--ld-prefix", default=None, help="external LD panel prefix")
@@ -258,6 +284,7 @@ def _main(argv=None):
         args.sumstats, args.plink or args.bgen, method=args.method,
         block_size=args.block_size, n_eff=args.n_eff, sample_path=args.sample,
         ld_prefix=args.ld_prefix, ld_ridge=args.ld_ridge, ncores=args.ncores,
+        annotations=args.annotations,
         qc=not args.no_qc, sd_check=not args.no_sd_check, infer=args.infer)
 
     with open(args.out, "w") as fh:
@@ -284,6 +311,10 @@ def _main(argv=None):
               f"  p={i['p_est']:.4f} {tuple(round(x, 4) for x in i['p_ci'])}"
               f"  predictive r2={i['r2_est']:.3f} "
               f"{tuple(round(x, 3) for x in i['r2_ci'])}")
+    if res.enrichment:
+        top = sorted(res.enrichment.items(), key=lambda kv: -abs(kv[1]))[:8]
+        print("annotation enrichment: "
+              + ", ".join(f"{nm}={c:+.2f}" for nm, c in top))
     print(f"wrote {len(res.scores)} PRS to {args.out}")
 
 
