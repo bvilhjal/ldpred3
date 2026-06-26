@@ -15,18 +15,29 @@ libR = LIB["R"].astype(np.float64)
 K, NB = 500, 12
 M = NB * K
 N = 50000
+NREF = 2000               # reference-panel size for the LD used in fitting
+SHRINK = 0.05
 REPS = 5
 
-blocks, chols, idxs = [], [], []
+# pop = true LD (generates the GWAS); ref = LD estimated from a finite reference
+# panel (used to fit) -- the mismatch is the dominant real-world error.
+rng0 = np.random.default_rng(0)
+pop, chols, ref, idxs = [], [], [], []
 for b in range(NB):
     R = libR[b % libR.shape[0]].copy()
-    blocks.append((R.astype(np.float32), np.arange(b * K, (b + 1) * K)))
-    chols.append(np.linalg.cholesky(R + 1e-4 * np.eye(K)))
+    cp = np.linalg.cholesky(R + 1e-4 * np.eye(K))
+    Z = rng0.standard_normal((NREF, K)) @ cp.T
+    Z = (Z - Z.mean(0)) / Z.std(0)
+    Rr = (1 - SHRINK) * ((Z.T @ Z) / NREF) + SHRINK * np.eye(K)
+    pop.append((R.astype(np.float32), np.arange(b * K, (b + 1) * K)))
+    ref.append((Rr.astype(np.float32), np.arange(b * K, (b + 1) * K)))
+    chols.append(cp)
     idxs.append(np.arange(b * K, (b + 1) * K))
 
-ell = ld_scores(blocks)                         # population LD scores (no bias adj)
-dense = np.zeros((M, M), dtype=np.float32)      # block-diagonal LD for the infer step
-for R, idx in blocks:
+blocks = pop                                    # for the genetic-variance helper
+ell = ld_scores(ref, n_ref=NREF)               # LD scores from the reference panel
+dense = np.zeros((M, M), dtype=np.float32)      # reference block-diagonal LD (infer)
+for R, idx in ref:
     dense[np.ix_(idx, idx)] = R
 
 
@@ -37,15 +48,15 @@ def make_beta(model, h2, rng):
     else:                                       # sparse p=0.01
         c = rng.random(M) < 0.01
         beta[c] = rng.normal(0, 1, c.sum())
-    gv = sum(beta[ix] @ (blocks[b][0].astype(float) @ beta[ix])
+    gv = sum(beta[ix] @ (pop[b][0].astype(float) @ beta[ix])
              for b, ix in enumerate(idxs))
     return beta * np.sqrt(h2 / gv) if gv > 0 else beta
 
 
-def sumstats(beta, rng):
+def sumstats(beta, rng):                        # GWAS from the TRUE population LD
     bhat = np.empty(M)
     for b, ix in enumerate(idxs):
-        bhat[ix] = blocks[b][0].astype(float) @ beta[ix] + \
+        bhat[ix] = pop[b][0].astype(float) @ beta[ix] + \
             (chols[b] @ rng.standard_normal(K)) / np.sqrt(N)
     return bhat
 
