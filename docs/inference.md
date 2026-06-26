@@ -85,26 +85,32 @@ res = ldsc_h2(n_eff * beta_hat**2, ell, n_eff)   # chi2 = (beta_hat/se)^2
 res.h2, res.h2_se, res.intercept              # h2 (+jackknife SE) and confounding
 ```
 
-Both methods estimate h² from the **same** summary statistics. On coalescent LD
+Both methods estimate h² from the **same** summary statistics. The benchmark is
+**realistic**: the GWAS is generated from the true population LD, but both methods
+are fitted with an LD matrix/scores estimated from a finite **reference panel**
+(`Nref=2000`) — the mismatch that dominates real-world error. On coalescent LD
 (m=6000, N=50000, 5 reps), against the known true h²:
 
 | architecture | h²_true | LDSC | LDpred2-auto |
 |--------------|--------:|-----:|-------------:|
-| infinitesimal | 0.20 | 0.196 ± 0.017 | 0.199 ± 0.003 |
-| infinitesimal | 0.50 | 0.494 ± 0.040 | 0.499 ± 0.004 |
-| sparse (p=0.01) | 0.20 | 0.215 ± 0.031 | 0.199 ± 0.003 |
-| sparse (p=0.01) | 0.50 | 0.543 ± 0.071 | 0.497 ± 0.005 |
+| infinitesimal | 0.20 | 0.215 ± 0.020 | 0.218 ± 0.002 |
+| infinitesimal | 0.50 | 0.541 ± 0.047 | 0.554 ± 0.001 |
+| sparse (p=0.01) | 0.20 | 0.239 ± 0.027 | 0.208 ± 0.004 |
+| sparse (p=0.01) | 0.50 | 0.606 ± 0.059 | 0.530 ± 0.009 |
 
-(± is the across-replicate SD.) Two takeaways:
+(± is the across-replicate SD.) Takeaways:
 
-- **They agree with the truth and with each other** — an independent validation
-  of the LDpred2-auto h². LDSC's intercept stays ~1 (no confounding simulated).
-- **LDpred2-auto is far more precise** (≈5–15× smaller SD): it uses the full LD
-  likelihood, whereas LDSC is a two-parameter moment regression that discards
-  most of the information. LDSC also degrades more under **sparsity** (SD 0.071
-  and a slight upward bias at sparse h²=0.5), because its infinitesimal
-  `E[χ²]` assumption is stressed and a few large effects lever the slope —
-  LDpred2-auto's spike-and-slab matches the architecture and stays tight.
+- **Reference-panel LD mismatch biases both estimators upward** (e.g. true
+  h²=0.5 → ~0.54–0.55). This is the realistic regime — with the *true* LD both
+  are essentially unbiased, so the bias is an LD-quality effect, not a flaw in
+  either estimator. (LDSC is *more* biased under sparsity, 0.61 at sparse h²=0.5,
+  where its infinitesimal `E[χ²]` assumption is most stressed.)
+- **LDpred2-auto is much more precise** (often ~10× smaller SD): it uses the full
+  LD likelihood, whereas LDSC is a two-parameter moment regression that discards
+  most of the information. The trade-off is that its tiny SD makes the LD-mismatch
+  bias the dominant error — so treat the point estimate as having a systematic
+  component set by the LD reference quality, which the LDSC intercept and the
+  across-method agreement help diagnose.
 
 LDSC's value is its **robustness and speed** (a moment regression, no sampling)
 and its intercept as a confounding diagnostic; LDpred2-auto's is **efficiency**.
@@ -112,8 +118,8 @@ Regenerate with `benchmarks/compare_ldsc_infer.py`.
 
 The same holds for the **genetic correlation** between two traits: `ldsc_rg`
 (cross-trait LD Score regression, `E[z₁z₂] = intercept + (√(N₁N₂)·ρ_g/M)·ℓ`)
-cross-checks the `r_g` from `ldpred2_auto_bivariate`. Both are ~unbiased; the
-bivariate sampler is several-fold more precise (e.g. at true r_g=0.9, LDSC
-0.90 ± 0.04 vs bivariate LDpred2 0.93 ± 0.01). See
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred2) and
+cross-checks the `r_g` from `ldpred2_auto_bivariate`. Under the same realistic
+reference-panel LD both are roughly unbiased and the bivariate sampler is ~2×
+more precise (at true r_g=0.9, LDSC 0.86 ± 0.07 vs bivariate LDpred2 0.90 ± 0.04).
+See [algorithm.md](algorithm.md#bivariate-two-trait-ldpred2) and
 `benchmarks/compare_bivariate_rg.py`.

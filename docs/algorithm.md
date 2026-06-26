@@ -208,41 +208,47 @@ by its own **univariate** heritability (the weak trait's variance is otherwise
 under-identified and inflates by borrowing from the strong one), and the variance
 updates are damped.
 
-On simulated data (trait 2 at N=3000 vs trait 1 at N=100000, h²=0.5) the recovered
-`r_g` is accurate and the weak trait improves when the traits share structure,
-with **no harm** when they don't:
+The benchmark is **realistic**: the GWAS is generated from the true population
+(coalescent) LD but fitted with an LD matrix estimated from a finite reference
+panel (`Nref=2000`). For a genuinely under-powered trait 2 (N=2000, polygenic)
+vs a well-powered trait 1 (N=100000), the gain grows with `r_g` and there is **no
+harm** at low `r_g` or disjoint architectures:
 
 | architecture | trait-2 alone | trait-2 joint | gain | r_g est |
 |--------------|--------------:|--------------:|-----:|--------:|
-| shared, r_g=0.0 | 0.800 | 0.903 | +0.103 | +0.05 |
-| shared, r_g=0.6 | 0.814 | 0.825 | +0.011 | +0.69 |
-| shared, r_g=0.9 | 0.808 | 0.875 | +0.067 | +0.93 |
-| disjoint causal | 0.814 | 0.809 | −0.005 | +0.01 |
-| partial overlap 50% | 0.762 | 0.770 | +0.007 | −0.03 |
+| shared, r_g=0.0 | 0.641 | 0.636 | −0.005 | +0.02 |
+| shared, r_g=0.3 | 0.647 | 0.641 | −0.006 | +0.39 |
+| shared, r_g=0.6 | 0.655 | 0.694 | +0.039 | +0.67 |
+| shared, r_g=0.9 | 0.658 | 0.830 | **+0.173** | +0.89 |
+| disjoint causal | 0.630 | 0.610 | −0.020 | −0.08 |
 
-(The rg=0 *shared* gain is legitimate — the traits genuinely share causal
-*locations*, which the well-powered trait pins down. Use the joint fit to boost
-an **under-powered** trait; for an already well-powered trait there is little to
-borrow and a small overhead.) `ldpred2_auto_bivariate_blocks` is the streaming
-genome-wide version. Both GWAS must use the same LD/ancestry; sample overlap is
-handled via `cross_corr` (default 0 for independent samples). Regenerate with
-`benchmarks/bivariate_demo.py`.
+The benefit is **real and large only where it should be** — a weak trait highly
+correlated with a strong one — and negligible otherwise. It scales with how
+under-powered trait 2 is: at N=1000 the rg=0.9 gain reaches ~+0.28, while for an
+already well-powered trait 2 there is little to borrow and a small overhead, so
+use the joint fit to boost an under-powered trait. (An earlier "fit with the true
+LD" benchmark overstated the gains — they shrink markedly under realistic
+reference-panel LD.) `ldpred2_auto_bivariate_blocks` is the streaming genome-wide
+version; both GWAS must use the same LD/ancestry, and sample overlap is handled
+via `cross_corr` (default 0). Regenerate with `benchmarks/bivariate_demo.py`.
 
 **Genetic correlation vs bivariate LDSC.** The reported `r_g` has an independent
-cross-check in `ldsc_rg` (cross-trait LD Score regression). Both are ~unbiased
-from the same summary statistics; bivariate LDpred2 is several-fold more precise
-(it uses the full LD likelihood), exactly as in the univariate h² comparison
-(see [benchmarks.md](benchmarks.md#cross-check-ld-score-regression) /
-[inference.md](inference.md)):
+cross-check in `ldsc_rg` (cross-trait LD Score regression). Under the same
+realistic reference-panel LD both are roughly unbiased from the same summary
+statistics; bivariate LDpred2 is ~2× more precise (it uses the full LD
+likelihood):
 
 | true r_g | bivariate LDSC | bivariate LDpred2 |
 |---------:|---------------:|------------------:|
-| 0.0 | −0.03 ± 0.20 | +0.01 ± 0.06 |
-| 0.3 | 0.28 ± 0.16 | 0.32 ± 0.05 |
-| 0.6 | 0.60 ± 0.09 | 0.64 ± 0.02 |
-| 0.9 | 0.90 ± 0.04 | 0.93 ± 0.01 |
+| 0.0 | −0.04 ± 0.24 | −0.01 ± 0.15 |
+| 0.3 | 0.29 ± 0.18 | 0.30 ± 0.16 |
+| 0.6 | 0.59 ± 0.15 | 0.60 ± 0.13 |
+| 0.9 | 0.86 ± 0.07 | 0.90 ± 0.04 |
 
-Regenerate with `benchmarks/compare_bivariate_rg.py`.
+(With the *true* LD the SEs are several-fold smaller and LDpred2's precision edge
+larger; the reference-panel mismatch is what makes both noisier and narrows the
+gap — the realistic picture.) Regenerate with
+`benchmarks/compare_bivariate_rg.py`.
 
 ## Robustness: `allow_jump_sign`
 
