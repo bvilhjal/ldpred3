@@ -19,7 +19,7 @@ from .ldpred2 import (
 )
 from .pipeline import run_ldpred2_prs, PRSResult, load_genotypes
 from .infer import ldpred2_auto_infer, InferResult
-from .annot import ldpred2_auto_annot, AnnotResult
+from .annot import ldpred2_auto_annot, ldpred2_auto_annot_blocks, AnnotResult
 
 __all__ = [
     "standardize_betas",
@@ -38,6 +38,7 @@ __all__ = [
     "ldpred2_auto_infer",
     "InferResult",
     "ldpred2_auto_annot",
+    "ldpred2_auto_annot_blocks",
     "AnnotResult",
 ]
 

@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from pyldpred2 import ldpred2_auto_annot, ldpred2_auto
+from pyldpred2 import (ldpred2_auto_annot, ldpred2_auto_annot_blocks,
+                       ldpred2_auto)
 from pyldpred2.annot import _Phi, _Phi_inv, _truncnorm
 from pyldpred2.prs import standardize_dosage
 
@@ -179,6 +180,45 @@ def test_validation_errors():
         ldpred2_auto_annot(R, bhat, N, A, theta_every=0)
     with pytest.raises(ValueError, match="p_init"):
         ldpred2_auto_annot(R, bhat, N, A, p_init=1.5)
+
+
+def test_streaming_matches_dense_on_block_diagonal():
+    # Genome-wide streaming version == dense version on block-diagonal LD.
+    rng = np.random.default_rng(2)
+    m, nblk, N = 600, 3, 3000
+    k = m // nblk
+    blocks = []
+    Rfull = np.zeros((m, m))
+    G = np.empty((N, m))
+    for b in range(nblk):
+        Gb = _geno(N, k, 0.6, rng)
+        Zb = standardize_dosage(Gb)
+        Rb = (Zb.T @ Zb) / N; np.fill_diagonal(Rb, 1.0)
+        idx = np.arange(b * k, (b + 1) * k)
+        blocks.append((Rb.astype(np.float32), idx))
+        Rfull[np.ix_(idx, idx)] = Rb; G[:, idx] = Gb
+    Z = standardize_dosage(G)
+    func = (rng.random(m) < 0.2).astype(float)
+    causal = rng.random(m) < np.where(func > 0, 0.2, 0.01)
+    beta = np.zeros(m)
+    beta[causal] = rng.normal(0, np.sqrt(0.5 / causal.sum()), causal.sum())
+    y = Z @ beta + rng.normal(0, np.sqrt(0.5), N)
+    bhat = (Z.T @ y) / N
+    A = func[:, None]
+    d = ldpred2_auto_annot(Rfull, bhat, N, A, learn="eb", burn_in=60,
+                           num_iter=150, seed=1, annotation_names=["func"])
+    s = ldpred2_auto_annot_blocks(blocks, bhat, N, A, learn="eb", burn_in=60,
+                                  num_iter=150, seed=1, annotation_names=["func"])
+    assert np.corrcoef(d.beta_est, s.beta_est)[0, 1] > 0.99
+    assert abs(d.enrichment["func"] - s.enrichment["func"]) < 0.3
+    assert s.enrichment["func"] > 0.4
+
+
+def test_streaming_rejects_bad_blocks():
+    R = (0.5 ** np.abs(np.subtract.outer(np.arange(50), np.arange(50)))).astype(np.float32)
+    blocks = [(R, np.arange(50))]
+    with pytest.raises(ValueError, match="tile"):           # only covers 0..49
+        ldpred2_auto_annot_blocks(blocks, np.zeros(60), 5000, np.ones((60, 1)))
 
 
 def test_sparse_ld_rejected():
