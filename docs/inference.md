@@ -123,3 +123,29 @@ reference-panel LD both are roughly unbiased and the bivariate sampler is ~2×
 more precise (at true r_g=0.9, LDSC 0.86 ± 0.07 vs bivariate LDpred2 0.90 ± 0.04).
 See [algorithm.md](algorithm.md#bivariate-two-trait-ldpred2) and
 `benchmarks/compare_bivariate_rg.py`.
+
+## Accuracy vs running time
+
+Both axes together, on the realistic reference-panel setup (single core, m=6000,
+N₁=50000, N₂=20000, 5 reps; Numba warmed up). `benchmarks/inference_benchmark.py`:
+
+| quantity | method | estimate (truth) | time / run |
+|----------|--------|-----------------:|-----------:|
+| h² = 0.50 | LDSC (`ldsc_h2`) | 0.65 ± 0.16 | **0.03 s** |
+| h² = 0.50 | LDpred2-auto (`ldpred2_auto_infer`) | 0.54 ± 0.01 | 5.1 s |
+| r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.57 ± 0.17 | **0.08 s** |
+| r_g = 0.60 | bivariate LDpred2 (`ldpred2_auto_bivariate`) | 0.63 ± 0.08 | 0.4 s |
+
+- **LDSC is the cheap, robust option** — a moment regression, milliseconds, with a
+  confounding intercept; the cost is large variance (and, under LD mismatch, more
+  bias, especially for sparse traits where the h² estimate here runs to ~0.65).
+- **The LDpred2 estimators are markedly more precise** (≈5–15× smaller SD) at a
+  time cost. For **h²** that cost is ~150× (`ldpred2_auto_infer` runs many MCMC
+  chains on a *dense* LD), whereas for **r_g** it is only ~5× — because the
+  bivariate sampler **streams LD blocks**. The dense-only inference path is the
+  bottleneck; a streaming `-auto` inference (as for the bivariate sampler) is the
+  natural next step and would close most of the h² time gap.
+
+Use LDSC for a fast first pass / confounding check and the LDpred2 estimators
+when precision matters, reading their point estimates with the LD-mismatch bias
+in mind.
