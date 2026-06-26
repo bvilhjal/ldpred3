@@ -18,7 +18,44 @@ import numpy as np
 
 from .prs import standardize_dosage
 
-__all__ = ["compute_ld_blocks"]
+__all__ = ["compute_ld_blocks", "save_ld_blocks", "load_ld_blocks"]
+
+
+def save_ld_blocks(path, blocks, variant_ids):
+    """Save computed LD ``blocks`` and the variant IDs they cover to ``path``.
+
+    ``blocks`` is the ``[(R, idx), ...]`` list from :func:`compute_ld_blocks`;
+    ``variant_ids`` are the IDs of the variants in column order (one per
+    column the blocks tile). Stored as a compressed ``.npz`` so a later run can
+    reload the LD instead of recomputing it (see :func:`load_ld_blocks`).
+    """
+    ids = np.asarray(variant_ids, dtype=object).astype(str)
+    sizes = np.array([R.shape[0] for R, _ in blocks], dtype=np.int64)
+    if int(sizes.sum()) != len(ids):
+        raise ValueError("variant_ids length does not match the blocks' columns")
+    arrays = {f"R{i}": np.asarray(R, dtype=np.float32)
+              for i, (R, _) in enumerate(blocks)}
+    np.savez_compressed(path, ids=ids, sizes=sizes, **arrays)
+
+
+def load_ld_blocks(path):
+    """Load LD blocks saved by :func:`save_ld_blocks`.
+
+    Returns ``(blocks, variant_ids)`` with ``blocks`` a ``[(R, idx), ...]`` list
+    (contiguous ``idx`` reconstructed from the stored block sizes) ready for
+    :func:`ldpred2.ldpred2_by_blocks`, and ``variant_ids`` the column-order IDs
+    the caller should align its summary statistics to.
+    """
+    with np.load(path, allow_pickle=False) as z:
+        ids = z["ids"].astype(str)
+        sizes = z["sizes"]
+        blocks, start = [], 0
+        for i, k in enumerate(sizes):
+            k = int(k)
+            R = z[f"R{i}"]
+            blocks.append((R, np.arange(start, start + k)))
+            start += k
+    return blocks, ids
 
 
 def _block_bounds(chrom, block_size):

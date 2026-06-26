@@ -17,7 +17,14 @@ from .ldpred2 import (
     block_diagonal_ld,
     optimal_ld_blocks,
 )
-from .pipeline import run_ldpred2_prs, PRSResult, load_genotypes
+from .pipeline import (
+    run_ldpred2_prs,
+    PRSResult,
+    preflight_prs,
+    score_from_weights,
+    ScoreResult,
+    load_genotypes,
+)
 from .infer import ldpred2_auto_infer, InferResult
 from .annot import ldpred2_auto_annot, ldpred2_auto_annot_blocks, AnnotResult
 
@@ -34,6 +41,9 @@ __all__ = [
     "optimal_ld_blocks",
     "run_ldpred2_prs",
     "PRSResult",
+    "preflight_prs",
+    "score_from_weights",
+    "ScoreResult",
     "load_genotypes",
     "ldpred2_auto_infer",
     "InferResult",
