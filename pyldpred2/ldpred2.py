@@ -1374,6 +1374,80 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
     return avg_beta, h2_path[:count], p_path[:count], count
 
 
+def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
+                                seed, h2_bounds, sample_every):
+    """Streaming auto sampler that also retains thinned *sampled* effect vectors.
+
+    The block-diagonal counterpart of :func:`_gibbs_kernel_sample`: it estimates
+    ``h2``/``p`` each sweep (global hyper-parameters, pooled across blocks) and
+    stores ``curr_beta`` every ``sample_every`` post-burn-in sweeps for the
+    LDpred2-auto predictive-r2 estimator -- without ever materialising a
+    genome-wide LD matrix. Returns ``(avg_beta, h2_path, p_path, samples)`` with
+    ``samples`` an ``(n_saved, m)`` float32 array.
+    """
+    beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
+    n = np.ascontiguousarray(n, dtype=np.float64)
+    m = beta_hat.shape[0]
+    h2_min, h2_max = h2_bounds
+    rng = np.random.default_rng(seed)
+    n_const = bool(n.size > 0 and n.min() == n.max())
+    n0 = float(n[0]) if n_const else 0.0
+
+    cache = {}
+    fblocks = []
+    for cb, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
+        key = id(cb)
+        if key not in cache:
+            cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
+        idx = np.asarray(idx)
+        fblocks.append((cache[key], int(idx[0]), int(idx.shape[0])))
+
+    curr_beta = np.zeros(m)
+    Rb = np.zeros(m)
+    avg_beta = np.zeros(m)
+    post_means = np.zeros(m)
+    h2_path = np.empty(num_iter)
+    p_path = np.empty(num_iter)
+    max_saved = num_iter // sample_every + 1
+    samples = np.zeros((max_saved, m), dtype=np.float32)
+    count = 0
+    n_saved = 0
+
+    for it in range(burn_in + num_iter):
+        c1 = h2 / (m * p)
+        log_prior_odds = np.log1p(-p) - np.log(p)
+        unif = rng.random(m)
+        gauss = rng.standard_normal(m)
+        resync = (it % 100 == 0)
+        nb_causal = 0
+        gv = 0.0
+        for cbf, start, k in fblocks:
+            sl = slice(start, start + k)
+            nbc, gvb = _gibbs_one_sweep_jit(
+                cbf, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
+                unif[sl], gauss[sl], c1, log_prior_odds, False,
+                n_const, n0, resync)
+            nb_causal += nbc
+            gv += gvb
+
+        p = float(rng.beta(1.0 + nb_causal, 1.0 + m - nb_causal))
+        h2 = min(max(gv, h2_min), h2_max)
+
+        if it >= burn_in:
+            avg_beta += post_means
+            h2_path[count] = h2
+            p_path[count] = p
+            if count % sample_every == 0:
+                samples[n_saved] = curr_beta
+                n_saved += 1
+            count += 1
+
+    if count == 0:
+        count = 1
+    avg_beta /= count
+    return avg_beta, h2_path[:count], p_path[:count], samples[:n_saved]
+
+
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr,
                    warm_start=False, tol=0.0, check_every=50,

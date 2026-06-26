@@ -22,8 +22,11 @@ res.p_est,  res.p_ci       # polygenicity + 95% CI
 res.r2_est, res.r2_ci      # predicted out-of-sample r² + 95% CI
 ```
 
-It operates on a dense LD matrix (one block, or a block-diagonal genome via
-`block_diagonal_ld`). Pass `ncores=k` to run the chains in parallel processes.
+It accepts either a **dense** LD matrix (one block, or a block-diagonal genome
+via `block_diagonal_ld`) **or a list of per-block `(R, idx)` matrices**. The
+blocks form is *streamed* — chains run one LD block at a time and the genome-wide
+LD is never materialised — so it scales to genome-wide SNP counts. Pass
+`ncores=k` to run the chains in parallel processes.
 
 ## From the pipeline
 
@@ -40,10 +43,10 @@ res = run_ldpred2_prs("gwas.txt.gz", "chr1", method="auto", infer=True)
 res.inference   # {"h2_est", "h2_ci", "p_est", "p_ci", "r2_est", "r2_ci", ...}
 ```
 
-Because the estimator is dense, the pipeline assembles a dense block-diagonal LD
-and guards on size (`infer_max_variants`, default 30000) — so use it at
-**chromosome / curated-SNP scale**. Streaming genome-wide inference (millions of
-SNPs, as in bigsnpr's SFBM) is a future extension.
+The pipeline passes the per-block LD straight to the **streaming** inference, so
+`--infer` runs genome-wide without assembling a dense LD matrix (the old
+`infer_max_variants` cap is no longer enforced and is kept only for backwards
+compatibility).
 
 ## Validation
 
@@ -151,11 +154,10 @@ independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially
   both heritabilities *proportionally* and largely cancels in the ratio. So a
   fast marginal r_g is a reasonable first pass, where a marginal h² is useless.
 - **The LDpred2 estimators are the most precise** (≈5–15× smaller SD than LDSC)
-  at a time cost: ~150× for **h²** (`ldpred2_auto_infer` runs many MCMC chains on
-  a *dense* LD) but only ~5× for **r_g**, because the bivariate sampler **streams
-  LD blocks**. The dense-only inference path is the bottleneck; a streaming
-  `-auto` inference (as for the bivariate sampler) would close most of the h²
-  time gap.
+  at a time cost: in this timing both run many MCMC chains, so they are slower
+  than the moment regressions. (The h² timing above used the dense path; passing
+  per-block LD makes `ldpred2_auto_infer` **stream** like the bivariate sampler,
+  removing the dense `O(m²)` cost at genome scale.)
 
 Use a marginal pass for a quick `r_g` sanity check, LDSC for a fast LD-correct h²
 and the confounding intercept, and the LDpred2 estimators when precision matters

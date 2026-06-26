@@ -116,15 +116,17 @@ def test_pipeline_infer_reports_h2_p_r2(tmp_path):
     assert inf["r2_ci"][0] <= inf["r2_est"] <= inf["r2_ci"][1]
 
 
-def test_pipeline_infer_size_guard(tmp_path):
+def test_pipeline_infer_streams_past_old_cap(tmp_path):
+    # Inference now streams block-diagonal LD, so it runs even when the number of
+    # variants exceeds the old dense-assembly cap (no size-guard error).
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=5)
-    try:
-        run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200,
-                        infer=True, infer_max_variants=100)
-    except ValueError as e:
-        assert "infer_max_variants" in str(e)
-    else:
-        raise AssertionError("expected size-guard ValueError")
+    res = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+                          num_iter=120, burn_in=60, seed=1, infer=True,
+                          infer_max_variants=100,          # below m=400; ignored now
+                          infer_params={"n_chains": 6, "burn_in": 80,
+                                        "num_iter": 100})
+    assert res.inference is not None
+    assert 0 < res.inference["h2_est"] < 1.5
 
 
 def test_pipeline_method_annot(tmp_path):
