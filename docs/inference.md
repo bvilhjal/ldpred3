@@ -131,21 +131,32 @@ N₁=50000, N₂=20000, 5 reps; Numba warmed up). `benchmarks/inference_benchmar
 
 | quantity | method | estimate (truth) | time / run |
 |----------|--------|-----------------:|-----------:|
-| h² = 0.50 | LDSC (`ldsc_h2`) | 0.65 ± 0.16 | **0.03 s** |
-| h² = 0.50 | LDpred2-auto (`ldpred2_auto_infer`) | 0.54 ± 0.01 | 5.1 s |
-| r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.57 ± 0.17 | **0.08 s** |
+| h² = 0.50 | marginal — no LD | 9.60 ± 1.01 | **0.0001 s** |
+| h² = 0.50 | LDSC (`ldsc_h2`) | 0.65 ± 0.16 | 0.03 s |
+| h² = 0.50 | LDpred2-auto (`ldpred2_auto_infer`) | 0.54 ± 0.01 | 4.8 s |
+| r_g = 0.60 | marginal — no LD | 0.62 ± 0.10 | **0.0001 s** |
+| r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.57 ± 0.17 | 0.07 s |
 | r_g = 0.60 | bivariate LDpred2 (`ldpred2_auto_bivariate`) | 0.63 ± 0.08 | 0.4 s |
 
-- **LDSC is the cheap, robust option** — a moment regression, milliseconds, with a
-  confounding intercept; the cost is large variance (and, under LD mismatch, more
-  bias, especially for sparse traits where the h² estimate here runs to ~0.65).
-- **The LDpred2 estimators are markedly more precise** (≈5–15× smaller SD) at a
-  time cost. For **h²** that cost is ~150× (`ldpred2_auto_infer` runs many MCMC
-  chains on a *dense* LD), whereas for **r_g** it is only ~5× — because the
-  bivariate sampler **streams LD blocks**. The dense-only inference path is the
-  bottleneck; a streaming `-auto` inference (as for the bivariate sampler) is the
-  natural next step and would close most of the h² time gap.
+("marginal — no LD" is the naive moment estimator that assumes SNPs are
+independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially free.)
 
-Use LDSC for a fast first pass / confounding check and the LDpred2 estimators
-when precision matters, reading their point estimates with the LD-mismatch bias
-in mind.
+- **For h², the LD adjustment is the whole game.** The no-LD estimate is ~19×
+  too large (9.6 vs 0.5) because LD makes every causal variant's signal show up
+  in its correlated neighbours, which the naive sum double-counts. LDSC (the LD
+  scores) removes this for ~0.03 s; LDpred2-auto refines the point estimate
+  further at a real time cost.
+- **For r_g, LD matters far less.** The no-LD estimate (0.62 ± 0.10) is already
+  good — even tighter than LDSC — because LD inflates the cross-covariance and
+  both heritabilities *proportionally* and largely cancels in the ratio. So a
+  fast marginal r_g is a reasonable first pass, where a marginal h² is useless.
+- **The LDpred2 estimators are the most precise** (≈5–15× smaller SD than LDSC)
+  at a time cost: ~150× for **h²** (`ldpred2_auto_infer` runs many MCMC chains on
+  a *dense* LD) but only ~5× for **r_g**, because the bivariate sampler **streams
+  LD blocks**. The dense-only inference path is the bottleneck; a streaming
+  `-auto` inference (as for the bivariate sampler) would close most of the h²
+  time gap.
+
+Use a marginal pass for a quick `r_g` sanity check, LDSC for a fast LD-correct h²
+and the confounding intercept, and the LDpred2 estimators when precision matters
+(reading their point estimates with the LD-mismatch bias in mind).
