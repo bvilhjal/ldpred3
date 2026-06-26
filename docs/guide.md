@@ -15,10 +15,10 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 [reuse work](#8-re-using-work-saved-weights--cached-ld) ·
 [scaling](#9-scaling--performance) · [troubleshooting](#10-troubleshooting)
 
-> **In one line:** `pip install numpy numba` then
-> `pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt`.
-> Everything below is detail on the inputs, the model choice, and reading the
-> output.
+> **In one line:** `pip install . numba` then
+> `pyldpred2-prs --sumstats gwas.txt.gz --plink target --out prs.txt`
+> (`auto` is the default model). Everything below is detail on the inputs, the
+> model choice, and reading the output.
 
 ## 1. What you need
 
