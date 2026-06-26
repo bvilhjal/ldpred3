@@ -160,3 +160,46 @@ independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially
 Use a marginal pass for a quick `r_g` sanity check, LDSC for a fast LD-correct h²
 and the confounding intercept, and the LDpred2 estimators when precision matters
 (reading their point estimates with the LD-mismatch bias in mind).
+
+## Interval calibration
+
+Do the nominal 95% intervals actually cover the truth 95% of the time? Coverage
+over 40 replicates, under clean LD and under reference-panel LD
+(`benchmarks/calibration.py`):
+
+| 95% interval (truth) | clean LD | reference-panel LD |
+|----------------------|---------:|-------------------:|
+| LDpred2-auto h² (0.50) | 0.97 | **0.00** |
+| LDpred2-auto p (0.01) | 0.82 | **0.00** |
+| LDSC h² (0.50) | 0.90 | 0.93 |
+| LDSC r_g (0.50) | 0.70 | 0.72 |
+
+The headline is a real caution: **`ldpred2_auto_infer`'s intervals are
+well-calibrated only when the LD matches.** Under a realistic reference panel its
+coverage collapses to 0 — the LD-mismatch *bias* (≈0.04 for h²) dwarfs the
+posterior SE (≈0.01), so the tight interval never reaches the truth. Treat the
+LDpred2-auto interval as **precision, not accuracy**: it captures Monte-Carlo /
+sampling uncertainty but not the systematic error set by the LD reference.
+**LDSC's wider intervals stay honest** for h² (~0.9 in both conditions) because
+they absorb that bias; its `r_g` interval under-covers somewhat (~0.7), so widen
+it in practice. The robust uncertainty signal is **cross-method agreement** (and
+the LDSC intercept), not the LDpred2 interval width.
+
+## Sample overlap
+
+Overlapping GWAS samples correlate the two traits' sampling noise, which inflates
+a naive genetic correlation even when the traits are genetically independent.
+Both estimators have a correction — LDSC a free cross-trait *intercept*,
+`ldpred2_auto_bivariate` a `cross_corr` parameter — and both work
+(`benchmarks/sample_overlap.py`, noise correlation ρ_e=0.5, N=10000, h²=0.3):
+
+| true r_g | LDSC, intercept=0 | LDSC, free intercept | bivariate, cross_corr=0 | bivariate, cross_corr=ρ_e |
+|---------:|------------------:|---------------------:|------------------------:|--------------------------:|
+| 0.0 | 0.090 | −0.036 | 0.031 | −0.019 |
+| 0.5 | 0.562 | 0.505 | 0.547 | 0.496 |
+
+Uncorrected, overlap biases `r_g` upward (≈+0.06–0.09 at r_g=0); the free LDSC
+intercept and the bivariate `cross_corr=ρ_e` each remove it. If your two GWAS
+share samples, leave the LDSC intercept free and pass `cross_corr` (the
+overlap-induced noise correlation, ≈ the cross-trait LDSC intercept) to the
+bivariate sampler.
