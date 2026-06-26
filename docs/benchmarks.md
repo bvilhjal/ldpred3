@@ -133,6 +133,42 @@ Takeaways:
 > iterations *without* frequent θ updates also fixed it, but added nothing on top
 > of `theta_every=1`.
 
+### Per-method running time
+
+Fit time on the same setup (m=50,000 = 100 coalescent blocks of 500, single
+core, burn-in 80 / 200 sampling sweeps; `inf` is a direct per-block solve).
+Regenerate with `benchmarks/timing_bench.py`.
+
+| method | fit time (s) |
+|--------|-------------:|
+| inf    | 0.56 |
+| auto   | 2.13 |
+| grid   | 2.20 |
+| annot  | 3.99 |
+
+`inf` is cheapest (one linear solve per block, no sampling). `grid`/`auto` are
+the spike-and-slab Gibbs samplers and cost about the same. `annot` is ~1.9×
+`auto`: it runs the same per-block effect sweeps plus a logistic annotation-map
+update every sweep.
+
+**Cost of the annotation learner (`annot`).** The θ-update is an `O(m·K²)` IRLS
+solve in the number of annotations `K`, run every `theta_every` sweeps. Fit time
+(s) at m=50,000:
+
+| #annotations K | `theta_every=1` (default) | `theta_every=10` |
+|---------------:|--------------------------:|-----------------:|
+| 1   | 4.0  | 2.6 |
+| 5   | 4.5  | 2.6 |
+| 20  | 6.4  | 2.8 |
+| 50  | 10.5 | 3.1 |
+| 100 | 22.9 | 4.4 |
+
+So the convergence-correct default (`theta_every=1`) is nearly free for a handful
+of annotations but its `O(K²)` per-sweep cost takes over by `K ≈ 50`; with many
+annotations raise `theta_every` to amortise it. (Persisting the running `R@β`
+residual across chunks — rather than rebuilding it each θ-update — keeps the
+default cheap; without it `annot` was ~3× `auto` instead of ~1.9×.)
+
 ## Genotype-level simulation
 
 `pyldpred2/simulate.py` is a full end-to-end simulation: it generates genotypes with

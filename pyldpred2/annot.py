@@ -82,25 +82,34 @@ def read_annotations(path, variant_ids):
 # Jitted effect-update kernel for a chunk of sweeps at a fixed per-SNP p_j.
 # --------------------------------------------------------------------------- #
 def _annot_chunk(corr, beta_hat, n, p_j, slab_j, h2_min, h2_max, n_sweeps, seed,
-                 init_beta):
+                 init_beta, rb_in, resync):
     """Run ``n_sweeps`` point-normal sweeps at fixed per-SNP causal prob ``p_j``
     and per-SNP slab variance ``slab_j``.
 
-    Returns ``(curr_beta, h2, pip_sum, rb_sum, m2_sum)``: the per-SNP posterior
-    inclusion probability, the Rao-Blackwellised effect, and the posterior
+    Returns ``(curr_beta, h2, pip_sum, rb_sum, m2_sum, Rb)``: the per-SNP
+    posterior inclusion probability, the Rao-Blackwellised effect, the posterior
     second moment ``postp*(mean^2 + var)`` (used to learn the variance map),
-    summed over the chunk. ``Rb`` is resynced from ``init_beta`` at the start.
+    summed over the chunk, and the running residual ``Rb = R @ curr_beta``.
+
+    ``Rb`` is *maintained across chunks*: the caller passes the previous chunk's
+    ``rb_in`` and only when ``resync`` is set is it rebuilt from ``init_beta``
+    (to clear float32 drift, as the plain sampler does every 100 sweeps). This
+    avoids the O(nnz*k) rebuild on every chunk, which dominates when ``theta`` is
+    updated frequently (small ``theta_every``).
     """
     np.random.seed(seed)
     m = beta_hat.shape[0]
     curr_beta = init_beta.copy()
-    Rb = np.zeros(m)
-    for k in range(m):
-        bk = curr_beta[k]
-        if bk != 0.0:
-            ck = corr[k]
-            for i in range(m):
-                Rb[i] += ck[i] * bk
+    if resync:
+        Rb = np.zeros(m)
+        for k in range(m):
+            bk = curr_beta[k]
+            if bk != 0.0:
+                ck = corr[k]
+                for i in range(m):
+                    Rb[i] += ck[i] * bk
+    else:
+        Rb = rb_in.copy()
 
     post_var = slab_j / (n * slab_j + 1.0)
     post_sd = np.sqrt(post_var)
@@ -142,7 +151,7 @@ def _annot_chunk(corr, beta_hat, n, p_j, slab_j, h2_min, h2_max, n_sweeps, seed,
             h2 = h2_min
         elif h2 > h2_max:
             h2 = h2_max
-    return curr_beta, h2, pip_sum, rb_sum, m2_sum
+    return curr_beta, h2, pip_sum, rb_sum, m2_sum, Rb
 
 
 _annot_chunk_jit = _jit(_annot_chunk)
@@ -388,6 +397,7 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
     chunk_seeds = ss.generate_state(2 * (burn_in + num_iter) // max(theta_every, 1) + 4)
 
     curr = np.zeros(m); h2 = float(h2_init)
+    rb = np.zeros(m)                               # running residual R @ curr
     avg = np.zeros(m); avg_rounds = 0
     done = 0; r = 0
     while done < burn_in + num_iter:
@@ -396,9 +406,10 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
         # per-SNP slab variance: exp(A phi) normalised so sum_j p_j slab_j = h2.
         rel = np.exp(np.clip(A @ phi, -10, 10)) if learn_variance else np.ones(m)
         slab_j = h2 * rel / max(np.sum(p_j * rel), 1e-12)
-        curr, h2, pip_sum, rb_sum, m2_sum = _annot_chunk_jit(
+        resync = (done % 100 == 0)                 # clear float32 drift, as in auto
+        curr, h2, pip_sum, rb_sum, m2_sum, rb = _annot_chunk_jit(
             corr, beta_hat, n, p_j, slab_j, float(lo), float(hi),
-            int(ns), int(chunk_seeds[r % len(chunk_seeds)]), curr)
+            int(ns), int(chunk_seeds[r % len(chunk_seeds)]), curr, rb, resync)
         if done >= burn_in:                       # post-burn-in: accumulate
             avg += rb_sum / ns
             avg_rounds += 1
@@ -454,6 +465,7 @@ def ldpred2_auto_annot_blocks(blocks, beta_hat, n_eff, annotations, *,
         (len(blks) + 1) * ((burn_in + num_iter) // max(theta_every, 1) + 2))
 
     curr = np.zeros(m); h2 = float(h2_init)
+    rb = np.zeros(m)                                # running residual, per block
     avg = np.zeros(m); avg_rounds = 0
     done = 0; sc = 0
     while done < burn_in + num_iter:
@@ -461,15 +473,17 @@ def ldpred2_auto_annot_blocks(blocks, beta_hat, n_eff, annotations, *,
         p_j = np.clip(1.0 / (1.0 + np.exp(-(A @ theta))), 1e-5, 0.99)
         rel = np.exp(np.clip(A @ phi, -10, 10)) if learn_variance else np.ones(m)
         slab_j = h2 * rel / max(np.sum(p_j * rel), 1e-12)
+        resync = (done % 100 == 0)                  # clear float32 drift
 
         pip_sum = np.zeros(m); rb_sum = np.zeros(m); m2_sum = np.zeros(m)
         h2_acc = 0.0
         for R, idx in blks:
-            cb, h2b, ps, rs, ms = _annot_chunk_jit(
+            cb, h2b, ps, rs, ms, rbb = _annot_chunk_jit(
                 R, beta_hat[idx], n[idx], p_j[idx], slab_j[idx],
-                0.0, 1e9, int(ns), int(seeds[sc % len(seeds)]), curr[idx])
+                0.0, 1e9, int(ns), int(seeds[sc % len(seeds)]), curr[idx],
+                rb[idx], resync)
             sc += 1
-            curr[idx] = cb
+            curr[idx] = cb; rb[idx] = rbb
             pip_sum[idx] = ps; rb_sum[idx] = rs; m2_sum[idx] = ms
             h2_acc += h2b
         h2 = float(np.clip(h2_acc, lo, hi))         # global heritability
