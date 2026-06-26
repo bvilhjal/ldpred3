@@ -32,7 +32,7 @@ import math
 
 import numpy as np
 
-__all__ = ["Sumstats", "read_sumstats"]
+__all__ = ["Sumstats", "read_sumstats", "detect_columns"]
 
 # Column aliases (lower-cased) -> canonical field.
 _ALIASES = {
@@ -116,6 +116,22 @@ def _build_colmap(header, overrides):
         else:
             colmap[field] = lower.index(col.strip().lower())
     return colmap
+
+
+def detect_columns(path, **col_overrides):
+    """Peek at the header and report the detected column mapping.
+
+    Returns ``(header, mapping)`` where ``header`` is the raw column list and
+    ``mapping`` is ``{canonical_field: column_name}`` for every field that was
+    resolved (via aliases or ``col_overrides``). Reads only the first line — use
+    it for a fast preflight before committing to a full run.
+    """
+    with _open(path) as fh:
+        first = fh.readline().rstrip("\n")
+    delim = _sniff_delimiter(first)
+    header = first.split(delim) if delim else first.split()
+    colmap = _build_colmap(header, col_overrides)
+    return header, {field: header[i] for field, i in colmap.items()}
 
 
 def _to_float(s):

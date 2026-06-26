@@ -47,6 +47,21 @@ res.harmonize_log   # matched / flipped / ambiguous / mismatched counts
 res.qc_log          # per-filter QC counts
 ```
 
+### Practical flags
+
+| Flag / argument | What it does |
+|-----------------|--------------|
+| `--dry-run` / `preflight_prs(...)` | detect columns, match IDs, preview harmonisation, then exit — no LD, no fit |
+| `--save-weights FILE` / `res.write_weights(FILE)` | write the fitted weights (`ID CHR POS A1 A2 WEIGHT`) for reuse |
+| `--weights FILE` / `score_from_weights(FILE, target)` | score a cohort from saved weights — no sumstats, LD or refit |
+| `--ld-out FILE` / `--ld-cache FILE` | save the computed LD blocks and reload them on later runs |
+
+`--save-weights` + `--weights` is the standard discovery → application split:
+fit once, then score any number of new cohorts cheaply. `--ld-out`/`--ld-cache`
+makes re-runs (different method, QC sweep) skip LD construction; the cache is
+keyed to its variant set and refuses to apply if the harmonised variants change.
+When `--annotations` is given the method defaults to `annot`.
+
 ## Supporting modules (each usable on its own)
 
 | Module          | What it does                                                           |

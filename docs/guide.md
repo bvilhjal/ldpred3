@@ -41,6 +41,20 @@ variants `mismatched`, your sumstats and genotypes use different builds or allel
 codings; if `qc_log` drops almost everything, check the column mapping and `N`.
 See [pipeline.md](pipeline.md) for every filter and file-format detail.
 
+**Check inputs first with `--dry-run`.** Before committing to a genome-wide run,
+preflight it — this detects the column mapping, matches IDs and previews
+harmonisation in seconds, without computing LD or fitting:
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --dry-run
+# detected columns: id=SNP, ea=A1, oa=A2, beta=BETA, se=SE, n_eff=N
+# matched 31204 / 31875 to the target (12 flipped, 41 ambiguous, ...)
+```
+
+If a required column is mis-detected, pass it explicitly via `sumstats_cols`
+(Python) or fix the header; a near-zero match rate means an ID/build mismatch.
+`preflight_prs(...)` returns the same report as a dict.
+
 ## 3. Choosing a model
 
 ```
@@ -143,7 +157,41 @@ or from the pipeline with `infer=True` / `--infer`. The estimator is dense, so
 use it at chromosome / curated-SNP scale (it guards at `infer_max_variants`,
 default 30000). Full method and validation in [inference.md](inference.md).
 
-## 7. Scaling & performance
+## 7. Re-using work: saved weights & cached LD
+
+Two flags avoid redoing the expensive parts when you score more cohorts or
+re-run with different settings.
+
+**Save the fitted weights, then score new cohorts for free.** The weights (one
+standardized effect per variant, with its allele) are the reusable product —
+scoring another cohort from them skips LD construction and the whole LDpred2 fit:
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink discovery --save-weights prs.weights.txt --out d.txt
+pyldpred2-prs --plink new_cohort --weights prs.weights.txt --out new.txt   # no sumstats / LD / refit
+```
+
+```python
+res.write_weights("prs.weights.txt")                 # from a PRSResult
+score_from_weights("prs.weights.txt", "new_cohort")  # -> ScoreResult
+```
+
+Weights are harmonised to each new target's alleles (sign-flipped where alleles
+are swapped), so a cohort with the opposite A1/A2 coding still scores correctly.
+
+**Cache the LD blocks** so re-runs (e.g. trying `grid` vs `auto`, or sweeping QC)
+don't recompute LD:
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --ld-out ld.npz   --out auto.txt
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method grid --ld-cache ld.npz --out grid.txt
+```
+
+The cache records the variant set it was built for; if your inputs/QC change so
+the harmonised variants differ, the run stops with a clear error rather than
+silently using stale LD — rebuild it with `--ld-out`.
+
+## 8. Scaling & performance
 
 - **Install Numba** (`pip install numba`). The inner sampler is JIT-compiled and
   cached; without it you get identical results but a much slower pure-Python
@@ -159,7 +207,7 @@ default 30000). Full method and validation in [inference.md](inference.md).
 - **Fewer iterations:** `warm_start=True` and adaptive stopping (`tol=`) on the
   samplers (algorithm.md).
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
