@@ -17,6 +17,10 @@ It matches the reference R implementation (`bigsnpr`) on accuracy while using
 **~2× less memory**, and scales to 2M SNPs single-threaded. See
 [docs/benchmarks.md](docs/benchmarks.md) for the full head-to-head.
 
+> **New here?** The [user guide](docs/guide.md) walks from a GWAS + target
+> dataset to a polygenic score, helps you pick a model, and lists the common
+> pitfalls.
+
 ### Install
 
 ```bash
@@ -45,14 +49,17 @@ formats and the module breakdown are in [docs/pipeline.md](docs/pipeline.md).
 
 ### Models
 
-| Function          | Model                                              | Hyper-parameters     |
-|-------------------|----------------------------------------------------|----------------------|
-| `ldpred2_inf`     | Infinitesimal (all variants causal, closed form)   | `h2`                 |
-| `ldpred2_grid`    | Point-normal / spike-and-slab (Gibbs sampler)      | `h2`, `p` (fixed)    |
-| `ldpred2_auto`    | Point-normal, estimates `h2` and `p` automatically | none (self-tuning)   |
+| Function             | Model                                              | Hyper-parameters     |
+|----------------------|----------------------------------------------------|----------------------|
+| `ldpred2_inf`        | Infinitesimal (all variants causal, closed form)   | `h2`                 |
+| `ldpred2_grid`       | Point-normal / spike-and-slab (Gibbs sampler)      | `h2`, `p` (fixed)    |
+| `ldpred2_auto`       | Point-normal, estimates `h2` and `p` automatically | none (self-tuning)   |
+| `ldpred2_auto_annot` | `auto` + a learned functional-annotation prior     | none (learns the map)|
 
-Helpers: `standardize_betas`, `ldpred2_by_blocks` (run a model per LD block,
-genome-wide), `block_diagonal_ld`, `optimal_ld_blocks`.
+`ldpred2_auto` is the default for most uses; reach for `ldpred2_auto_annot` when
+you have per-SNP annotations. The [user guide](docs/guide.md#3-choosing-a-model)
+has a decision tree. Helpers: `standardize_betas`, `ldpred2_by_blocks` (run a
+model per LD block, genome-wide), `block_diagonal_ld`, `optimal_ld_blocks`.
 
 ```python
 import numpy as np
@@ -130,6 +137,7 @@ python -m pytest tests/test_ldpred2.py     # prints recovery of true effects on 
 
 ### Documentation
 
+- [docs/guide.md](docs/guide.md) — **start here**: choose a model, run the pipeline, read the output, troubleshoot
 - [docs/pipeline.md](docs/pipeline.md) — end-to-end PRS pipeline, QC, file formats
 - [docs/inference.md](docs/inference.md) — h² / polygenicity / predictive-r² inference
 - [docs/benchmarks.md](docs/benchmarks.md) — full benchmarks, scaling, genotype-level simulation
