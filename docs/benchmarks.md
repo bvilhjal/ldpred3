@@ -308,3 +308,59 @@ moves the h² proxy roughly in proportion to `N_used`. There is even a mild twis
 because the extra shrinkage offsets the over-fit that noisy reference LD induces.
 A correct (or mildly conservative) `N` is fine; a wildly wrong one mostly
 mis-scales the heritability.
+
+## Accuracy across polygenicity, heritability and sample size
+
+How does PRS accuracy move with the three things that vary most across real
+traits? Each axis is swept from a baseline (p=0.01, h²=0.5, N=50000), holding the
+other two fixed, on realistic reference-panel LD (m=8000, Nref=2000, coalescent;
+genetic R² = squared correlation of the PRS with the true genetic value).
+`inf` is given the true h² (oracle); `auto` self-tunes. Regenerate with
+`benchmarks/sweep_p_h2_n.py`.
+
+**Sample size N** (p=0.01, h²=0.5):
+
+| N | marginal | inf | auto |
+|--------|---------:|----:|-----:|
+| 10000  | 0.585 | 0.812 | 0.946 |
+| 50000  | 0.609 | 0.911 | **0.969** |
+| 200000 | 0.614 | 0.935 | 0.950 |
+
+`auto` is strong even at N=10k and rises to ~0.97 — but note it **dips slightly at
+N=200k while `inf` keeps climbing**. That is the *reference-LD ceiling*: with a
+finite reference panel (Nref=2000), more GWAS data makes the sampler trust the
+(mismatched) LD harder and over-fit relative to the true LD. At very large N a
+better LD reference matters more than more samples (see
+[LD reference quality](#robustness-ld-reference-quality--sample-size)).
+
+**Heritability h²** (p=0.01, N=50000):
+
+| h² | marginal | inf | auto |
+|-----|---------:|----:|-----:|
+| 0.1 | 0.585 | 0.812 | 0.948 |
+| 0.3 | 0.605 | 0.891 | **0.971** |
+| 0.5 | 0.609 | 0.911 | 0.969 |
+| 0.8 | 0.611 | 0.923 | 0.963 |
+
+Genetic R² (PRS vs the *genetic* value) is fairly flat in h² for `auto` — the
+metric normalises out the heritability, so what it shows is that `auto` recovers
+the genetic component well across the range, given enough power. (`inf` improves
+with h² because higher h² sharpens its dense per-SNP estimates.) Phenotype-scale
+R² would instead scale ~linearly with h².
+
+**Polygenicity p** (h²=0.5, N=50000):
+
+| p | marginal | inf | auto |
+|-------|---------:|----:|-----:|
+| 0.001 | 0.599 | 0.914 | **0.969** |
+| 0.01  | 0.609 | 0.911 | **0.969** |
+| 0.1   | 0.618 | 0.910 | 0.922 |
+| 1.0 (infinitesimal) | 0.603 | 0.912 | 0.905 |
+
+This is the clearest axis: `auto` **excels on sparse architectures** (0.97 at
+p≤0.01) and **degrades toward the infinitesimal limit** (0.905 at p=1), where its
+spike-and-slab is mildly mis-specified and the matched `inf` model (0.912) edges
+it. `inf` is flat ~0.91 across p by construction (it assumes all variants causal,
+so sparsity neither helps nor hurts it). The practical reading: `auto` is the
+right default — it wins wherever there is concentrated signal and is only a hair
+behind a perfectly-matched `inf` when the trait is truly infinitesimal.
