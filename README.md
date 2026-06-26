@@ -102,6 +102,8 @@ scaling studies and the genotype-level simulation are in
   materialises a genome-wide LD matrix (~34× less RAM at 2M SNPs).
 - **Sparse / banded LD** backend with an iterative (CG) `inf` solver.
 - **Optimal LD-block splitting** (Privé 2022).
+- **Per-variant priors** (`prior_weights`) — annotation-informed causal
+  probabilities, SBayesRC-style.
 - **Warm start & adaptive stopping** to cut iterations.
 
 All of these are described in [docs/algorithm.md](docs/algorithm.md).

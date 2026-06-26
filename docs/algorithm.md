@@ -97,6 +97,36 @@ Two important caveats:
   accuracy as a fixed 2000-iteration run in ~100 iterations (~10× faster), with
   no loss (corr 1.000 vs the long run).
 
+## Per-variant priors (annotation-informed, SBayesRC-style)
+
+`ldpred2_grid` / `ldpred2_auto` accept `prior_weights` — a per-SNP relative
+causal propensity from functional annotations. Each SNP's causal probability
+becomes `p_j = p · prior_weights[j]` (clamped to `(0,1)`); with mean-1 weights
+the expected causal count and `h²` stay coherent. SNPs in functionally
+important regions (coding, conserved, enhancers, …) thus get a higher prior of
+being causal — the core idea of SBayesRC.
+
+```python
+ldpred2_grid(corr, beta_hat, n_eff, h2, p, prior_weights=w)   # w_j >= 0, mean ~1
+```
+
+This injects **new information**, so unlike a change of slab shape it can
+genuinely raise accuracy — but only when the annotations are trustworthy:
+
+- **Informative** weights raise held-out R² (the gain grows as power drops, when
+  more SNPs are borderline). On a single binary annotation in simulation the
+  lift is small (~1–2% relative); SBayesRC's larger real-data gains come from
+  many S-LDSC-calibrated annotations at genome scale.
+- **Misleading / uninformative** weights *lower* accuracy, more so at low power.
+  It is a "garbage-in" feature.
+- Equal weights reproduce the uniform-`p` point-normal model bit-for-bit.
+
+Only the inclusion probability is re-weighted here; the slab *variance* is left
+global. Scaling the effect-size variance by annotation is a further knob, but it
+must match a real annotation–effect-size relationship or it over-shrinks (it
+hurt in simulations where effect size was annotation-independent). Learning the
+annotation→prior map inside the sampler (full SBayesRC) is a future extension.
+
 ## Robustness: `allow_jump_sign`
 
 `ldpred2_grid` / `ldpred2_auto` / `ldpred2_auto_infer` accept
