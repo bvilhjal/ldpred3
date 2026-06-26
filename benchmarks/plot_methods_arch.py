@@ -36,7 +36,7 @@ for ax, N in zip(axes, Ns):
 axes[0].set_ylabel("Genetic R² (PRS vs true genetic value)")
 axes[-1].legend(frameon=False, fontsize=9, title="method")
 fig.suptitle("LDpred2 variants on realistic (coalescent) LD, by genetic "
-             "architecture — m=8000, h²=0.5", fontsize=11)
+             "architecture — m=50000, h²=0.5", fontsize=11)
 fig.tight_layout(rect=(0, 0, 1, 0.96))
 fig.savefig("methods_arch.png", dpi=130)
 print("wrote methods_arch.png")

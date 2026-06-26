@@ -70,14 +70,15 @@ real-data quirks the simulation can't, but needs multi-GB inputs.)
 
 ## Methods by genetic architecture (realistic LD)
 
-How do the LDpred2 variants compare across genetic architectures? Each block is
-a coalescent/msprime LD matrix (m=8000, h²=0.5); for each architecture we
-simulate true effects, generate summary statistics, fit every method, and
-measure the **genetic R²** — the squared correlation between the PRS and the
-true genetic value under population LD, `(β̂ᵀRβ)² / [(β̂ᵀRβ̂)(βᵀRβ)]` — averaged
-over 5 replicates. `grid` is given the oracle `(h²,p)`; `annot` gets one
-functional annotation (informative only in the last row). Regenerate with
-`benchmarks/bench_methods.py` / `benchmarks/plot_methods_arch.py`.
+How do the LDpred2 variants compare across genetic architectures? The genome is
+100 distinct coalescent/msprime LD blocks of 500 SNPs (m=50,000, h²=0.5); for
+each architecture we simulate true effects, generate summary statistics, fit
+every method, and measure the **genetic R²** — the squared correlation between
+the PRS and the true genetic value under population LD,
+`(β̂ᵀRβ)² / [(β̂ᵀRβ̂)(βᵀRβ)]` — averaged over 5 replicates. `grid` is given the
+oracle `(h²,p)`; `annot` gets one functional annotation (informative only in the
+last row). Regenerate with `benchmarks/bench_methods.py` /
+`benchmarks/plot_methods_arch.py`.
 
 ![Methods by architecture](../benchmarks/methods_arch_benchmark.png)
 
@@ -85,31 +86,44 @@ Genetic R² at **N = 10,000** (the lower-power regime separates the methods):
 
 | architecture | marginal | inf | grid | auto | annot |
 |--------------|---------:|----:|-----:|-----:|------:|
-| infinitesimal       | 0.555 | **0.820** | 0.818 | 0.816 | 0.813 |
-| sparse (p=0.01)     | 0.565 | 0.823 | 0.953 | 0.954 | **0.955** |
-| polygenic (p=0.2)   | 0.582 | 0.827 | **0.831** | 0.829 | 0.830 |
-| major locus         | 0.605 | 0.836 | **0.932** | 0.924 | 0.927 |
-| annotation-enriched | 0.591 | 0.823 | 0.917 | 0.918 | **0.921** |
+| infinitesimal       | 0.451 | **0.532** | 0.531 | 0.526 | 0.526 |
+| sparse (p=0.01)     | 0.460 | 0.541 | **0.747** | 0.746 | 0.661 |
+| polygenic (p=0.2)   | 0.442 | 0.530 | **0.530** | 0.528 | 0.529 |
+| major locus         | 0.459 | 0.533 | **0.685** | 0.672 | 0.661 |
+| annotation-enriched | 0.457 | 0.536 | **0.646** | 0.644 | 0.604 |
+
+Genetic R² at **N = 50,000** (higher power; everything shifts up and compresses):
+
+| architecture | marginal | inf | grid | auto | annot |
+|--------------|---------:|----:|-----:|-----:|------:|
+| infinitesimal       | 0.565 | **0.794** | 0.792 | 0.789 | 0.784 |
+| sparse (p=0.01)     | 0.575 | 0.797 | 0.942 | 0.942 | **0.942** |
+| polygenic (p=0.2)   | 0.559 | 0.791 | 0.797 | **0.797** | 0.796 |
+| major locus         | 0.574 | 0.794 | **0.905** | 0.903 | 0.905 |
+| annotation-enriched | 0.577 | 0.796 | 0.901 | 0.901 | **0.906** |
 
 Takeaways:
 
-- **The raw marginal PRS is always far behind** (~0.55–0.61) — the LD adjustment
-  is the first-order win.
-- **`inf` is architecture-robust but flat** (~0.82): it is the best model *only*
-  under a truly infinitesimal architecture, and leaves large gains on the table
-  whenever the trait is sparse or has major loci.
+- **The raw marginal PRS is always far behind** — the LD adjustment is the
+  first-order win (≈0.45→0.53 at N=10k, ≈0.57→0.79 at N=50k).
+- **`inf` is architecture-robust but flat**: it is the best model *only* under a
+  truly infinitesimal (or near-infinitesimal polygenic) architecture, and leaves
+  large gains on the table whenever the trait is sparse or has major loci.
 - **`grid`/`auto` win decisively on sparse and major-locus** architectures
-  (0.93–0.95 vs 0.82 for `inf`) — the spike-and-slab captures concentrated
-  signal.
-- **`auto` matches the oracle `grid`** (which is handed the true `h²` and `p`)
-  without any hyper-parameters — the practical default.
-- **`annot` ≈ `auto` everywhere, and edges ahead when the annotation is
-  informative** (annotation-enriched row). The margin is small here (one binary
-  annotation, near-saturation at high N) but consistent and never negative.
-
-At N = 50,000 the same ordering holds with everything shifted up and compressed
-(`inf` ~0.94; sparse/major-locus/annotated ~0.98–0.99) — see the right panel and
-`benchmarks/methods_arch_benchmark.csv`.
+  (e.g. 0.75/0.69 vs 0.53 for `inf` at N=10k) — the spike-and-slab captures
+  concentrated signal. **`auto` matches the oracle `grid`** (handed the true
+  `h²` and `p`) without any hyper-parameters — the practical default.
+- **`annot` is power-dependent.** At **N = 50,000** it tracks `auto`/`grid` and
+  edges ahead when the annotation is informative (annotation-enriched row,
+  0.906 vs 0.901). But at **N = 10,000 with 50k SNPs** the annotation learner
+  *underperforms* plain `grid`/`auto` on the concentrated architectures (sparse
+  0.66 vs 0.75; major-locus 0.66 vs 0.69; even the enriched row 0.60 vs 0.65).
+  Learning the global sparsity *and* the annotation map from the data is harder
+  at low per-SNP power and large `m`, so the self-tuned annotation prior is
+  noisier than a well-behaved fixed-`p` sampler there. The lesson matches
+  SBayesRC practice: annotation learning pays off with **many** calibrated
+  annotations and adequate power, not a single binary annotation in the
+  low-power corner — and it is not a free default below it.
 
 ## Genotype-level simulation
 
