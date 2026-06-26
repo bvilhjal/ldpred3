@@ -103,7 +103,8 @@ scaling studies and the genotype-level simulation are in
 - **Sparse / banded LD** backend with an iterative (CG) `inf` solver.
 - **Optimal LD-block splitting** (Privé 2022).
 - **Per-variant priors** (`prior_weights`) — annotation-informed causal
-  probabilities, SBayesRC-style.
+  probabilities, SBayesRC-style — either supplied, or **learned inside the
+  sampler** (`ldpred2_auto_annot`, EB or probit) returning enrichment estimates.
 - **Warm start & adaptive stopping** to cut iterations.
 
 All of these are described in [docs/algorithm.md](docs/algorithm.md).

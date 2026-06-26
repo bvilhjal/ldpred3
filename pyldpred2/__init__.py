@@ -19,6 +19,7 @@ from .ldpred2 import (
 )
 from .pipeline import run_ldpred2_prs, PRSResult, load_genotypes
 from .infer import ldpred2_auto_infer, InferResult
+from .annot import ldpred2_auto_annot, AnnotResult
 
 __all__ = [
     "standardize_betas",
@@ -36,6 +37,8 @@ __all__ = [
     "load_genotypes",
     "ldpred2_auto_infer",
     "InferResult",
+    "ldpred2_auto_annot",
+    "AnnotResult",
 ]
 
 __version__ = "0.1.0"

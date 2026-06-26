@@ -124,8 +124,35 @@ genuinely raise accuracy — but only when the annotations are trustworthy:
 Only the inclusion probability is re-weighted here; the slab *variance* is left
 global. Scaling the effect-size variance by annotation is a further knob, but it
 must match a real annotation–effect-size relationship or it over-shrinks (it
-hurt in simulations where effect size was annotation-independent). Learning the
-annotation→prior map inside the sampler (full SBayesRC) is a future extension.
+hurt in simulations where effect size was annotation-independent).
+
+### Learning the annotation map (SBayesRC)
+
+`ldpred2_auto_annot` learns the annotation→prior map *inside* the sampler, so
+the weights need not be supplied: each SNP's causal probability is
+`p_j = sigmoid(a_jᵀθ)` and `θ` is updated jointly with the effects. Two
+strategies (`learn=`):
+
+* **`"eb"`** — empirical-Bayes: a ridge-regularised logistic (Newton/IRLS) step
+  on the posterior inclusion probabilities. NumPy-only, fast, stable.
+* **`"probit"`** — fully Bayesian: a probit link with Albert–Chib (1993) data
+  augmentation (vectorised normal CDF / inverse-CDF), giving a conjugate
+  Gaussian draw of `θ`.
+
+```python
+from pyldpred2 import ldpred2_auto_annot
+res = ldpred2_auto_annot(corr, beta_hat, n_eff, annotations=A, learn="eb")
+res.beta_est, res.theta      # effects + learned enrichment coefficients
+```
+
+A ridge penalty on the non-intercept coefficients keeps it stable with many
+collinear annotations; the intercept absorbs the global `p`. In simulation the
+sampler **recovers the enrichment of an informative annotation (θ≈+1) and
+correctly ignores an irrelevant one (θ≈0)** — so, unlike a *fixed* bad prior, a
+learned one automatically down-weights unhelpful annotations (no "garbage-in"
+penalty), and the learned θ are directly interpretable as functional-enrichment
+estimates. It operates on a dense LD matrix; the genome-wide streaming path and
+annotation-driven effect-*variance* are the remaining extensions.
 
 ## Robustness: `allow_jump_sign`
 
