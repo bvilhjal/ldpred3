@@ -133,6 +133,41 @@ def test_explicit_column_override(tmp_path):
     np.testing.assert_allclose(ss.n_eff, [1000])
 
 
+def test_varying_per_variant_sample_size(tmp_path):
+    # Meta-analysis sumstats: N differs per SNP. It must parse per-variant and
+    # flow through the samplers / LDSC; and the per-SNP N path must reduce to the
+    # constant fast path when N happens to be constant.
+    from pyldpred2 import ldpred2_by_blocks, ld_scores, ldsc_h2
+
+    path = _write(tmp_path,
+        "SNP\tA1\tA2\tBETA\tSE\tN\n"
+        "rs0\tA\tG\t0.05\t0.02\t10000\n"
+        "rs1\tC\tT\t0.10\t0.02\t30000\n"
+        "rs2\tA\tT\t0.15\t0.02\t60000\n")
+    ss = read_sumstats(path)
+    np.testing.assert_array_equal(ss.n_eff, [10000, 30000, 60000])
+    assert ss.n_eff.min() != ss.n_eff.max()
+
+    m, k = 200, 100
+    rng = np.random.default_rng(0)
+    blocks = [(np.eye(k, dtype=np.float32), np.arange(b * k, (b + 1) * k))
+              for b in range(2)]
+    bhat = rng.normal(0, 0.01, m)
+    n_vec = np.linspace(8000, 60000, m)
+    be = ldpred2_by_blocks(blocks, bhat, n_vec, method="auto",
+                           burn_in=40, num_iter=60, seed=1)
+    assert np.all(np.isfinite(be))                       # varying N runs
+    h = ldsc_h2(n_vec * bhat ** 2, ld_scores(blocks), n_vec, n_blocks=20)
+    assert np.isfinite(h.h2)                             # LDSC accepts a vector N
+
+    # constant vector N == scalar N (per-SNP path matches the fast path)
+    v = ldpred2_by_blocks(blocks, bhat, np.full(m, 3e4), method="auto",
+                          burn_in=40, num_iter=60, seed=2)
+    s = ldpred2_by_blocks(blocks, bhat, 3e4, method="auto",
+                          burn_in=40, num_iter=60, seed=2)
+    np.testing.assert_allclose(v, s)
+
+
 def test_messy_rows_blank_and_extra_columns(tmp_path):
     # Blank lines tolerated; unknown trailing columns ignored.
     path = _write(tmp_path,
