@@ -117,8 +117,9 @@ scaling studies and the genotype-level simulation are in
 - **Bivariate (two-trait) LDpred2** (`ldpred2_auto_bivariate`) — jointly fits two
   traits sharing an LD reference, learning their genetic correlation so a
   well-powered trait sharpens a weaker correlated one.
-- **LD Score regression** (`ld_scores`, `ldsc_h2`) — a fast moment-based h²
-  estimate and confounding intercept, as an independent cross-check.
+- **LD Score regression** (`ld_scores`, `ldsc_h2`, `ldsc_rg`) — fast moment-based
+  h² and genetic-correlation estimates (+ confounding intercept), as independent
+  cross-checks of the LDpred2-auto / bivariate estimates.
 - **Warm start & adaptive stopping** to cut iterations.
 
 All of these are described in [docs/algorithm.md](docs/algorithm.md).

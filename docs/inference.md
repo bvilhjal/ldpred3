@@ -109,3 +109,11 @@ Both methods estimate h² from the **same** summary statistics. On coalescent LD
 LDSC's value is its **robustness and speed** (a moment regression, no sampling)
 and its intercept as a confounding diagnostic; LDpred2-auto's is **efficiency**.
 Regenerate with `benchmarks/compare_ldsc_infer.py`.
+
+The same holds for the **genetic correlation** between two traits: `ldsc_rg`
+(cross-trait LD Score regression, `E[z₁z₂] = intercept + (√(N₁N₂)·ρ_g/M)·ℓ`)
+cross-checks the `r_g` from `ldpred2_auto_bivariate`. Both are ~unbiased; the
+bivariate sampler is several-fold more precise (e.g. at true r_g=0.9, LDSC
+0.90 ± 0.04 vs bivariate LDpred2 0.93 ± 0.01). See
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred2) and
+`benchmarks/compare_bivariate_rg.py`.

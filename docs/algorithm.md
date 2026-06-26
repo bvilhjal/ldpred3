@@ -181,15 +181,14 @@ Two further options complete the SBayesRC picture:
 ## Bivariate (two-trait) LDpred2
 
 `ldpred2_auto_bivariate` jointly fits **two traits that share one LD reference**.
-Each variant is null (both effects zero) with probability `1 − p`, or causal with
-an effect *pair* `(β₁ⱼ, β₂ⱼ) ~ N(0, Σ)` for a learned 2×2 covariance `Σ` whose
-off-diagonal is the genetic covariance. The Gibbs step is an explicit 2×2
-mixture: a bivariate Bayes factor decides inclusion (`d ~ N(0, E+Σ)` vs
-`N(0, E)`, where `E` is the sampling-noise covariance of the two residual
-estimates), and a causal SNP draws from the bivariate posterior
-`N(VE⁻¹d, V)`, `V = (E⁻¹ + Σ⁻¹)⁻¹`. `p` and `Σ` are re-estimated each sweep
-(`Σ` from the sampled causal effect pairs), and the genetic correlation
-`r_g = β₁ᵀRβ₂ / √(h²₁h²₂)` is reported.
+Each variant takes one of **four** states — causal for neither trait, trait 1
+only, trait 2 only, or **both** — with probabilities `(π₀₀, π₁₀, π₀₁, π₁₁)`. A
+trait-1-causal effect is `N(0, s₁)`, a trait-2-causal one `N(0, s₂)`, and a
+*both*-causal pair is `N(0, Σ)` with `Σ = [[s₁, s₁₂],[s₁₂, s₂]]`; the
+off-diagonal `s₁₂` is the genetic covariance and the only place the traits
+couple. Each Gibbs step evaluates the four bivariate-Gaussian likelihoods of the
+residual estimate, samples a state, and draws the effects; `π` and `s₁₂` are
+re-estimated each sweep, and `r_g = β₁ᵀRβ₂ / √(h²₁h²₂)` is reported.
 
 ```python
 from pyldpred2 import ldpred2_auto_bivariate
@@ -198,24 +197,52 @@ res.beta1_est, res.beta2_est      # adjusted effects for the two traits
 res.h2, res.rg                    # (h2_1, h2_2) and the genetic correlation
 ```
 
-When the traits are genetically correlated, the better-powered one sharpens the
-other's effects through the off-diagonal of `Σ` (and through the shared causal
-indicator, which pools *where* the signal is). On simulated data the recovered
-`r_g` is accurate and a low-powered trait predicts markedly better jointly than
-alone, with the gain growing in `r_g`:
+**Why per-trait states (and not one shared causal indicator).** An earlier
+prototype used a single shared indicator (both traits causal at the same SNPs).
+That helps when the assumption holds but **hurts** badly when it doesn't — with
+disjoint causal variants it forced sharing and dropped the weak trait's accuracy
+by ~0.1. The four-state model *learns* whether causal variants co-occur (`π₁₁`),
+so disjoint traits drive `π₁₁ → 0` and the joint fit reduces to the independent
+ones. Two further safeguards keep it honest: each trait's slab variance is capped
+by its own **univariate** heritability (the weak trait's variance is otherwise
+under-identified and inflates by borrowing from the strong one), and the variance
+updates are damped.
 
-| true r_g | trait-2 alone | trait-2 joint | gain |
-|---------:|--------------:|--------------:|-----:|
-| 0.0 | 0.807 | 0.902 | +0.096 |
-| 0.6 | 0.802 | 0.907 | +0.105 |
-| 0.9 | 0.812 | 0.947 | +0.136 |
+On simulated data (trait 2 at N=3000 vs trait 1 at N=100000, h²=0.5) the recovered
+`r_g` is accurate and the weak trait improves when the traits share structure,
+with **no harm** when they don't:
 
-(trait 2 at N=3000 vs trait 1 at N=100000, h²=0.5; the rg=0 gain comes from the
-shared causal *locations*, the rest from correlated effect sizes.)
-`ldpred2_auto_bivariate_blocks` is the streaming genome-wide version. Both GWAS
-must use the same LD/ancestry; sample overlap is handled via `cross_corr` (the
-cross-trait sampling-noise correlation, default 0 for independent samples).
-Regenerate the table with `benchmarks/bivariate_demo.py`.
+| architecture | trait-2 alone | trait-2 joint | gain | r_g est |
+|--------------|--------------:|--------------:|-----:|--------:|
+| shared, r_g=0.0 | 0.800 | 0.903 | +0.103 | +0.05 |
+| shared, r_g=0.6 | 0.814 | 0.825 | +0.011 | +0.69 |
+| shared, r_g=0.9 | 0.808 | 0.875 | +0.067 | +0.93 |
+| disjoint causal | 0.814 | 0.809 | −0.005 | +0.01 |
+| partial overlap 50% | 0.762 | 0.770 | +0.007 | −0.03 |
+
+(The rg=0 *shared* gain is legitimate — the traits genuinely share causal
+*locations*, which the well-powered trait pins down. Use the joint fit to boost
+an **under-powered** trait; for an already well-powered trait there is little to
+borrow and a small overhead.) `ldpred2_auto_bivariate_blocks` is the streaming
+genome-wide version. Both GWAS must use the same LD/ancestry; sample overlap is
+handled via `cross_corr` (default 0 for independent samples). Regenerate with
+`benchmarks/bivariate_demo.py`.
+
+**Genetic correlation vs bivariate LDSC.** The reported `r_g` has an independent
+cross-check in `ldsc_rg` (cross-trait LD Score regression). Both are ~unbiased
+from the same summary statistics; bivariate LDpred2 is several-fold more precise
+(it uses the full LD likelihood), exactly as in the univariate h² comparison
+(see [benchmarks.md](benchmarks.md#cross-check-ld-score-regression) /
+[inference.md](inference.md)):
+
+| true r_g | bivariate LDSC | bivariate LDpred2 |
+|---------:|---------------:|------------------:|
+| 0.0 | −0.03 ± 0.20 | +0.01 ± 0.06 |
+| 0.3 | 0.28 ± 0.16 | 0.32 ± 0.05 |
+| 0.6 | 0.60 ± 0.09 | 0.64 ± 0.02 |
+| 0.9 | 0.90 ± 0.04 | 0.93 ± 0.01 |
+
+Regenerate with `benchmarks/compare_bivariate_rg.py`.
 
 ## Robustness: `allow_jump_sign`
 

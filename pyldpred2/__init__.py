@@ -27,7 +27,7 @@ from .pipeline import (
 )
 from .infer import ldpred2_auto_infer, InferResult
 from .annot import ldpred2_auto_annot, ldpred2_auto_annot_blocks, AnnotResult
-from .ldsc import ld_scores, ldsc_h2, LDSCResult
+from .ldsc import ld_scores, ldsc_h2, LDSCResult, ldsc_rg, LDSCRgResult
 from .bivariate import (ldpred2_auto_bivariate, ldpred2_auto_bivariate_blocks,
                         BivariateResult)
 
@@ -56,6 +56,8 @@ __all__ = [
     "ld_scores",
     "ldsc_h2",
     "LDSCResult",
+    "ldsc_rg",
+    "LDSCRgResult",
     "ldpred2_auto_bivariate",
     "ldpred2_auto_bivariate_blocks",
     "BivariateResult",

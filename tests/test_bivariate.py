@@ -86,9 +86,9 @@ def test_borrows_strength_for_low_power_trait():
     k, nb = 200, 12
     blocks, chols, idxs = _blocks(nb, k, seed=2)
     m = nb * k
-    N1, N2 = 80000, 8000        # trait 1 well powered, trait 2 weak
+    N1, N2 = 100000, 3000       # trait 1 well powered, trait 2 weak
     bi, uni = [], []
-    for rep in range(3):
+    for rep in range(4):
         rng = np.random.default_rng(20 + rep)
         b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.9, rng=rng)
         bh1 = _sumstats(blocks, chols, idxs, b1, N1, k, rng)

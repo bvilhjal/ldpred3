@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pyldpred2 import ld_scores, ldsc_h2
+from pyldpred2 import ld_scores, ldsc_h2, ldsc_rg
 
 
 def _ar1(k, rho):
@@ -68,6 +68,38 @@ def test_ldsc_intercept_near_one_without_confounding():
         ints.append(ldsc_h2(n * bhat ** 2, ell, n, n_blocks=50).intercept)
     # No stratification was simulated, so the intercept should average ~1.
     assert 0.9 < np.mean(ints) < 1.1, np.mean(ints)
+
+
+def test_ldsc_rg_recovers_genetic_correlation():
+    k, nb, n1, n2 = 200, 60, 40000, 20000
+    blocks, chols = _varied_blocks(nb, k, seed=5)
+    m = nb * k
+    idxs = [np.arange(b * k, (b + 1) * k) for b in range(nb)]
+    ell = ld_scores(blocks)
+
+    def gv(a, b):
+        return sum(a[ix] @ (blocks[i][0].astype(float) @ b[ix]) for i, ix in enumerate(idxs))
+
+    def sumstats(beta, n, rng):
+        bh = np.empty(m)
+        for i, ix in enumerate(idxs):
+            bh[ix] = blocks[i][0].astype(float) @ beta[ix] + \
+                (chols[i] @ rng.standard_normal(k)) / np.sqrt(n)
+        return bh
+
+    for rg_true in (0.0, 0.6):
+        ests = []
+        for rep in range(5):
+            rng = np.random.default_rng(80 + rep)
+            c = rng.random(m) < 0.05
+            L = np.linalg.cholesky([[1, rg_true], [rg_true, 1]])
+            raw = L @ rng.standard_normal((2, c.sum()))
+            b1 = np.zeros(m); b2 = np.zeros(m); b1[c] = raw[0]; b2[c] = raw[1]
+            b1 *= np.sqrt(0.5 / gv(b1, b1)); b2 *= np.sqrt(0.5 / gv(b2, b2))
+            res = ldsc_rg(sumstats(b1, n1, rng), sumstats(b2, n2, rng), ell, n1, n2,
+                          n_blocks=60)
+            ests.append(res.rg)
+        assert abs(np.mean(ests) - rg_true) < 0.15, (rg_true, np.mean(ests))
 
 
 def test_ldsc_constrained_intercept():
