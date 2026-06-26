@@ -29,7 +29,53 @@ import numpy as np
 
 from .ldpred2 import _jit, _stable_postp, _as_n_vector, SparseLD
 
-__all__ = ["AnnotResult", "ldpred2_auto_annot", "ldpred2_auto_annot_blocks"]
+__all__ = ["AnnotResult", "ldpred2_auto_annot", "ldpred2_auto_annot_blocks",
+           "read_annotations"]
+
+_ID_ALIASES = {"snp", "rsid", "rs", "id", "variant_id", "markername", "snpid"}
+
+
+def read_annotations(path, variant_ids):
+    """Read a per-SNP annotation table, aligned to ``variant_ids``.
+
+    The file is a delimited table (tab / comma / whitespace, optional ``.gz``)
+    with one column identifying the SNP (``SNP``/``rsid``/``id``/...) and the
+    remaining numeric columns being annotations. Rows are matched to
+    ``variant_ids`` by ID; variants absent from the file get all-zero
+    annotations (i.e. "no annotation").
+
+    Returns ``(A, names)`` with ``A`` of shape ``(len(variant_ids), K)`` and
+    ``names`` the annotation column headers.
+    """
+    import gzip
+    op = gzip.open if str(path).endswith(".gz") else open
+    with op(path, "rt") as fh:
+        first = fh.readline().rstrip("\n")
+        delim = "\t" if "\t" in first else ("," if "," in first else None)
+        header = first.split(delim) if delim else first.split()
+        lower = [h.strip().lower() for h in header]
+        id_col = next((i for i, h in enumerate(lower) if h in _ID_ALIASES), None)
+        if id_col is None:
+            raise ValueError(f"{path}: no SNP-id column found in header {header}")
+        annot_cols = [i for i in range(len(header)) if i != id_col]
+        names = [header[i] for i in annot_cols]
+        table = {}
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            f = line.split(delim) if delim else line.split()
+            try:
+                table[f[id_col]] = [float(f[i]) for i in annot_cols]
+            except (ValueError, IndexError):
+                continue
+    K = len(annot_cols)
+    A = np.zeros((len(variant_ids), K))
+    for r, vid in enumerate(variant_ids):
+        row = table.get(vid)
+        if row is not None:
+            A[r] = row
+    return A, names
 
 
 # --------------------------------------------------------------------------- #

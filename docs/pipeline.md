@@ -9,9 +9,26 @@ GWAS sumstats + genotypes (PLINK/BGEN)
   → read & harmonise (align effect alleles to A1, drop ambiguous/mismatched)
   → SD-consistency QC vs the reference panel
   → per-block LD from a reference panel (in-sample or external)
-  → ldpred2 (inf / grid / auto)
+  → ldpred2 (inf / grid / auto / annot)
   → per-individual PRS
 ```
+
+### Annotation-informed PRS (`--method annot`)
+
+Pass a per-SNP annotation table to learn an SBayesRC-style functional prior
+genome-wide and report the enrichment:
+
+```bash
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --method annot \
+    --annotations annot.tsv --out prs.txt
+# ... annotation enrichment: coding=+1.20, conserved=+0.80, ...
+```
+
+The annotation file is a delimited table with a SNP-id column (`SNP`/`rsid`/...)
+and numeric annotation columns; rows are matched to the GWAS variants by ID
+(variants absent from the file get all-zero annotations). The learned
+enrichment coefficients are in `PRSResult.enrichment`. This uses the streaming
+genome-wide learner, so it scales beyond the dense `--infer` path.
 
 From the command line:
 

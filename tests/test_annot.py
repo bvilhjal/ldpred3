@@ -221,6 +221,18 @@ def test_streaming_rejects_bad_blocks():
         ldpred2_auto_annot_blocks(blocks, np.zeros(60), 5000, np.ones((60, 1)))
 
 
+def test_read_annotations_aligns_by_id(tmp_path):
+    from pyldpred2.annot import read_annotations
+    p = tmp_path / "annot.tsv"
+    p.write_text("SNP\tcoding\tconserved\n"
+                 "rs1\t1\t0.5\n"
+                 "rs3\t0\t0.2\n")               # rs0, rs2 absent -> zeros
+    A, names = read_annotations(str(p), ["rs0", "rs1", "rs2", "rs3"])
+    assert names == ["coding", "conserved"]
+    np.testing.assert_array_equal(A[:, 0], [0, 1, 0, 0])
+    np.testing.assert_allclose(A[:, 1], [0, 0.5, 0, 0.2])
+
+
 def test_sparse_ld_rejected():
     from pyldpred2 import sparsify_ld
     R = 0.5 ** np.abs(np.subtract.outer(np.arange(40), np.arange(40)))

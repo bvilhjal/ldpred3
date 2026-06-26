@@ -127,6 +127,49 @@ def test_pipeline_infer_size_guard(tmp_path):
         raise AssertionError("expected size-guard ValueError")
 
 
+def test_pipeline_method_annot(tmp_path):
+    # method="annot": reads an annotation file, learns enrichment, scores predict.
+    rng = np.random.default_rng(3)
+    n, m = 800, 300
+    af = rng.uniform(0.1, 0.9, m)
+    func = (rng.random(m) < 0.2).astype(int)
+    G = rng.binomial(2, af, size=(n, m)).astype(np.int8)
+    V = VariantTable(np.array(["1"] * m, object),
+                     np.array([f"rs{i}" for i in range(m)], object),
+                     np.zeros(m), np.arange(1, m + 1, dtype=np.int64) * 100,
+                     np.array(["A"] * m, object), np.array(["G"] * m, object))
+    S = SampleTable(np.array([f"I{i}" for i in range(n)], object),
+                    np.array([f"I{i}" for i in range(n)], object),
+                    np.ones(n, np.int64), np.full(n, np.nan))
+    prefix = str(tmp_path / "t"); write_plink(prefix, G, V, S)
+    ss = str(tmp_path / "gwas.txt")
+    with open(ss, "w") as fh:
+        fh.write("SNP\tA1\tA2\tBETA\tSE\tN\n")
+        for i in range(m):
+            b = rng.normal(0, 0.08) if func[i] else rng.normal(0, 0.02)
+            fh.write(f"rs{i}\tA\tG\t{b:.5g}\t0.02\t5000\n")
+    ann = str(tmp_path / "annot.tsv")
+    with open(ann, "w") as fh:
+        fh.write("SNP\tcoding\n")
+        for i in range(m):
+            fh.write(f"rs{i}\t{func[i]}\n")
+
+    res = run_ldpred2_prs(ss, prefix, method="annot", annotations=ann,
+                          block_size=100,
+                          annot_params=dict(burn_in=60, num_iter=150, seed=1))
+    assert res.enrichment is not None
+    assert res.enrichment["coding"] > 0.3        # functional annotation enriched
+    assert res.scores.shape[0] == n
+
+    # method="annot" without annotations is an error.
+    try:
+        run_ldpred2_prs(ss, prefix, method="annot", block_size=100)
+    except ValueError as e:
+        assert "annotations" in str(e)
+    else:
+        raise AssertionError("expected ValueError when annotations missing")
+
+
 def test_prsresult_repr_is_compact(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, m=300, seed=8)
     res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150)

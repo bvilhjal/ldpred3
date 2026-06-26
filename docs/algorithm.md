@@ -151,8 +151,18 @@ sampler **recovers the enrichment of an informative annotation (θ≈+1) and
 correctly ignores an irrelevant one (θ≈0)** — so, unlike a *fixed* bad prior, a
 learned one automatically down-weights unhelpful annotations (no "garbage-in"
 penalty), and the learned θ are directly interpretable as functional-enrichment
-estimates. It operates on a dense LD matrix; the genome-wide streaming path and
-annotation-driven effect-*variance* are the remaining extensions.
+estimates.
+
+Two further options complete the SBayesRC picture:
+
+* **`learn_variance=True`** additionally learns an annotation → effect-*variance*
+  map `σ²_j ∝ exp(a_jᵀφ)` (returned in `.phi` / `.variance_enrichment`). Being
+  learned, `φ` collapses to ~0 when effect size is annotation-independent (no
+  harm) and turns positive when functional SNPs carry larger effects.
+* **`ldpred2_auto_annot_blocks`** is the genome-wide streaming version: the maps
+  are global but the effect sweeps run one LD block at a time, so the
+  genome-wide LD is never materialised (it matches the dense version on
+  block-diagonal LD). This is what the pipeline's `--method annot` uses.
 
 ## Robustness: `allow_jump_sign`
 
