@@ -492,7 +492,7 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
 
 def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
                   estimate_hyper, h2_min, h2_max, seed, init_beta, tol,
-                  check_every, allow_jump_sign):
+                  check_every, allow_jump_sign, prior_w):
     """Numeric core of the point-normal Gibbs sampler (JIT-compiled if numba).
 
     Takes only plain numeric / array arguments so it compiles under
@@ -526,9 +526,12 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
     count = 0
 
     for it in range(n_iter_total):
-        # Variance of a causal effect under the slab.
+        # Variance of a causal effect under the slab (uses the global p, so the
+        # per-SNP prior weights re-weight inclusion, not the effect-size scale).
         c1 = h2 / (m * p)
-        log_prior_odds = np.log1p(-p) - np.log(p)    # constant within iteration
+        # Per-SNP prior log-odds of null vs causal: p_j = p * prior_w[j].
+        pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
+        log_prior_odds_v = np.log1p(-pj) - np.log(pj)
         # Per-SNP posterior quantities are vectors of length m.
         post_var = c1 / (n * c1 + 1.0)               # = 1 / (n + 1/c1)
         post_sd = np.sqrt(post_var)
@@ -563,7 +566,7 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             post_mean = n_post_var[j] * res_beta_j
 
             # Posterior inclusion probability via the log-odds of null vs causal.
-            log_odds = (log_prior_odds + half_log_term[j]
+            log_odds = (log_prior_odds_v[j] + half_log_term[j]
                         - 0.5 * post_mean * post_mean / pv)
             postp = _stable_postp(log_odds)
 
@@ -750,7 +753,7 @@ _gibbs_kernel_sample_jit = _jit(_gibbs_kernel_sample)
 
 def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
                          num_iter, sparse, estimate_hyper, h2_min, h2_max, seed,
-                         init_beta, tol, check_every, allow_jump_sign):
+                         init_beta, tol, check_every, allow_jump_sign, prior_w):
     """Sparse (CSR) counterpart of :func:`_gibbs_kernel`.
 
     Identical point-normal Gibbs / Rao-Blackwellized sampler (incl. warm start
@@ -775,7 +778,8 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
 
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
-        log_prior_odds = np.log1p(-p) - np.log(p)
+        pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
+        log_prior_odds_v = np.log1p(-pj) - np.log(pj)
         post_var = c1 / (n * c1 + 1.0)
         post_sd = np.sqrt(post_var)
         half_log_term = 0.5 * np.log1p(n * c1)
@@ -800,7 +804,7 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
 
             pv = post_var[j]
             post_mean = n_post_var[j] * res_beta_j
-            log_odds = (log_prior_odds + half_log_term[j]
+            log_odds = (log_prior_odds_v[j] + half_log_term[j]
                         - 0.5 * post_mean * post_mean / pv)
             postp = _stable_postp(log_odds)
             post_means[j] = postp * post_mean
@@ -1373,7 +1377,7 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr,
                    warm_start=False, tol=0.0, check_every=50,
-                   allow_jump_sign=True):
+                   allow_jump_sign=True, prior_w=None):
     """Prepare arguments and dispatch to the (optionally JIT-compiled) kernel.
 
     ``corr`` may be a dense ndarray or a :class:`SparseLD`; the matching dense or
@@ -1386,6 +1390,16 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     h2_min, h2_max = h2_bounds
     if seed is None:
         seed = np.random.SeedSequence().generate_state(1)[0]
+
+    m = beta_hat.shape[0]
+    if prior_w is None:
+        prior_w = np.ones(m)
+    else:
+        prior_w = np.ascontiguousarray(prior_w, dtype=np.float64)
+        if prior_w.shape != (m,):
+            raise ValueError("prior_weights must be a length-m vector")
+        if np.any(prior_w < 0):
+            raise ValueError("prior_weights must be non-negative")
 
     # Warm start from the (cheap) infinitesimal solution, else cold start.
     if warm_start:
@@ -1402,6 +1416,7 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
             float(p), int(burn_in), int(num_iter), bool(sparse),
             bool(estimate_hyper), float(h2_min), float(h2_max), int(seed),
             init_beta, float(tol), int(check_every), bool(allow_jump_sign),
+            prior_w,
         )
 
     # Single-precision, contiguous LD matrix. ``corr`` is symmetric, so row j
@@ -1422,13 +1437,14 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
         corr, beta_hat, n, float(h2), float(p), int(burn_in), int(num_iter),
         bool(sparse), bool(estimate_hyper), float(h2_min), float(h2_max),
         int(seed), init_beta, float(tol), int(check_every),
-        bool(allow_jump_sign),
+        bool(allow_jump_sign), prior_w,
     )
 
 
 def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
                  sparse=False, shrink_corr=1.0, warm_start=False, tol=0.0,
-                 check_every=50, allow_jump_sign=True, seed=None):
+                 check_every=50, allow_jump_sign=True, prior_weights=None,
+                 seed=None):
     """LDpred2 grid model: point-normal prior, fixed hyper-parameters.
 
     The prior is spike-and-slab: with probability ``p`` a variant is causal
@@ -1458,6 +1474,13 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
         set exactly to zero).
     shrink_corr : float
         Multiplicative shrinkage applied to off-diagonal LD entries (1.0 = off).
+    prior_weights : array_like, shape (m,), optional
+        Per-variant relative causal propensity (SBayesRC-style annotation-
+        informed prior). Each SNP's causal probability becomes ``p_j = p *
+        prior_weights[j]`` (clamped to ``(0, 1)``); pass weights with mean ~1 to
+        keep the expected causal count and ``h2`` coherent. ``None`` (default)
+        gives the uniform-``p`` point-normal model. Informative weights raise
+        accuracy; misleading ones lower it, so supply trustworthy annotations.
     seed : int or None
         Seed for the random number generator.
 
@@ -1477,7 +1500,7 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
         burn_in=burn_in, num_iter=num_iter, sparse=sparse, seed=seed,
         estimate_hyper=False, h2_bounds=(1e-6, 1.0), shrink_corr=shrink_corr,
         warm_start=warm_start, tol=tol, check_every=check_every,
-        allow_jump_sign=allow_jump_sign,
+        allow_jump_sign=allow_jump_sign, prior_w=prior_weights,
     )
     return avg_beta
 
@@ -1497,7 +1520,8 @@ class AutoResult:
 def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
                  burn_in=200, num_iter=200, shrink_corr=1.0,
                  h2_bounds=(1e-4, 1.0), warm_start=False, tol=0.0,
-                 check_every=50, allow_jump_sign=True, seed=None):
+                 check_every=50, allow_jump_sign=True, prior_weights=None,
+                 seed=None):
     """LDpred2-auto: fit the point-normal model and estimate ``h2`` and ``p``.
 
     Unlike :func:`ldpred2_grid`, no validation set is needed: the proportion of
@@ -1543,7 +1567,7 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
         burn_in=burn_in, num_iter=num_iter, sparse=False, seed=seed,
         estimate_hyper=True, h2_bounds=h2_bounds, shrink_corr=shrink_corr,
         warm_start=warm_start, tol=tol, check_every=check_every,
-        allow_jump_sign=allow_jump_sign,
+        allow_jump_sign=allow_jump_sign, prior_w=prior_weights,
     )
     return AutoResult(
         beta_est=avg_beta,

@@ -110,7 +110,8 @@ def test_numba_and_python_paths_agree():
     init = np.zeros(corr.shape[0])
     kwargs = dict(burn_in=40, num_iter=120, sparse=False, estimate_hyper=False,
                   h2_min=1e-6, h2_max=1.0, seed=11, init_beta=init, tol=0.0,
-                  check_every=50, allow_jump_sign=True)
+                  check_every=50, allow_jump_sign=True,
+                  prior_w=np.ones(corr.shape[0]))
     corr_c = np.ascontiguousarray(corr)
     py = ldpred2._gibbs_kernel(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
     jit = ldpred2._gibbs_kernel_jit(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
