@@ -27,6 +27,7 @@ from .pipeline import (
 )
 from .infer import ldpred2_auto_infer, InferResult
 from .annot import ldpred2_auto_annot, ldpred2_auto_annot_blocks, AnnotResult
+from .ldsc import ld_scores, ldsc_h2, LDSCResult
 
 __all__ = [
     "standardize_betas",
@@ -50,6 +51,9 @@ __all__ = [
     "ldpred2_auto_annot",
     "ldpred2_auto_annot_blocks",
     "AnnotResult",
+    "ld_scores",
+    "ldsc_h2",
+    "LDSCResult",
 ]
 
 __version__ = "0.1.0"
