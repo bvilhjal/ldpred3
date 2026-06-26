@@ -39,7 +39,11 @@ __all__ = ["InferResult", "ldpred2_auto_infer"]
 
 @dataclass
 class InferResult:
-    """Output of :func:`ldpred2_auto_infer`."""
+    """Output of :func:`ldpred2_auto_infer`.
+
+    Each estimate has a 95% credible interval (the ``*_ci`` tuples).
+    ``print(result)`` shows a compact summary.
+    """
 
     beta_est: np.ndarray            # posterior-mean effects (kept-chain average)
     h2_est: float                   # heritability, posterior median
@@ -50,6 +54,14 @@ class InferResult:
     r2_ci: tuple
     n_chains: int
     n_chains_kept: int
+
+    def __repr__(self):
+        def ci(lo, hi):
+            return f"({lo:.3g}, {hi:.3g})"
+        return (f"InferResult(h2={self.h2_est:.3f} {ci(*self.h2_ci)}, "
+                f"p={self.p_est:.4g} {ci(*self.p_ci)}, "
+                f"r2={self.r2_est:.3f} {ci(*self.r2_ci)}, "
+                f"chains_kept={self.n_chains_kept}/{self.n_chains})")
 
 
 def _prep_corr(corr, shrink_corr):

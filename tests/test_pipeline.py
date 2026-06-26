@@ -127,7 +127,12 @@ def test_pipeline_infer_size_guard(tmp_path):
         raise AssertionError("expected size-guard ValueError")
 
 
-def test_subset_to_sumstats_matches_full_read(tmp_path):
+def test_prsresult_repr_is_compact(tmp_path):
+    prefix, ss_path, g_te = _simulate(tmp_path, m=300, seed=8)
+    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150)
+    r = repr(res)
+    assert r.startswith("PRSResult(") and "n_samples=" in r
+    assert "\n" not in r and len(r) < 200          # no array dump
     # Reading only the GWAS variants must give the same PRS as a full read.
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=7)
     full = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,

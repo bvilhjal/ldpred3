@@ -156,21 +156,42 @@ def _truncnorm(mu, gamma, rng):
 
 @dataclass
 class AnnotResult:
-    """Output of :func:`ldpred2_auto_annot`."""
+    """Output of :func:`ldpred2_auto_annot`.
+
+    ``theta`` are the learned annotation coefficients (the first is the
+    intercept). A large positive coefficient means that annotation enriches for
+    causal variants. Use :attr:`enrichment` for a name->coefficient mapping or
+    just ``print(result)`` for a summary.
+    """
 
     beta_est: np.ndarray            # posterior-mean effects
     h2_est: float                   # SNP heritability
-    theta: np.ndarray               # learned annotation coefficients
-    annotation_names: list = None   # optional column labels
+    theta: np.ndarray               # learned annotation coefficients (incl intercept)
+    annotation_names: list = None   # column labels (incl "intercept")
+
+    @property
+    def enrichment(self):
+        """``{name: coefficient}`` for the non-intercept annotations."""
+        names = self.annotation_names or [f"annot_{i}" for i in range(len(self.theta))]
+        return {nm: float(t) for nm, t in zip(names[1:], self.theta[1:])}
+
+    def __repr__(self):
+        items = sorted(self.enrichment.items(), key=lambda kv: -abs(kv[1]))
+        top = ", ".join(f"{nm}={c:+.2f}" for nm, c in items[:6])
+        more = "" if len(items) <= 6 else f", (+{len(items) - 6} more)"
+        return (f"AnnotResult(h2_est={self.h2_est:.3f}, n_variants="
+                f"{len(self.beta_est)}, enrichment[{top}{more}])")
 
 
 def _add_intercept(A):
+    """Return ``(A_with_intercept, had_intercept)``; intercept is column 0."""
     A = np.asarray(A, dtype=float)
     if A.ndim == 1:
         A = A[:, None]
-    if not np.allclose(A[:, 0], 1.0):
+    had = A.shape[1] >= 1 and np.allclose(A[:, 0], 1.0)
+    if not had:
         A = np.column_stack([np.ones(A.shape[0]), A])
-    return A
+    return A, had
 
 
 def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
@@ -178,6 +199,10 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
                        theta_every=10, ridge=5.0, h2_bounds=(1e-4, 1.0),
                        annotation_names=None, seed=None):
     """LDpred2-auto that learns a per-SNP prior from functional annotations.
+
+    Each SNP's causal probability is ``p_j = sigmoid(a_j . theta)`` and ``theta``
+    is learned jointly with the effects (the SBayesRC idea). The learned
+    coefficients are returned as interpretable functional-enrichment estimates.
 
     Parameters
     ----------
@@ -187,28 +212,78 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
         Standardized marginal effects.
     n_eff : array_like or float
         GWAS sample size.
-    annotations : array_like (m, K)
-        Per-SNP annotation matrix. An intercept column is added if absent.
-    learn : {"eb", "probit"}
-        ``"eb"`` ridge-logistic (IRLS) or ``"probit"`` Albert-Chib update.
-    theta_every : int
-        Number of effect sweeps between annotation-coefficient updates.
-    ridge : float
-        Ridge penalty on the non-intercept coefficients.
+    annotations : array_like, shape (m,) or (m, K)
+        Per-SNP annotation matrix (binary or continuous). An intercept column is
+        added automatically if not already present.
+    learn : {"eb", "probit"}, default "eb"
+        ``"eb"`` ridge-logistic (Newton/IRLS) update on the posterior inclusion
+        probabilities, or ``"probit"`` fully-Bayesian Albert-Chib update.
+    h2_init, p_init : float
+        Initial heritability and baseline causal fraction (the latter sets the
+        intercept).
+    burn_in, num_iter : int
+        Burn-in and sampling sweeps.
+    theta_every : int, default 10
+        Effect sweeps between annotation-coefficient updates.
+    ridge : float, default 5.0
+        Ridge penalty on the non-intercept coefficients (stabilises many /
+        collinear annotations).
+    annotation_names : list of str, optional
+        Names for the non-intercept annotations (length ``K``), used to label the
+        returned enrichment estimates.
+    seed : int or None
+
     Returns
     -------
     AnnotResult
+        ``.beta_est`` (effects), ``.h2_est``, ``.theta`` (coefficients incl.
+        intercept) and ``.enrichment`` (a ``{name: coefficient}`` mapping). A
+        large positive coefficient means the annotation enriches for causal
+        variants.
+
+    Examples
+    --------
+    >>> res = ldpred2_auto_annot(corr, beta_hat, n_eff, A,
+    ...                          annotation_names=["coding", "conserved"])
+    >>> res.enrichment            # {"coding": 1.2, "conserved": 0.8}
+    >>> res.beta_est              # adjusted effects to build the PRS
     """
     if isinstance(corr, SparseLD):
         raise NotImplementedError("ldpred2_auto_annot needs a dense LD matrix")
+    if learn not in ("eb", "probit"):
+        raise ValueError("learn must be 'eb' or 'probit'")
+    if theta_every < 1:
+        raise ValueError("theta_every must be >= 1")
+    if not 0.0 < p_init < 1.0:
+        raise ValueError("p_init must be in (0, 1)")
     corr = np.ascontiguousarray(corr, dtype=np.float32)
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
-    A = _add_intercept(annotations)
-    if A.shape[0] != m:
-        raise ValueError("annotations must have one row per variant")
+
+    annot_in = np.asarray(annotations, dtype=float)
+    if annot_in.ndim == 1:
+        annot_in = annot_in[:, None]
+    if annot_in.shape[0] != m:
+        raise ValueError(
+            f"annotations must have one row per variant "
+            f"({m}); got {annot_in.shape[0]}")
+    if not np.all(np.isfinite(annot_in)):
+        raise ValueError("annotations must be finite (no NaN/inf)")
+    A, _ = _add_intercept(annot_in)
     K = A.shape[1]
+
+    # Labels name the non-intercept annotations (K-1 of them).
+    n_user = K - 1
+    if annotation_names is None:
+        user_names = [f"annot_{i}" for i in range(n_user)]
+    else:
+        user_names = list(annotation_names)
+        if len(user_names) != n_user:
+            raise ValueError(
+                f"annotation_names must have {n_user} entries "
+                f"(one per non-intercept annotation); got {len(user_names)}")
+    names = ["intercept"] + user_names
     lo, hi = h2_bounds
 
     theta = np.zeros(K)
@@ -240,15 +315,13 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
             grad = A.T @ (pip - s) - ridge * pen * theta
             H = A.T @ (W[:, None] * A) + ridge * np.diag(pen) + 1e-6 * np.eye(K)
             theta = theta + np.linalg.solve(H, grad)
-        elif learn == "probit":
+        else:                                     # "probit" (validated above)
             gamma = (pip > 0.5).astype(float)     # current causal indicators
             z = _truncnorm(A @ theta, gamma, rng)
             V = np.linalg.inv(A.T @ A + ridge * np.diag(pen) + 1e-6 * np.eye(K))
             mean = V @ (A.T @ z)
             theta = mean + np.linalg.cholesky(V) @ rng.standard_normal(K)
-        else:
-            raise ValueError("learn must be 'eb' or 'probit'")
 
     beta_est = avg / max(avg_rounds, 1)
     return AnnotResult(beta_est=beta_est, h2_est=float(h2), theta=theta,
-                       annotation_names=annotation_names)
+                       annotation_names=names)

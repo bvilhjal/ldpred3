@@ -75,6 +75,16 @@ class PRSResult:
     qc_log: dict = None         # sumstats + SD-consistency QC counts
     inference: dict = None      # h2/p/r2 estimates (+CIs) if infer=True
 
+    def __repr__(self):
+        nm = self.harmonize_log.get("n_matched", len(self.beta_adjusted))
+        inf = ""
+        if self.inference is not None:
+            i = self.inference
+            inf = (f", h2={i['h2_est']:.3f}, p={i['p_est']:.4g}, "
+                   f"r2={i['r2_est']:.3f}")
+        return (f"PRSResult(n_samples={len(self.scores)}, "
+                f"n_variants={nm}{inf})")
+
 
 def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     n_eff=None, ld_prefix=None, ld_ridge=0.0,

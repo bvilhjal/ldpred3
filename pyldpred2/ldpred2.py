@@ -1507,14 +1507,22 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
 
 @dataclass
 class AutoResult:
-    """Result of :func:`ldpred2_auto`."""
+    """Result of :func:`ldpred2_auto`.
 
-    beta_est: np.ndarray
-    h2_est: float
-    p_est: float
+    ``beta_est`` are the posterior-mean effects; ``h2_est`` / ``p_est`` the
+    estimated heritability and causal fraction.
+    """
+
+    beta_est: np.ndarray = field(repr=False)
+    h2_est: float = 0.0
+    p_est: float = 0.0
     n_iter: int = 0
     h2_path: np.ndarray = field(default=None, repr=False)
     p_path: np.ndarray = field(default=None, repr=False)
+
+    def __repr__(self):
+        return (f"AutoResult(h2_est={self.h2_est:.3f}, p_est={self.p_est:.4g}, "
+                f"n_iter={self.n_iter}, n_variants={len(self.beta_est)})")
 
 
 def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
