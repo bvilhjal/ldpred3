@@ -68,6 +68,49 @@ reproduces bigsnpr's polygenic scores essentially exactly. (Validation against a
 downloaded public GWAS + 1000 Genomes reference is the natural next step; it adds
 real-data quirks the simulation can't, but needs multi-GB inputs.)
 
+## Methods by genetic architecture (realistic LD)
+
+How do the LDpred2 variants compare across genetic architectures? Each block is
+a coalescent/msprime LD matrix (m=8000, h²=0.5); for each architecture we
+simulate true effects, generate summary statistics, fit every method, and
+measure the **genetic R²** — the squared correlation between the PRS and the
+true genetic value under population LD, `(β̂ᵀRβ)² / [(β̂ᵀRβ̂)(βᵀRβ)]` — averaged
+over 5 replicates. `grid` is given the oracle `(h²,p)`; `annot` gets one
+functional annotation (informative only in the last row). Regenerate with
+`benchmarks/bench_methods.py` / `benchmarks/plot_methods_arch.py`.
+
+![Methods by architecture](../benchmarks/methods_arch_benchmark.png)
+
+Genetic R² at **N = 10,000** (the lower-power regime separates the methods):
+
+| architecture | marginal | inf | grid | auto | annot |
+|--------------|---------:|----:|-----:|-----:|------:|
+| infinitesimal       | 0.555 | **0.820** | 0.818 | 0.816 | 0.813 |
+| sparse (p=0.01)     | 0.565 | 0.823 | 0.953 | 0.954 | **0.955** |
+| polygenic (p=0.2)   | 0.582 | 0.827 | **0.831** | 0.829 | 0.830 |
+| major locus         | 0.605 | 0.836 | **0.932** | 0.924 | 0.927 |
+| annotation-enriched | 0.591 | 0.823 | 0.917 | 0.918 | **0.921** |
+
+Takeaways:
+
+- **The raw marginal PRS is always far behind** (~0.55–0.61) — the LD adjustment
+  is the first-order win.
+- **`inf` is architecture-robust but flat** (~0.82): it is the best model *only*
+  under a truly infinitesimal architecture, and leaves large gains on the table
+  whenever the trait is sparse or has major loci.
+- **`grid`/`auto` win decisively on sparse and major-locus** architectures
+  (0.93–0.95 vs 0.82 for `inf`) — the spike-and-slab captures concentrated
+  signal.
+- **`auto` matches the oracle `grid`** (which is handed the true `h²` and `p`)
+  without any hyper-parameters — the practical default.
+- **`annot` ≈ `auto` everywhere, and edges ahead when the annotation is
+  informative** (annotation-enriched row). The margin is small here (one binary
+  annotation, near-saturation at high N) but consistent and never negative.
+
+At N = 50,000 the same ordering holds with everything shifted up and compressed
+(`inf` ~0.94; sparse/major-locus/annotated ~0.98–0.99) — see the right panel and
+`benchmarks/methods_arch_benchmark.csv`.
+
 ## Genotype-level simulation
 
 `pyldpred2/simulate.py` is a full end-to-end simulation: it generates genotypes with
