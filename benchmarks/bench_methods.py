@@ -11,7 +11,7 @@ from pyldpred2 import ldpred2_by_blocks, ldpred2_auto_annot_blocks
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)          # (100, 500, 500)
-NB, K = 16, 500
+NB, K = 100, 500
 M = NB * K
 H2 = 0.5
 REPS = 5

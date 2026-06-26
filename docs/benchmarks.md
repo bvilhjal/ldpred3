@@ -70,14 +70,15 @@ real-data quirks the simulation can't, but needs multi-GB inputs.)
 
 ## Methods by genetic architecture (realistic LD)
 
-How do the LDpred2 variants compare across genetic architectures? Each block is
-a coalescent/msprime LD matrix (m=8000, h²=0.5); for each architecture we
-simulate true effects, generate summary statistics, fit every method, and
-measure the **genetic R²** — the squared correlation between the PRS and the
-true genetic value under population LD, `(β̂ᵀRβ)² / [(β̂ᵀRβ̂)(βᵀRβ)]` — averaged
-over 5 replicates. `grid` is given the oracle `(h²,p)`; `annot` gets one
-functional annotation (informative only in the last row). Regenerate with
-`benchmarks/bench_methods.py` / `benchmarks/plot_methods_arch.py`.
+How do the LDpred2 variants compare across genetic architectures? The genome is
+100 distinct coalescent/msprime LD blocks of 500 SNPs (m=50,000, h²=0.5); for
+each architecture we simulate true effects, generate summary statistics, fit
+every method, and measure the **genetic R²** — the squared correlation between
+the PRS and the true genetic value under population LD,
+`(β̂ᵀRβ)² / [(β̂ᵀRβ̂)(βᵀRβ)]` — averaged over 5 replicates. `grid` is given the
+oracle `(h²,p)`; `annot` gets one functional annotation (informative only in the
+last row). Regenerate with `benchmarks/bench_methods.py` /
+`benchmarks/plot_methods_arch.py`.
 
 ![Methods by architecture](../benchmarks/methods_arch_benchmark.png)
 
@@ -85,31 +86,88 @@ Genetic R² at **N = 10,000** (the lower-power regime separates the methods):
 
 | architecture | marginal | inf | grid | auto | annot |
 |--------------|---------:|----:|-----:|-----:|------:|
-| infinitesimal       | 0.555 | **0.820** | 0.818 | 0.816 | 0.813 |
-| sparse (p=0.01)     | 0.565 | 0.823 | 0.953 | 0.954 | **0.955** |
-| polygenic (p=0.2)   | 0.582 | 0.827 | **0.831** | 0.829 | 0.830 |
-| major locus         | 0.605 | 0.836 | **0.932** | 0.924 | 0.927 |
-| annotation-enriched | 0.591 | 0.823 | 0.917 | 0.918 | **0.921** |
+| infinitesimal       | 0.451 | **0.532** | 0.531 | 0.526 | 0.527 |
+| sparse (p=0.01)     | 0.460 | 0.541 | **0.747** | 0.746 | 0.747 |
+| polygenic (p=0.2)   | 0.442 | 0.530 | **0.531** | 0.528 | 0.529 |
+| major locus         | 0.459 | 0.533 | **0.684** | 0.672 | 0.672 |
+| annotation-enriched | 0.457 | 0.536 | 0.646 | 0.644 | **0.662** |
+
+Genetic R² at **N = 50,000** (higher power; everything shifts up and compresses):
+
+| architecture | marginal | inf | grid | auto | annot |
+|--------------|---------:|----:|-----:|-----:|------:|
+| infinitesimal       | 0.565 | **0.794** | 0.792 | 0.789 | 0.789 |
+| sparse (p=0.01)     | 0.575 | 0.797 | 0.941 | 0.942 | **0.942** |
+| polygenic (p=0.2)   | 0.559 | 0.791 | **0.797** | 0.797 | 0.796 |
+| major locus         | 0.574 | 0.794 | **0.904** | 0.903 | 0.903 |
+| annotation-enriched | 0.577 | 0.796 | 0.900 | 0.901 | **0.908** |
 
 Takeaways:
 
-- **The raw marginal PRS is always far behind** (~0.55–0.61) — the LD adjustment
-  is the first-order win.
-- **`inf` is architecture-robust but flat** (~0.82): it is the best model *only*
-  under a truly infinitesimal architecture, and leaves large gains on the table
-  whenever the trait is sparse or has major loci.
+- **The raw marginal PRS is always far behind** — the LD adjustment is the
+  first-order win (≈0.45→0.53 at N=10k, ≈0.57→0.79 at N=50k).
+- **`inf` is architecture-robust but flat**: it is the best model *only* under a
+  truly infinitesimal (or near-infinitesimal polygenic) architecture, and leaves
+  large gains on the table whenever the trait is sparse or has major loci.
 - **`grid`/`auto` win decisively on sparse and major-locus** architectures
-  (0.93–0.95 vs 0.82 for `inf`) — the spike-and-slab captures concentrated
-  signal.
-- **`auto` matches the oracle `grid`** (which is handed the true `h²` and `p`)
-  without any hyper-parameters — the practical default.
-- **`annot` ≈ `auto` everywhere, and edges ahead when the annotation is
-  informative** (annotation-enriched row). The margin is small here (one binary
-  annotation, near-saturation at high N) but consistent and never negative.
+  (e.g. 0.75/0.68 vs 0.53 for `inf` at N=10k) — the spike-and-slab captures
+  concentrated signal. **`auto` matches the oracle `grid`** (handed the true
+  `h²` and `p`) without any hyper-parameters — the practical default.
+- **`annot` matches `auto` when the annotation is uninformative and beats it
+  when it carries signal.** On the annotation-enriched architecture it is the
+  best method at both power levels (N=10k: 0.662 vs grid 0.646; N=50k: 0.908 vs
+  0.901), and it never falls behind `auto` elsewhere. The lift from a *single*
+  binary annotation is modest — SBayesRC's larger real-data gains come from many
+  S-LDSC-calibrated annotations — but it is consistent and free of the
+  "garbage-in" penalty a *fixed* bad prior would carry.
 
-At N = 50,000 the same ordering holds with everything shifted up and compressed
-(`inf` ~0.94; sparse/major-locus/annotated ~0.98–0.99) — see the right panel and
-`benchmarks/methods_arch_benchmark.csv`.
+> **Convergence note (why this is the corrected table).** An earlier run with a
+> lazy annotation-map update (`theta_every=10`) had `annot` *underperforming*
+> `auto` at N=10k — e.g. enriched 0.60 vs 0.64. That was an artifact: with short
+> chains the `p_j = sigmoid(Aθ)` map had not converged, so it over-estimated the
+> global `p` (effective p ≈ 0.04 vs a true 0.02) and **over-shrank** the effects.
+> Updating `θ` every sweep (now the default — the IRLS step is cheap for a
+> handful of annotations) lets the map and the effects co-adapt; the learned
+> enrichment then reaches its true value (θ_func ≈ 1.7) and the anomaly
+> disappears. A diagnostic confirmed the fix is purely about convergence: more
+> iterations *without* frequent θ updates also fixed it, but added nothing on top
+> of `theta_every=1`.
+
+### Per-method running time
+
+Fit time on the same setup (m=50,000 = 100 coalescent blocks of 500, single
+core, burn-in 80 / 200 sampling sweeps; `inf` is a direct per-block solve).
+Regenerate with `benchmarks/timing_bench.py`.
+
+| method | fit time (s) |
+|--------|-------------:|
+| inf    | 0.56 |
+| auto   | 2.13 |
+| grid   | 2.20 |
+| annot  | 3.99 |
+
+`inf` is cheapest (one linear solve per block, no sampling). `grid`/`auto` are
+the spike-and-slab Gibbs samplers and cost about the same. `annot` is ~1.9×
+`auto`: it runs the same per-block effect sweeps plus a logistic annotation-map
+update every sweep.
+
+**Cost of the annotation learner (`annot`).** The θ-update is an `O(m·K²)` IRLS
+solve in the number of annotations `K`, run every `theta_every` sweeps. Fit time
+(s) at m=50,000:
+
+| #annotations K | `theta_every=1` (default) | `theta_every=10` |
+|---------------:|--------------------------:|-----------------:|
+| 1   | 4.0  | 2.6 |
+| 5   | 4.5  | 2.6 |
+| 20  | 6.4  | 2.8 |
+| 50  | 10.5 | 3.1 |
+| 100 | 22.9 | 4.4 |
+
+So the convergence-correct default (`theta_every=1`) is nearly free for a handful
+of annotations but its `O(K²)` per-sweep cost takes over by `K ≈ 50`; with many
+annotations raise `theta_every` to amortise it. (Persisting the running `R@β`
+residual across chunks — rather than rebuilding it each θ-update — keeps the
+default cheap; without it `annot` was ~3× `auto` instead of ~1.9×.)
 
 ## Genotype-level simulation
 
