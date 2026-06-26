@@ -49,10 +49,10 @@ _ALIASES = {
     "or": ["or", "odds_ratio", "oddsratio"],
     "se": ["se", "standard_error", "stderr", "standarderror", "sebeta",
            "se_beta", "logor_se"],
-    "pval": ["p", "pval", "p_value", "pvalue", "p-value", "p_bolt_lmm",
-             "p_value_association"],
+    "pval": ["p", "pval", "p_value", "pvalue", "p-value", "p.value", "p_bolt_lmm",
+             "p_value_association", "p_wald", "pval_nominal"],
     "n_eff": ["n_eff", "neff", "n", "sample_size", "totalsamplesize",
-              "n_samples", "n_total"],
+              "n_samples", "n_total", "obs_ct", "n_complete_samples"],
     "eaf": ["eaf", "freq", "frq", "effect_allele_frequency", "a1freq",
             "freq1", "maf", "af", "effect_allele_freq"],
     "info": ["info", "imputation_info", "imp_info", "rsq", "r2", "info_score",
@@ -149,8 +149,10 @@ def read_sumstats(path, *, n_eff=None, **col_overrides):
     path : str
         Path to a delimited text file (optionally gzipped). Delimiter (tab,
         comma or whitespace) is auto-detected.
-    n_eff : float, optional
-        Sample size to use when the file has no per-variant N column.
+    n_eff : float or str, optional
+        Sample size to use when the file has no per-variant N column. A **string**
+        is treated as the name (or 0-based index) of the per-variant N column to
+        use, i.e. an override for an unrecognised ``N`` header.
     **col_overrides
         Force a canonical field to a particular column, e.g.
         ``read_sumstats(..., ea="A1", beta="effect")`` or by index
@@ -160,6 +162,9 @@ def read_sumstats(path, *, n_eff=None, **col_overrides):
     -------
     Sumstats
     """
+    if isinstance(n_eff, str):           # treat a string n_eff as a column override
+        col_overrides["n_eff"] = n_eff
+        n_eff = None
     with _open(path) as fh:
         first = fh.readline().rstrip("\n")
         delim = _sniff_delimiter(first)
