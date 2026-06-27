@@ -27,8 +27,8 @@ pyldpred2-prs --sumstats gwas.txt.gz --plink target --method annot \
 The annotation file is a delimited table with a SNP-id column (`SNP`/`rsid`/...)
 and numeric annotation columns; rows are matched to the GWAS variants by ID
 (variants absent from the file get all-zero annotations). The learned
-enrichment coefficients are in `PRSResult.enrichment`. This uses the streaming
-genome-wide learner, so it scales beyond the dense `--infer` path.
+enrichment coefficients are in `PRSResult.enrichment`. Like `--infer`, this uses
+a streaming genome-wide learner, so it never materialises the genome-wide LD.
 
 From the command line:
 

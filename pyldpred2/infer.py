@@ -22,8 +22,10 @@ Chain QC follows the paper: keep chains whose fitted marginal effects
 ``R β̂`` have a spread (range) of at least ``0.95 ×`` the 95th-percentile spread
 across chains, dropping chains that collapsed to ~0.
 
-This operates on a single (dense) LD matrix — one block, or a block-diagonal
-genome assembled with :func:`ldpred2.block_diagonal_ld`.
+It accepts either a single **dense** LD matrix or a **list of per-block**
+``(R, idx)`` matrices. The blocks form is *streamed* — chains run one block at a
+time and the genome-wide LD is never materialised — so inference scales beyond
+the dense path's ``infer_max_variants`` ceiling.
 """
 
 from __future__ import annotations
@@ -32,7 +34,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ldpred2 import _gibbs_kernel_sample_jit, _as_n_vector, _check_h2_p, SparseLD
+from .ldpred2 import (_gibbs_kernel_sample_jit, _gibbs_blocks_stream_sample,
+                      _as_n_vector, _check_h2_p, SparseLD)
 
 __all__ = ["InferResult", "ldpred2_auto_infer"]
 
@@ -64,9 +67,14 @@ class InferResult:
                 f"chains_kept={self.n_chains_kept}/{self.n_chains})")
 
 
+def _is_blocks(corr):
+    """True if ``corr`` is a list/tuple of ``(R, idx)`` blocks (not a matrix)."""
+    return isinstance(corr, (list, tuple))
+
+
 def _prep_corr(corr, shrink_corr):
     if isinstance(corr, SparseLD):
-        raise NotImplementedError("ldpred2_auto_infer needs a dense LD matrix")
+        raise NotImplementedError("ldpred2_auto_infer needs a dense or blocks LD")
     corr = np.ascontiguousarray(corr, dtype=np.float32)
     if shrink_corr != 1.0:
         corr = corr * np.float32(shrink_corr)
@@ -74,25 +82,54 @@ def _prep_corr(corr, shrink_corr):
     return corr
 
 
+def _prep_blocks(blocks, shrink_corr):
+    """float32 ``(R, idx)`` blocks, off-diagonal optionally shrunk."""
+    out = []
+    for R, idx in blocks:
+        R = np.ascontiguousarray(R, dtype=np.float32)
+        if shrink_corr != 1.0:
+            R = R * np.float32(shrink_corr)
+            np.fill_diagonal(R, np.float32(1.0))
+        out.append((R, np.asarray(idx)))
+    return out
+
+
+def _blocks_matmul(blocks, S):
+    """``S @ R`` for block-diagonal ``R`` (S is ``(rows, m)``)."""
+    out = np.zeros_like(S)
+    for R, idx in blocks:
+        out[:, idx] = S[:, idx] @ R.astype(S.dtype, copy=False)
+    return out
+
+
 # Worker state for parallel chains. Set once per process by the pool
-# initializer so the (read-only) LD matrix is not re-pickled per chain.
+# initializer so the (read-only) LD is not re-pickled per chain.
 _WORKER = {}
 
 
 def _chain_init(corr, beta_hat, n, h2_init, burn_in, num_iter, lo, hi,
-                sample_every, allow_jump_sign):
+                sample_every, allow_jump_sign, blocks):
     _WORKER.update(corr=corr, beta_hat=beta_hat, n=n, h2_init=h2_init,
                    burn_in=burn_in, num_iter=num_iter, lo=lo, hi=hi,
-                   sample_every=sample_every, allow_jump_sign=allow_jump_sign)
+                   sample_every=sample_every, allow_jump_sign=allow_jump_sign,
+                   blocks=blocks)
 
 
 def _chain_run(p_init_and_seed):
     p_init, seed = p_init_and_seed
     w = _WORKER
-    return _gibbs_kernel_sample_jit(
+    if w["blocks"] is not None:                    # streaming block-diagonal path
+        avg, h2p, pp, samp = _gibbs_blocks_stream_sample(
+            w["blocks"], w["beta_hat"], w["n"], float(w["h2_init"]),
+            float(p_init), burn_in=int(w["burn_in"]), num_iter=int(w["num_iter"]),
+            seed=int(seed), h2_bounds=(float(w["lo"]), float(w["hi"])),
+            sample_every=int(w["sample_every"]))
+        return avg, h2p, pp, samp
+    avg, h2p, pp, samp, _ = _gibbs_kernel_sample_jit(   # dense path
         w["corr"], w["beta_hat"], w["n"], float(w["h2_init"]), float(p_init),
         int(w["burn_in"]), int(w["num_iter"]), float(w["lo"]), float(w["hi"]),
         int(seed), int(w["sample_every"]), bool(w["allow_jump_sign"]))
+    return avg, h2p, pp, samp
 
 
 def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
@@ -105,8 +142,11 @@ def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
 
     Parameters
     ----------
-    corr : ndarray (m, m)
-        Dense LD correlation matrix (one block or a block-diagonal genome).
+    corr : ndarray (m, m) or list of (R, idx)
+        Either a dense LD correlation matrix (one block or a block-diagonal
+        genome), or a list of per-block ``(R, idx)`` matrices that partition
+        ``0..m-1``. The blocks form is streamed (the genome-wide LD is never
+        materialised), so it scales past the dense path's size limit.
     beta_hat : array_like (m,)
         Standardized marginal GWAS effects.
     n_eff : array_like or float
@@ -140,9 +180,18 @@ def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
     if n_chains < 2:
         raise ValueError("need >= 2 chains for the cross-chain r² estimate")
     lo, hi = h2_bounds
-    corr = _prep_corr(corr, shrink_corr)
+    blocks = None
+    if _is_blocks(corr):
+        blocks = _prep_blocks(corr, shrink_corr)
+        m = sum(int(np.asarray(idx).shape[0]) for _, idx in blocks)
+        apply_R = lambda S: _blocks_matmul(blocks, S)       # noqa: E731
+    else:
+        corr = _prep_corr(corr, shrink_corr)
+        m = corr.shape[0]
+        apply_R = lambda S: S @ corr                        # noqa: E731
     beta_hat = np.asarray(beta_hat, dtype=float)
-    m = beta_hat.shape[0]
+    if beta_hat.shape[0] != m:
+        raise ValueError(f"beta_hat length {beta_hat.shape[0]} != LD size {m}")
     n = _as_n_vector(n_eff, m)
 
     p_inits = np.exp(np.linspace(np.log(p_init_range[0]),
@@ -151,30 +200,28 @@ def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
     seeds = [int(s.generate_state(1)[0]) for s in ss.spawn(n_chains)]
 
     work = list(zip(p_inits, seeds))
+    initargs = (corr if blocks is None else None, beta_hat, n, float(h2_init),
+                int(burn_in), int(num_iter), float(lo), float(hi),
+                int(sample_every), bool(allow_jump_sign), blocks)
     if ncores and ncores > 1 and n_chains > 1:
         from concurrent.futures import ProcessPoolExecutor
-        initargs = (corr, beta_hat, n, float(h2_init), int(burn_in),
-                    int(num_iter), float(lo), float(hi), int(sample_every),
-                    bool(allow_jump_sign))
         with ProcessPoolExecutor(max_workers=int(ncores),
                                  initializer=_chain_init,
                                  initargs=initargs) as ex:
             results = list(ex.map(_chain_run, work))
     else:
-        _chain_init(corr, beta_hat, n, float(h2_init), int(burn_in),
-                    int(num_iter), float(lo), float(hi), int(sample_every),
-                    bool(allow_jump_sign))
+        _chain_init(*initargs)
         results = [_chain_run(w) for w in work]
 
     betas, h2_paths, p_paths, samples = [], [], [], []
-    for avg_beta, h2_path, p_path, bsamp, _ in results:
+    for avg_beta, h2_path, p_path, bsamp in results:
         betas.append(avg_beta)
         h2_paths.append(h2_path)
         p_paths.append(p_path)
         samples.append(bsamp)
 
     # Chain QC: drop chains whose fitted marginal effects R*beta barely vary.
-    ranges = np.array([np.ptp(corr @ b) for b in betas])
+    ranges = np.ptp(apply_R(np.asarray(betas)), axis=1)
     keep = np.arange(n_chains)
     if qc and np.any(np.isfinite(ranges)) and ranges.max() > 0:
         thresh = qc_frac * np.quantile(ranges, qc_quantile)
@@ -197,8 +244,8 @@ def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
         s = samples[c]
         if s.shape[0] == 0:
             continue
-        prod = (corr @ s.T).T                      # (n_saved, m) = R b
-        if shrink_corr != 1.0:
+        prod = apply_R(s.astype(float))            # (n_saved, m) = R b
+        if blocks is None and shrink_corr != 1.0:
             prod = shrink_corr * prod + (1.0 - shrink_corr) * s
         Rb[c] = prod
     r2_vals = []

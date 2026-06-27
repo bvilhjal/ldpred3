@@ -2,151 +2,114 @@
 
 ## pyLDpred2
 
-**pyLDpred2** is a dependency-light (NumPy only, optional Numba) Python
-implementation of [LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029),
-plus a complete polygenic-score (PRS) pipeline around it. It provides:
+A dependency-light (NumPy-only, optional Numba) Python implementation of
+[LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029) with a complete
+polygenic-score pipeline: from GWAS summary statistics + genotypes to one score
+per individual, no R required. It matches the reference implementation
+(`bigsnpr`) on accuracy using **~2× less memory**, scales to 2M SNPs on a single
+core, and needs **no validation cohort**.
 
-- the three LDpred2 models — **inf**, **grid**, **auto** — that re-weight GWAS
-  marginal effects using an LD correlation matrix;
-- an **end-to-end pipeline** from GWAS summary statistics + genotype files
-  (PLINK / BGEN) → QC → harmonisation → LD → per-individual scores;
-- **LDpred2-auto inference** of heritability, polygenicity and the PRS's
-  out-of-sample r² with no validation set (Privé et al. 2023).
-
-It matches the reference R implementation (`bigsnpr`) on accuracy while using
-**~2× less memory**, and scales to 2M SNPs single-threaded. See
-[docs/benchmarks.md](docs/benchmarks.md) for the full head-to-head.
-
-> **New here?** The [user guide](docs/guide.md) walks from a GWAS + target
-> dataset to a polygenic score, helps you pick a model, and lists the common
-> pitfalls.
+> **New here?** Start with the **[user guide](docs/guide.md)** — it walks from a
+> GWAS + target dataset to a polygenic score, helps you choose a model, and lists
+> the common pitfalls.
 
 ### Install
 
 ```bash
-pip install numpy           # the only hard dependency
-pip install numba           # optional, strongly recommended (large sampler speed-up)
-pip install msprime         # optional, only for realistic-LD simulation
+pip install .            # installs pyldpred2 and the `pyldpred2-prs` CLI (needs numpy)
+pip install numba        # optional, strongly recommended — large sampler speed-up
+pip install msprime      # optional, only for realistic-LD simulation
 ```
 
-### Quick start — full PRS pipeline
+### Quick start
+
+One command turns summary statistics + a genotype target into a polygenic score
+(QC and allele harmonisation run automatically):
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+pyldpred2-prs --sumstats gwas.txt.gz --plink target --out prs.txt
 pyldpred2-prs --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
 ```
 
 ```python
 from pyldpred2 import run_ldpred2_prs
-res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
-res.scores          # per-individual PRS
+res = run_ldpred2_prs("gwas.txt.gz", "target")   # method="auto" by default
+res.scores          # one PRS per individual
+res.harmonize_log   # matched / flipped / ambiguous / mismatched counts
 res.qc_log          # per-filter QC counts
 ```
 
-Sumstats QC (sample-size / MAF / INFO / duplicate / chi-sq + an SD-consistency
-check against the reference panel) runs by default. Full details, supported file
-formats and the module breakdown are in [docs/pipeline.md](docs/pipeline.md).
+Handy flags (see [docs/pipeline.md](docs/pipeline.md)):
 
-### Models
+| flag | what it does |
+|------|--------------|
+| `--dry-run` | preflight inputs (column mapping, ID match, harmonisation) — no fitting |
+| `--infer` | also estimate h², polygenicity and predictive r² |
+| `--method annot --annotations a.tsv` | use functional-annotation priors |
+| `--save-weights w.txt` / `--weights w.txt` | save fitted weights / score a new cohort from them |
+| `--ld-out f.npz` / `--ld-cache f.npz` | cache the LD to skip recomputing it on re-runs |
 
-| Function             | Model                                              | Hyper-parameters     |
-|----------------------|----------------------------------------------------|----------------------|
-| `ldpred2_inf`        | Infinitesimal (all variants causal, closed form)   | `h2`                 |
-| `ldpred2_grid`       | Point-normal / spike-and-slab (Gibbs sampler)      | `h2`, `p` (fixed)    |
-| `ldpred2_auto`       | Point-normal, estimates `h2` and `p` automatically | none (self-tuning)   |
-| `ldpred2_auto_annot` | `auto` + a learned functional-annotation prior     | none (learns the map)|
+### Choosing a model
 
-`ldpred2_auto` is the default for most uses; reach for `ldpred2_auto_annot` when
-you have per-SNP annotations. The [user guide](docs/guide.md#4-choosing-a-model)
-has a decision tree. Helpers: `standardize_betas`, `ldpred2_by_blocks` (run a
-model per LD block, genome-wide), `block_diagonal_ld`, `optimal_ld_blocks`.
+| Function | Model | When to use |
+|----------|-------|-------------|
+| `ldpred2_auto` | point-normal, self-tuning `h²` & `p` | **the default** — robust, no tuning |
+| `ldpred2_inf` | infinitesimal (all variants causal) | a truly infinitesimal trait, or a cheap baseline |
+| `ldpred2_grid` | point-normal at fixed `h²`, `p` | you already know the hyper-parameters |
+| `ldpred2_auto_annot` | `auto` + a learned annotation prior | you have per-SNP functional annotations |
 
-```python
-import numpy as np
-from pyldpred2 import standardize_betas, ldpred2_auto
+`auto` is the right choice for most traits; the
+[guide's decision tree](docs/guide.md#4-choosing-a-model) covers the rest.
 
-# beta, beta_se, n_eff: GWAS summary stats for one LD block;
-# corr: the (m x m) LD correlation matrix for those variants.
-beta_hat, scale = standardize_betas(beta, beta_se, n_eff)
-res = ldpred2_auto(corr, beta_hat, n_eff)
-adjusted_beta = res.beta_est * scale     # back to the input scale
-print(res.h2_est, res.p_est)             # estimated heritability & causal fraction
-```
+### What else it does
 
-### Inferring h², polygenicity & predictive r²
+- **Heritability, polygenicity & out-of-sample r² — no validation set**
+  (`ldpred2_auto_infer`, Privé et al. 2023), with an
+  **[LD Score regression](docs/inference.md)** cross-check (`ldsc_h2`).
+- **Genetic correlation & joint two-trait PRS** — `ldpred2_auto_bivariate` boosts
+  a weak trait using a correlated well-powered one; `ldsc_rg` cross-checks the rg.
+- **Annotation-informed priors** (SBayesRC-style, supplied or learned), **sparse
+  / banded LD**, **optimal LD-block splitting**, and weight save/reuse + LD
+  caching for fast re-runs.
+- Internals (streaming genome-wide sampler, float32 LD, Numba JIT) are in
+  [docs/algorithm.md](docs/algorithm.md); the full bigsnpr comparison, scaling and
+  robustness studies are in [docs/benchmarks.md](docs/benchmarks.md).
 
-`ldpred2_auto_infer` runs many LDpred2-auto chains (with chain QC) and
-returns heritability, polygenicity and the **out-of-sample predictive r²**, each
-with a 95% credible interval and **no validation set** (Privé et al., *AJHG*
-2023):
+### Working from your own LD blocks
 
-```python
-from pyldpred2 import ldpred2_auto_infer
-res = ldpred2_auto_infer(corr, beta_hat, n_eff, n_chains=10)
-res.h2_est, res.p_est, res.r2_est        # point estimates (+ *_ci for intervals)
-```
-
-The inferred r² tracks the PRS's held-out R² (e.g. 0.485 inferred vs 0.495
-held-out at N=8000). The h² estimate has an independent cross-check —
-**LD Score regression** (`ld_scores` / `ldsc_h2`) — which agrees with it but is
-~5–15× less precise. Details and validation in
-[docs/inference.md](docs/inference.md).
-
-### Performance vs bigsnpr (single core, realistic LD)
-
-![1-core method comparison vs bigsnpr](benchmarks/cores_1core_benchmark.png)
-
-Accuracy is **identical** to bigsnpr at every size and method. Memory is
-**~2× lower**. Speed is method-dependent: `-auto` is ~1.1–1.4× faster, `-inf`
-is on par, and `-grid` is ~2× slower (bigsnpr's compiled C++ grid sampler). Both
-scale to 2M SNPs single-threaded (pyLDpred2 ~4 GB, bigsnpr ~8 GB). Full tables,
-scaling studies and the genotype-level simulation are in
-[docs/benchmarks.md](docs/benchmarks.md).
-
-### Key features
-
-- **Fast Gibbs sampler** — running `R·β` residual, fused float32 rank-1 update,
-  Rao-Blackwellized estimates, optional Numba JIT.
-- **Global hyper-parameters for `-auto`** via a streaming sampler that never
-  materialises a genome-wide LD matrix (~34× less RAM at 2M SNPs).
-- **Sparse / banded LD** backend with an iterative (CG) `inf` solver.
-- **Optimal LD-block splitting** (Privé 2022).
-- **Per-variant priors** (`prior_weights`) — annotation-informed causal
-  probabilities, SBayesRC-style — either supplied, or **learned inside the
-  sampler** (`ldpred2_auto_annot`, EB or probit) returning enrichment estimates.
-- **Bivariate (two-trait) LDpred2** (`ldpred2_auto_bivariate`) — jointly fits two
-  traits sharing an LD reference, learning their genetic correlation so a
-  well-powered trait sharpens a weaker correlated one.
-- **LD Score regression** (`ld_scores`, `ldsc_h2`, `ldsc_rg`) — fast moment-based
-  h² and genetic-correlation estimates (+ confounding intercept), as independent
-  cross-checks of the LDpred2-auto / bivariate estimates.
-- **Warm start & adaptive stopping** to cut iterations.
-
-All of these are described in [docs/algorithm.md](docs/algorithm.md).
-
-### Conventions
-
-Effects are on the standardized scale, where marginal effects relate to the true
-joint effects through the LD matrix `R`:
+If you already have summary statistics and an LD matrix, call a model directly.
+Effects are on the **standardized scale**, where the marginal effects relate to
+the true joint effects through the LD matrix `R`:
 
 ```
 beta_hat = R @ beta + noise,   noise ~ N(0, R / N)
 ```
 
-with `N` the GWAS sample size. Use `standardize_betas(beta, beta_se, n_eff)` to
-convert reported GWAS effects to this scale and to recover the back-transform.
+`standardize_betas` converts reported GWAS effects to this scale and gives the
+back-transform:
+
+```python
+import numpy as np
+from pyldpred2 import standardize_betas, ldpred2_auto
+
+beta_hat, scale = standardize_betas(beta, beta_se, n_eff)   # one LD block
+res = ldpred2_auto(corr, beta_hat, n_eff)                   # corr: (m, m) LD
+adjusted_beta = res.beta_est * scale                        # back to input scale
+print(res.h2_est, res.p_est)
+```
+
+Use `ldpred2_by_blocks(...)` to run genome-wide, one LD block at a time.
 
 ### Tests
 
 ```bash
-python -m pytest tests/          # full assertion suite
-python -m pytest tests/test_ldpred2.py     # prints recovery of true effects on simulated data
+python -m pytest tests/        # full suite
 ```
 
 ### Documentation
 
-- [docs/guide.md](docs/guide.md) — **start here**: choose a model, run the pipeline, read the output, troubleshoot
-- [docs/pipeline.md](docs/pipeline.md) — end-to-end PRS pipeline, QC, file formats
-- [docs/inference.md](docs/inference.md) — h² / polygenicity / predictive-r² inference
-- [docs/benchmarks.md](docs/benchmarks.md) — full benchmarks, scaling, genotype-level simulation
-- [docs/algorithm.md](docs/algorithm.md) — sampler internals, sparse LD, LD splitting, warm start
+- **[docs/guide.md](docs/guide.md)** — start here: choose a model, run the pipeline, read the output, troubleshoot
+- [docs/pipeline.md](docs/pipeline.md) — pipeline, QC, file formats, CLI flags
+- [docs/inference.md](docs/inference.md) — h² / polygenicity / r² / genetic-correlation inference
+- [docs/algorithm.md](docs/algorithm.md) — sampler internals, sparse LD, LD splitting, bivariate model
+- [docs/benchmarks.md](docs/benchmarks.md) — accuracy, speed, scaling and robustness benchmarks

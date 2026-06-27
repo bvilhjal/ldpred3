@@ -166,3 +166,31 @@ def test_needs_two_chains():
         assert "chain" in str(e)
     else:
         raise AssertionError("expected ValueError for n_chains < 2")
+
+
+def _split_blocks(R, nblk):
+    """Split a block-diagonal dense R into a [(R_block, idx), ...] list."""
+    m = R.shape[0]; k = m // nblk
+    return [(R[b * k:(b + 1) * k, b * k:(b + 1) * k].astype(np.float32),
+             np.arange(b * k, (b + 1) * k)) for b in range(nblk)]
+
+
+def test_streaming_blocks_matches_dense():
+    # Inference on a list of per-block (R, idx) (streamed, no dense genome-wide
+    # LD) should agree with the dense path and recover h2.
+    R, beta_hat, n_train, Gte, yte = _simulate_cohorts(
+        h2=0.5, p=0.05, n_train=8000, seed=2)
+    blocks = _split_blocks(R, 6)
+    dense = ldpred2_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=120,
+                               num_iter=160, seed=5)
+    strm = ldpred2_auto_infer(blocks, beta_hat, n_train, n_chains=8, burn_in=120,
+                              num_iter=160, seed=5)
+    assert abs(dense.h2_est - strm.h2_est) < 0.07
+    assert abs(dense.p_est - strm.p_est) < 0.05
+    assert abs(dense.r2_est - strm.r2_est) < 0.07
+    assert abs(strm.h2_est - 0.5) < 0.12              # recovers true h2
+
+    # the inferred r2 still tracks the held-out R2 via the streaming path
+    pred = Gte @ strm.beta_est
+    r2_test = np.corrcoef(pred, yte)[0, 1] ** 2
+    assert abs(strm.r2_est - r2_test) < 0.12

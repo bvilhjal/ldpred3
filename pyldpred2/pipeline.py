@@ -267,16 +267,9 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
 
     inference = None
     if infer:
-        m_tot = len(h)
-        if m_tot > infer_max_variants:
-            raise ValueError(
-                f"inference assembles a dense {m_tot}x{m_tot} LD matrix; that "
-                f"exceeds infer_max_variants={infer_max_variants}. Run it on a "
-                f"chromosome / curated SNP set, or raise the limit.")
-        dense = np.zeros((m_tot, m_tot), dtype=np.float32)
-        for R, idx in blocks:
-            dense[np.ix_(idx, idx)] = R
-        res = ldpred2_auto_infer(dense, beta_std, h.n_eff,
+        # Streaming (block-diagonal) inference -- no dense genome-wide LD, so no
+        # size cap. (infer_max_variants is kept for backwards compatibility.)
+        res = ldpred2_auto_infer(blocks, beta_std, h.n_eff,
                                  ncores=ldpred2_kwargs.get("ncores", 1),
                                  **(infer_params or {}))
         inference = {"h2_est": res.h2_est, "h2_ci": res.h2_ci,

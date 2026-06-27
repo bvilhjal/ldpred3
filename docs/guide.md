@@ -15,10 +15,10 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 [reuse work](#8-re-using-work-saved-weights--cached-ld) ·
 [scaling](#9-scaling--performance) · [troubleshooting](#10-troubleshooting)
 
-> **In one line:** `pip install numpy numba` then
-> `pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt`.
-> Everything below is detail on the inputs, the model choice, and reading the
-> output.
+> **In one line:** `pip install . numba` then
+> `pyldpred2-prs --sumstats gwas.txt.gz --plink target --out prs.txt`
+> (`auto` is the default model). Everything below is detail on the inputs, the
+> model choice, and reading the output.
 
 ## 1. What you need
 
@@ -224,12 +224,12 @@ res.p_est,  res.p_ci      # polygenicity + 95% CI
 res.r2_est, res.r2_ci     # predicted out-of-sample r² + 95% CI
 ```
 
-or from the pipeline with `infer=True` / `--infer`. The estimator is dense, so
-use it at chromosome / curated-SNP scale (it guards at `infer_max_variants`,
-default 30000). For an independent h² check, `ldsc_h2` runs **LD Score
-regression** on the same summary statistics (it agrees with the LDpred2-auto h²
-but is less precise — see [inference.md](inference.md)). Full method and
-validation in [inference.md](inference.md).
+or from the pipeline with `infer=True` / `--infer`. Inference **streams the LD
+blocks**, so it runs genome-wide (no dense matrix is assembled). For an
+independent h² check, `ldsc_h2` runs **LD Score regression** on the same summary
+statistics (it agrees with the LDpred2-auto h² but is less precise — see
+[inference.md](inference.md)). Full method and validation in
+[inference.md](inference.md).
 
 ## 8. Re-using work: saved weights & cached LD
 
