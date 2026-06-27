@@ -9,6 +9,7 @@ GWAS sumstats + genotypes (PLINK/BGEN)
   → read & harmonise (align effect alleles to A1, drop ambiguous/mismatched)
   → SD-consistency QC vs the reference panel
   → per-block LD from a reference panel (in-sample or external)
+  → [optional] DENTIST LD-consistency outlier removal (--dentist)
   → ldpred2 (inf / grid / auto / annot)
   → per-individual PRS
 ```
@@ -69,7 +70,7 @@ When `--annotations` is given the method defaults to `annot`.
 | `genotype_io`   | Read/write PLINK 1 `.bed/.bim/.fam` (2-bit decode, NumPy-only)         |
 | `bgen_io`       | Read BGEN v1.2/layout-2 (uncompressed or zlib; biallelic diploid)      |
 | `sumstats`      | Parse GWAS files with flexible column aliases (OR→β, SE-from-p)        |
-| `qc`            | Sumstats QC: N / MAF / INFO / duplicate / chi-sq + SD-consistency      |
+| `qc`            | Sumstats QC: N / MAF / INFO / duplicate / chi-sq + SD-consistency + DENTIST |
 | `harmonize`     | Match variants + align effect alleles (swap-flip, strand, palindrome) |
 | `ld`            | Per-block LD correlation matrices from a genotype panel                |
 | `prs`           | Weighted polygenic scores with missing-call imputation                |
@@ -88,6 +89,23 @@ bigsnpr / LDpred2 tutorial:
   genotype SD `sd_ref = √(2·f·(1−f))`, and drop variants where the ratio leaves
   `[0.5, 2]`. This catches a wrong `N`, allele errors or bad imputation that
   harmonisation cannot.
+* **DENTIST LD-consistency** (`qc.dentist_outlier_mask`, opt-in with `--dentist`,
+  after the LD blocks are built): within each LD block, test whether each
+  variant's z-score agrees with the value predicted from its LD neighbours
+  (studentized leave-one-out residual `T_j = (Ωz)_j²/Ω_jj ~ χ²₁`, `Ω=(R+ridge·I)⁻¹`).
+  The single worst variant above the `5e-8` threshold is dropped, the LD blocks
+  are rebuilt on the survivors, and the pass repeats — removing one variant at a
+  time so a single corrupt SNP cannot take its whole tagged haplotype down with
+  it. Catches allele/strand errors and local LD-reference mismatch that survive
+  the SD-check.
+
+  Two safeguards make it conservative. (1) Only variants with an LD neighbour
+  (`|r| ≥ 0.1` with some block-mate) are removal candidates: with no neighbour the
+  residual is just the variant's own z, so in a low-LD / near-identity region
+  *every* genome-wide-significant hit would otherwise be flagged. (2) The χ²
+  cutoff is stringent. It is **off by default** because, even so, it can drop a
+  genuine but poorly-tagged independent association along with true errors. Tune
+  via `dentist_params` (e.g. `{"p_cutoff": 1e-6}`).
 
 ## Format / harmonisation notes
 

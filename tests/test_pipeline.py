@@ -129,6 +129,19 @@ def test_pipeline_infer_streams_past_old_cap(tmp_path):
     assert 0 < res.inference["h2_est"] < 1.5
 
 
+def test_pipeline_dentist_runs_and_keeps_signal(tmp_path):
+    # The DENTIST filter runs end-to-end, logs its counts, and (on clean
+    # simulated data) leaves the PRS predictive.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=8)
+    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200,
+                          dentist=True)
+    assert "dentist" in res.qc_log
+    assert res.qc_log["dentist"]["n_kept"] <= res.qc_log["dentist"]["n_input"]
+    # PRS still correlates with the held-out genetic value.
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"PRS R^2 after DENTIST too low: {r2:.3f}"
+
+
 def test_pipeline_method_annot(tmp_path):
     # method="annot": reads an annotation file, learns enrichment, scores predict.
     rng = np.random.default_rng(3)

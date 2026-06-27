@@ -7,7 +7,11 @@ import numpy as np
 
 
 from pyldpred2.sumstats import Sumstats                              # noqa: E402
-from pyldpred2.qc import qc_sumstats, sd_consistency_mask            # noqa: E402
+from pyldpred2.qc import (                                           # noqa: E402
+    qc_sumstats,
+    sd_consistency_mask,
+    dentist_outlier_mask,
+)
 
 
 def _ss(n, **over):
@@ -91,3 +95,49 @@ def test_sd_consistency_flags_wrong_n():
     assert log["n_drop_sd_inconsistent"] >= 10
     assert keep.sum() > n - 40
     assert keep[~np.isin(np.arange(n), bad)].mean() > 0.8
+
+
+def _ld_block(k, seed):
+    """A single correlated LD block via a shared latent-factor genotype draw."""
+    rng = np.random.default_rng(seed)
+    nfac = max(2, k // 5)
+    L = rng.standard_normal((k, nfac)) * 0.7
+    G = rng.standard_normal((2000, nfac)) @ L.T + rng.standard_normal((2000, k))
+    G = (G - G.mean(0)) / G.std(0)
+    R = (G.T @ G) / G.shape[0]
+    return R
+
+
+def test_dentist_keeps_ld_consistent_z():
+    # z generated as R @ beta (perfectly LD-consistent) -> nothing flagged.
+    R = _ld_block(40, seed=1)
+    rng = np.random.default_rng(2)
+    beta = np.zeros(40)
+    beta[rng.choice(40, 3, replace=False)] = rng.standard_normal(3) * 3
+    z = R @ beta
+    keep, log = dentist_outlier_mask([(R, np.arange(40))], z)
+    assert keep.all()
+    assert log["n_drop_dentist"] == 0
+
+
+def test_dentist_catches_single_sign_flip():
+    # One LD-inconsistent variant (sign-flipped) is removed; neighbours kept.
+    R = _ld_block(40, seed=3)
+    rng = np.random.default_rng(4)
+    beta = np.zeros(40)
+    lead = 10
+    beta[lead] = 4.0
+    beta[rng.choice(40, 2, replace=False)] = rng.standard_normal(2) * 2
+    z = R @ beta
+    z[lead] = -z[lead]                       # corrupt the lead variant
+    keep, log = dentist_outlier_mask([(R, np.arange(40))], z)
+    assert not keep[lead]                    # the error is caught
+    # Single-worst-per-pass removal does not nuke the whole correlated block.
+    assert keep.sum() >= 38
+
+
+def test_dentist_skips_small_blocks():
+    R = np.eye(2)
+    z = np.array([10.0, -10.0])
+    keep, log = dentist_outlier_mask([(R, np.arange(2))], z, min_block=3)
+    assert keep.all()
