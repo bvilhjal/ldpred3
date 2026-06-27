@@ -163,6 +163,26 @@ Use a marginal pass for a quick `r_g` sanity check, LDSC for a fast LD-correct h
 and the confounding intercept, and the LDpred2 estimators when precision matters
 (reading their point estimates with the LD-mismatch bias in mind).
 
+### Dense vs streaming inference
+
+`ldpred2_auto_infer` accepts either a dense LD matrix or per-block `(R, idx)`.
+The dense path is `O(m²)` per sweep; the streaming (blocks) path is
+`O(m · block_size)`, so the gap widens with `m`. Same data, 6 chains, single core
+(`benchmarks/infer_scaling.py`):
+
+| m | dense (s) | streaming (s) | speed-up |
+|------:|----------:|--------------:|---------:|
+| 2000  | 0.50 | 0.18 | 2.8× |
+| 4000  | 2.00 | 0.32 | 6.2× |
+| 8000  | 6.14 | 0.54 | 11.5× |
+| 16000 | 21.75 | 1.15 | **19×** |
+
+Dense roughly **quadruples per doubling** of `m` (quadratic); streaming roughly
+**doubles** (linear). The two agree on h² (≈0.52–0.57 here). By 16k SNPs dense is
+already 22 s and a dense genome-wide matrix is infeasible (memory and time),
+whereas streaming stays linear — so prefer the blocks form (which the pipeline's
+`--infer` now uses by default) at any non-trivial size.
+
 ## Interval calibration
 
 Do the nominal 95% intervals actually cover the truth 95% of the time? Coverage
