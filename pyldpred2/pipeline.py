@@ -43,7 +43,7 @@ from .sumstats import Sumstats, read_sumstats, detect_columns
 from .harmonize import harmonize
 from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
 from .prs import prs_score, allele_frequency
-from .qc import qc_sumstats, sd_consistency_mask
+from .qc import qc_sumstats, sd_consistency_mask, dentist_outlier_mask
 from .ldpred2 import standardize_betas, ldpred2_by_blocks
 from .infer import ldpred2_auto_infer
 from .annot import ldpred2_auto_annot_blocks, read_annotations
@@ -118,6 +118,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     ld_cache=None, ld_out=None,
                     sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
                     qc=True, qc_params=None, sd_check=True,
+                    dentist=False, dentist_params=None,
                     annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred2_kwargs):
@@ -156,6 +157,13 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     sd_check : bool, default True
         After harmonisation, drop variants failing the LDpred2 SD-consistency
         check against the reference panel (:func:`qc.sd_consistency_mask`).
+    dentist : bool, default False
+        After building the LD blocks, drop variants flagged by the DENTIST-style
+        LD-consistency filter (:func:`qc.dentist_outlier_mask`) and rebuild the
+        blocks on the survivors. Off by default — it can remove genuine,
+        poorly-tagged independent signals along with true errors.
+    dentist_params : dict, optional
+        Overrides for the DENTIST thresholds (e.g. ``{"p_cutoff": 1e-6}``).
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
     **ldpred2_kwargs
@@ -241,6 +249,27 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
 
         blocks = compute_ld_blocks(ld_dos, chrom=chrom, block_size=block_size,
                                    ridge=ld_ridge)
+
+        # Optional DENTIST-style LD-consistency outlier removal. Catches
+        # variants whose z-score disagrees with its LD neighbours (allele/strand
+        # errors, LD-reference mismatch). Off by default — it can also drop
+        # genuine, poorly-tagged independent signals (see qc.dentist_outlier_mask).
+        if dentist:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                z = h.beta / h.se
+            keep_dt, dt_log = dentist_outlier_mask(blocks, z,
+                                                   **(dentist_params or {}))
+            qc_log["dentist"] = dt_log
+            if keep_dt.sum() == 0:
+                raise ValueError("all variants failed the DENTIST check")
+            if not keep_dt.all():
+                h = _subset_harmonized(h, keep_dt)
+                target_dos = target_dos[:, keep_dt]
+                ld_dos = ld_dos[:, keep_dt]
+                chrom = chrom[keep_dt]
+                blocks = compute_ld_blocks(ld_dos, chrom=chrom,
+                                           block_size=block_size, ridge=ld_ridge)
+
         if ld_out is not None:
             save_ld_blocks(ld_out, blocks, geno.variants.id[h.var_index])
 
@@ -432,6 +461,9 @@ def _main(argv=None):
                     help="reuse LD blocks saved earlier with --ld-out")
     ap.add_argument("--ncores", type=int, default=1)
     ap.add_argument("--no-qc", action="store_true", help="skip sumstats QC")
+    ap.add_argument("--dentist", action="store_true",
+                    help="apply the DENTIST LD-consistency outlier filter "
+                         "(off by default; can drop poorly-tagged true signals)")
     ap.add_argument("--no-sd-check", action="store_true",
                     help="skip the SD-consistency QC")
     ap.add_argument("--infer", action="store_true",
@@ -501,7 +533,8 @@ def _main(argv=None):
         ld_prefix=args.ld_prefix, ld_ridge=args.ld_ridge, ncores=args.ncores,
         ld_out=args.ld_out, ld_cache=args.ld_cache,
         annotations=args.annotations,
-        qc=not args.no_qc, sd_check=not args.no_sd_check, infer=args.infer)
+        qc=not args.no_qc, sd_check=not args.no_sd_check,
+        dentist=args.dentist, infer=args.infer)
 
     if args.save_weights:
         res.write_weights(args.save_weights)

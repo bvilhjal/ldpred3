@@ -26,7 +26,106 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["qc_sumstats", "sd_consistency_mask"]
+__all__ = ["qc_sumstats", "sd_consistency_mask", "dentist_outlier_mask"]
+
+
+def dentist_outlier_mask(blocks, z, *, p_cutoff=5e-8, ridge=0.01, n_iter=20,
+                         min_block=3, min_neighbor_r=0.1):
+    """DENTIST-style LD-consistency outlier filter (Chen et al., *Nat Commun* 2021).
+
+    Within each LD block, test whether each variant's z-score is consistent with
+    the value predicted from its LD neighbours. Under the LD model the studentized
+    leave-one-out residual ``T_j = (Omega z)_j^2 / Omega_jj`` (with
+    ``Omega = (R + ridge·I)^-1``) is ~``chi^2_1``; the variant with the largest
+    ``T`` above the ``p_cutoff`` threshold is flagged as LD-inconsistent — the
+    signature of an allele/strand error, a local LD-reference mismatch or bad
+    imputation — and dropped.
+
+    Removal is **iterative and one-at-a-time per block**: a single corrupt variant
+    inflates the residuals of every LD neighbour it tags, so removing all variants
+    above threshold in one pass would discard a whole haplotype around one error.
+    Instead each pass drops only the single worst variant per block and recomputes
+    on the survivors (DENTIST's actual scheme), repeating up to ``n_iter`` times
+    until no block exceeds the threshold.
+
+    Only variants that **have an LD neighbour** (some survivor with
+    ``|r| >= min_neighbor_r``) are removal candidates. This is essential: with no
+    neighbour the residual collapses to the variant's own z-score, so a region of
+    near-independent variants (or an in-sample LD matrix close to the identity)
+    would otherwise have *every* genome-wide-significant hit flagged as an
+    "outlier". An uncorroborated association is left in place — there is simply no
+    LD evidence to call it inconsistent.
+
+    Parameters
+    ----------
+    blocks : list of (R, idx)
+        Per-block LD matrices and the variants' positions in ``z``.
+    z : array_like (m,)
+        Marginal z-scores (``beta_hat / se``), covariance ``R`` under the model.
+    p_cutoff : float, default 5e-8
+        Two-sided p-value for the chi-square_1 threshold (stringent by design).
+    ridge : float, default 0.01
+        Ridge added to ``R`` before inversion (stabilises a noisy reference LD).
+    n_iter : int, default 20
+        Maximum number of single-removal passes (stops early once clean).
+    min_block : int, default 3
+        Skip blocks with fewer surviving variants than this.
+    min_neighbor_r : float, default 0.1
+        A variant is only a removal candidate if some surviving block-mate has
+        ``|r| >= min_neighbor_r`` with it. Guards against flagging uncorroborated
+        signals in low-LD / near-identity regions.
+
+    Returns
+    -------
+    keep : ndarray of bool (m,)
+    log : dict
+
+    Notes
+    -----
+    Even among corroborated variants this can flag a *genuine* signal that
+    disagrees with its neighbours (a poorly tagged independent association). It is
+    therefore a deliberate trade-off — keep ``p_cutoff`` stringent and treat it as
+    optional cleaning, not a default.
+    """
+    from statistics import NormalDist
+    thr = NormalDist().inv_cdf(1.0 - p_cutoff / 2.0) ** 2      # chi^2_1 cutoff
+    z = np.asarray(z, dtype=float)
+    m = z.shape[0]
+    keep = np.ones(m, dtype=bool)
+    fblocks = [(np.asarray(R, dtype=float), np.asarray(idx)) for R, idx in blocks]
+
+    n_pass = 0
+    for _ in range(max(1, int(n_iter))):
+        flagged = False
+        for R, idx in fblocks:
+            local = keep[idx]
+            if int(local.sum()) < min_block:
+                continue
+            Rk = R[np.ix_(local, local)]
+            zk = z[idx[local]]
+            # A variant is testable only if it has a neighbour in LD; otherwise
+            # its residual is just its own z and any strong hit looks "wrong".
+            offdiag = np.abs(Rk) - np.eye(Rk.shape[0])
+            has_nbr = offdiag.max(axis=1) >= min_neighbor_r
+            if not has_nbr.any():
+                continue
+            omega = np.linalg.inv(Rk + ridge * np.eye(Rk.shape[0]))
+            t = omega @ zk
+            stat = t * t / np.maximum(np.diag(omega), 1e-12)
+            stat = np.where(has_nbr, stat, -np.inf)   # only corroborated variants
+            j = int(np.argmax(stat))
+            if stat[j] > thr:
+                # Drop only the single worst variant in this block; its LD
+                # neighbours are re-tested (on the survivors) next pass.
+                keep[idx[local][j]] = False
+                flagged = True
+        n_pass += 1
+        if not flagged:
+            break
+
+    log = {"n_input": m, "n_drop_dentist": m - int(keep.sum()),
+           "n_kept": int(keep.sum()), "n_pass": n_pass}
+    return keep, log
 
 
 def qc_sumstats(ss, *, min_n_ratio=0.7, min_maf=0.01, min_info=0.7,
