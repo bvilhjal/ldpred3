@@ -94,12 +94,20 @@ def dentist_outlier_mask(blocks, z, *, p_cutoff=5e-8, ridge=0.01, n_iter=20,
     keep = np.ones(m, dtype=bool)
     fblocks = [(np.asarray(R, dtype=float), np.asarray(idx)) for R, idx in blocks]
 
+    # Blocks tile disjoint variant ranges, so a block's residuals only change
+    # when it drops one of its own variants. Once a block makes no removal (or
+    # can no longer test any variant) it is settled for good, so we mark it
+    # inactive and skip its (otherwise identical) re-inversion on later passes.
     n_pass = 0
+    active = np.ones(len(fblocks), dtype=bool)
     for _ in range(max(1, int(n_iter))):
         flagged = False
-        for R, idx in fblocks:
+        for bi, (R, idx) in enumerate(fblocks):
+            if not active[bi]:
+                continue
             local = keep[idx]
             if int(local.sum()) < min_block:
+                active[bi] = False
                 continue
             Rk = R[np.ix_(local, local)]
             zk = z[idx[local]]
@@ -108,6 +116,7 @@ def dentist_outlier_mask(blocks, z, *, p_cutoff=5e-8, ridge=0.01, n_iter=20,
             offdiag = np.abs(Rk) - np.eye(Rk.shape[0])
             has_nbr = offdiag.max(axis=1) >= min_neighbor_r
             if not has_nbr.any():
+                active[bi] = False
                 continue
             omega = np.linalg.inv(Rk + ridge * np.eye(Rk.shape[0]))
             t = omega @ zk
@@ -119,6 +128,8 @@ def dentist_outlier_mask(blocks, z, *, p_cutoff=5e-8, ridge=0.01, n_iter=20,
                 # neighbours are re-tested (on the survivors) next pass.
                 keep[idx[local][j]] = False
                 flagged = True
+            else:
+                active[bi] = False   # clean: residuals won't change again
         n_pass += 1
         if not flagged:
             break
