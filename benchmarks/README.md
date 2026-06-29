@@ -8,6 +8,17 @@ and discussion live in [`docs/benchmarks.md`](../docs/benchmarks.md) and
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/<script>.py
 ```
 
+**Publication figures.** `make_paper_figures.py` assembles the headline results
+into one multi-page PDF (`benchmarks/figures.pdf`): the bigsnpr time/memory
+comparison and accuracy-by-architecture (from the committed CSVs), plus DENTIST
+recovery, sparse/banded LD, optimal block splitting, the Numba speed-up and
+multi-core scaling (computed from a self-contained simulation and cached to
+`figdata_*.csv`). Needs `matplotlib` (and `numba` for the performance page).
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py
+```
+
 **LD library.** Most scripts simulate from a cached coalescent LD library,
 `ld_library.npz` (100 blocks × 500×500 correlation matrices, ~200 MB, **not
 committed**), expected in the working directory. Generate it once with msprime
