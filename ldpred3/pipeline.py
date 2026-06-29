@@ -44,7 +44,7 @@ from .harmonize import harmonize
 from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
 from .prs import prs_score, allele_frequency
 from .qc import qc_sumstats, sd_consistency_mask, dentist_outlier_mask
-from .ldpred3 import standardize_betas, ldpred3_by_blocks
+from .ldpred3 import standardize_betas, ldpred3_by_blocks, shrink_ld_blocks
 from .infer import ldpred3_auto_infer
 from .annot import ldpred3_auto_annot_blocks, read_annotations
 
@@ -119,6 +119,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
                     qc=True, qc_params=None, sd_check=True,
                     dentist=False, dentist_params=None,
+                    ld_shrink=False, ld_shrink_params=None,
                     annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
@@ -166,6 +167,15 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         authoritative; rebuild the cache from a ``dentist=True`` run to apply it.
     dentist_params : dict, optional
         Overrides for the DENTIST thresholds (e.g. ``{"p_cutoff": 1e-6}``).
+    ld_shrink : bool, default False
+        Apply size-aware spectral shrinkage of the LD blocks toward the identity
+        (:func:`ld_utils.shrink_ld_blocks`): each block is shrunk by
+        ``alpha = min(max_shrink, k / n_ref)`` so large blocks (noise-dominated
+        when ``k`` approaches the reference-panel size) are regularised while
+        small, well-estimated blocks are left alone. Helps on a finite / noisy LD
+        reference (reduces sampler over-fit and h² inflation).
+    ld_shrink_params : dict, optional
+        Overrides for the shrinkage (e.g. ``{"max_shrink": 0.3, "intensity": 0.5}``).
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
     **ldpred3_kwargs
@@ -277,6 +287,19 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                 chrom = chrom[keep_dt]
                 blocks = compute_ld_blocks(ld_dos, chrom=chrom,
                                            block_size=block_size, ridge=ld_ridge)
+
+        # Optional size-aware spectral shrinkage of the LD blocks toward the
+        # identity. A block's sample LD from n_ref reference individuals is
+        # noise-dominated when the block is large relative to n_ref; shrinking
+        # those (and leaving small, well-estimated blocks alone) stabilises the
+        # sampler and reduces h2 over-fitting on a finite LD panel.
+        if ld_shrink:
+            n_ref = ld_dos.shape[0]
+            blocks = shrink_ld_blocks(blocks, n_ref,
+                                      **(ld_shrink_params or {}))
+            sizes = [int(np.asarray(idx).shape[0]) for _, idx in blocks]
+            qc_log["ld_shrink"] = {"n_ref": int(n_ref), "n_blocks": len(blocks),
+                                   "max_block": int(max(sizes)) if sizes else 0}
 
         if ld_out is not None:
             save_ld_blocks(ld_out, blocks, geno.variants.id[h.var_index])
@@ -481,6 +504,9 @@ def _main(argv=None):
                          "(off by default; can drop poorly-tagged true signals)")
     ap.add_argument("--no-sd-check", action="store_true",
                     help="skip the SD-consistency QC")
+    ap.add_argument("--ld-shrink", action="store_true",
+                    help="size-aware spectral shrinkage of large LD blocks "
+                         "toward the identity (helps on a finite LD panel)")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
                          "(dense; for chromosome / curated-SNP scale)")
@@ -549,7 +575,7 @@ def _main(argv=None):
         ld_out=args.ld_out, ld_cache=args.ld_cache,
         annotations=args.annotations,
         qc=not args.no_qc, sd_check=not args.no_sd_check,
-        dentist=args.dentist, infer=args.infer)
+        dentist=args.dentist, ld_shrink=args.ld_shrink, infer=args.infer)
 
     if args.save_weights:
         res.write_weights(args.save_weights)

@@ -42,7 +42,7 @@ import numpy as np
 # surface (used by infer / annot / bivariate and the tests) keeps working.
 from ._numba import HAVE_NUMBA, _jit, _jit_parallel, _set_threads, prange  # noqa: F401,E402
 from .ld_utils import (SparseLD, sparsify_ld, block_diagonal_ld,  # noqa: F401,E402
-                       optimal_ld_blocks)
+                       optimal_ld_blocks, shrink_ld_blocks)
 
 
 def _stable_postp(log_odds):
@@ -72,6 +72,7 @@ __all__ = [
     "sparsify_ld",
     "block_diagonal_ld",
     "optimal_ld_blocks",
+    "shrink_ld_blocks",
 ]
 
 

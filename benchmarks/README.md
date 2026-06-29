@@ -57,6 +57,7 @@ panel internally, so they run anywhere.
 |--------|------------------|
 | `infer_recovery.py` | LDpred3-auto-infer: h² and polygenicity recovery vs truth, CI width and empirical 95% coverage (no validation cohort) |
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
+| `ld_shrink_large_blocks.py` | Size-aware LD shrinkage (`shrink_ld_blocks`): R² and h² on a finite reference panel, no-shrink vs uniform vs size-aware, across Nref |
 | `sparse_ld_tradeoff.py` | Sparse / banded LD: storage (density) and fit time vs accuracy across thresholding / banding settings |
 | `block_splitting.py` | `optimal_ld_blocks` vs fixed-size blocks: discarded between-block LD², per-block storage and accuracy |
 | `numba_speedup.py` | Numba-JIT vs pure-Python fit time for the Gibbs sampler (runs itself twice, with/without JIT) |

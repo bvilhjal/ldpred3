@@ -20,7 +20,62 @@ import numpy as np
 
 from ._numba import _jit
 
-__all__ = ["SparseLD", "sparsify_ld", "block_diagonal_ld", "optimal_ld_blocks"]
+__all__ = ["SparseLD", "sparsify_ld", "block_diagonal_ld", "optimal_ld_blocks",
+           "shrink_ld_blocks"]
+
+
+def shrink_ld_blocks(blocks, n_ref, *, max_shrink=0.5, intensity=1.0, min_block=1):
+    """Size-aware spectral shrinkage of per-block LD toward the identity.
+
+    A block's sample LD estimated from a finite reference panel of ``n_ref``
+    individuals carries noise that grows with the block size ``k`` relative to
+    ``n_ref`` (Marchenko-Pastur: the noise in the eigenvalues scales with
+    ``k / n_ref``). Small blocks (``k << n_ref``) are well estimated, but large
+    blocks (``k`` approaching or exceeding ``n_ref``) are noise-dominated: the
+    sample eigenvalues are inflated/spread, which makes the Gibbs sampler over-fit
+    and inflates ``h2``.
+
+    Each block is shrunk toward the identity by
+    ``alpha = min(max_shrink, intensity * k / n_ref)`` --
+    ``R <- (1 - alpha) R + alpha I`` with the diagonal kept at 1. Because
+    ``alpha`` grows with ``k / n_ref``, this **regularises large blocks while
+    leaving small, well-estimated ones essentially untouched** -- a uniform
+    eigenvalue shrinkage (every eigenvalue ``lam -> (1-alpha) lam + alpha``) that,
+    unlike low-rank PC truncation, does not preserve the Marchenko-Pastur-inflated
+    top eigenvalues. Returns a new list of ``(R, idx)`` blocks (``SparseLD`` blocks
+    are passed through unchanged).
+
+    Parameters
+    ----------
+    blocks : list of (ndarray, idx)
+        Dense per-block LD and the variants' positions.
+    n_ref : int
+        Number of individuals the reference LD was estimated from.
+    max_shrink : float, default 0.5
+        Cap on the per-block shrinkage intensity.
+    intensity : float, default 1.0
+        Scales the ``k / n_ref`` shrinkage (use < 1 to shrink more gently).
+    min_block : int, default 1
+        Blocks smaller than this are never shrunk.
+    """
+    if not n_ref or n_ref <= 0:
+        return list(blocks)
+    out = []
+    for cb, idx in blocks:
+        idx = np.asarray(idx)
+        if isinstance(cb, SparseLD):
+            out.append((cb, idx))
+            continue
+        k = idx.shape[0]
+        alpha = min(max_shrink, intensity * k / float(n_ref)) if k >= min_block else 0.0
+        if alpha > 0.0:
+            R = np.asarray(cb, dtype=np.float64)
+            R = (1.0 - alpha) * R + alpha * np.eye(k)
+            np.fill_diagonal(R, 1.0)
+            out.append((R.astype(np.float32), idx))
+        else:
+            out.append((np.asarray(cb, dtype=np.float32), idx))
+    return out
 
 
 @dataclass
