@@ -42,7 +42,8 @@ import numpy as np
 # surface (used by infer / annot / bivariate and the tests) keeps working.
 from ._numba import HAVE_NUMBA, _jit, _jit_parallel, _set_threads, prange  # noqa: F401,E402
 from .ld_utils import (SparseLD, sparsify_ld, block_diagonal_ld,  # noqa: F401,E402
-                       optimal_ld_blocks, shrink_ld_blocks)
+                       optimal_ld_blocks, shrink_ld_blocks,
+                       LowRankLD, lowrank_ld)
 
 
 def _stable_postp(log_odds):
@@ -73,6 +74,8 @@ __all__ = [
     "block_diagonal_ld",
     "optimal_ld_blocks",
     "shrink_ld_blocks",
+    "LowRankLD",
+    "lowrank_ld",
 ]
 
 
@@ -177,6 +180,14 @@ def ldpred3_inf(corr, beta_hat, n_eff, h2):
         # Solve (R + ridge*I) x = beta_hat by conjugate gradient; the system is
         # SPD (R is a correlation matrix and ridge>0) and only needs matvecs.
         return _cg_solve(corr, ridge, beta_hat)
+
+    if isinstance(corr, LowRankLD):
+        # (U U^T + ridge I)^-1 b via Woodbury: O(m r + r^3), no dense m x m.
+        U = np.asarray(corr.U, dtype=float)
+        r = U.shape[1]
+        Utb = U.T @ beta_hat
+        inner = ridge * np.eye(r) + U.T @ U
+        return (beta_hat - U @ np.linalg.solve(inner, Utb)) / ridge
 
     corr = np.asarray(corr, dtype=float)
     A = corr + np.eye(m) * ridge
@@ -1100,6 +1111,80 @@ def _gibbs_one_sweep_sparse(indptr, indices, data, beta_hat, n, curr_beta, Rb,
 _gibbs_one_sweep_sparse_jit = _jit(_gibbs_one_sweep_sparse)
 
 
+def _gibbs_one_sweep_lowrank(U, beta_hat, n, curr_beta, s, post_means, unif,
+                             gauss, c1, log_prior_odds, sparse, n_const, n0,
+                             resync):
+    """Eigenspace counterpart of :func:`_gibbs_one_sweep` for a low-rank block.
+
+    ``R ~= U U^T`` (unit diagonal). The block's residual is carried in the
+    r-vector ``s = U^T beta`` instead of a length-k ``Rb``: ``(R beta)_j = U[j].s``
+    and an effect change ``delta`` updates ``s += delta*U[j]`` -- O(r) per SNP,
+    O(k*r) total, with no dense k×k. ``beta^T R beta = ||s||^2``.
+    """
+    k = beta_hat.shape[0]
+    r = U.shape[1]
+    if resync:
+        for c in range(r):
+            s[c] = 0.0
+        for j in range(k):
+            bj = curr_beta[j]
+            if bj != 0.0:
+                for c in range(r):
+                    s[c] += U[j, c] * bj
+
+    if n_const:
+        nc1 = n0 * c1
+        pv0 = c1 / (nc1 + 1.0)
+        psd0 = np.sqrt(pv0)
+        half0 = 0.5 * np.log1p(nc1)
+        npv0 = n0 * pv0
+
+    nb_causal = 0
+    for j in range(k):
+        old = curr_beta[j]
+        rbj = 0.0
+        for c in range(r):
+            rbj += U[j, c] * s[c]
+        res_beta_j = beta_hat[j] - rbj + old        # (U U^T)_jj = 1
+        if n_const:
+            pv = pv0
+            psd = psd0
+            half = half0
+            post_mean = npv0 * res_beta_j
+        else:
+            nj = n[j]
+            nc1 = nj * c1
+            pv = c1 / (nc1 + 1.0)
+            psd = np.sqrt(pv)
+            half = 0.5 * np.log1p(nc1)
+            post_mean = nj * pv * res_beta_j
+        log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
+        postp = _stable_postp(log_odds)
+        post_means[j] = postp * post_mean
+
+        if sparse and postp < 0.5:
+            new = 0.0
+        elif unif[j] < postp:
+            new = post_mean + gauss[j] * psd
+            nb_causal += 1
+        else:
+            new = 0.0
+
+        delta = new - old
+        if delta != 0.0:
+            for c in range(r):
+                s[c] += U[j, c] * delta
+            curr_beta[j] = new
+
+    gv = 0.0
+    for c in range(r):
+        gv += s[c] * s[c]
+    return nb_causal, gv
+
+
+_gibbs_one_sweep_lowrank_jit = _jit(_gibbs_one_sweep_lowrank)
+
+
 def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
                          sparse, seed, estimate_hyper, h2_bounds,
                          warm_start=False, tol=0.0, check_every=50):
@@ -1122,22 +1207,27 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
     # Per-block payloads, de-duplicated by object identity (shared -> 1 copy).
     # Dense blocks are stored as float32; SparseLD blocks keep their banded CSR
     # so a large block costs O(k*bandwidth) memory, not O(k^2).
+    # kind: 0=dense (float32), 1=SparseLD (banded CSR), 2=LowRankLD (eigenspace).
+    # Each carries O(k*bandwidth) / O(k*rank) memory instead of O(k^2). LowRank
+    # blocks also get a persistent score buffer s = U^T beta (length r).
     cache = {}
-    fblocks = []           # (is_sparse, obj, start, k)
+    fblocks = []           # (kind, obj, start, k, s_or_None)
     for cb, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
         idx = np.asarray(idx)
         start, k = int(idx[0]), int(idx.shape[0])
         if isinstance(cb, SparseLD):
-            fblocks.append((True, cb, start, k))
+            fblocks.append((1, cb, start, k, None))
+        elif isinstance(cb, LowRankLD):
+            fblocks.append((2, cb, start, k, np.zeros(cb.U.shape[1])))
         else:
             key = id(cb)
             if key not in cache:
                 cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
-            fblocks.append((False, cache[key], start, k))
+            fblocks.append((0, cache[key], start, k, None))
 
     curr_beta = np.zeros(m)
     if warm_start:
-        for is_sp, obj, start, k in fblocks:
+        for kind, obj, start, k, _s in fblocks:
             sl = slice(start, start + k)
             curr_beta[sl] = ldpred3_inf(obj, beta_hat[sl], n[sl], h2 * k / m)
     Rb = np.zeros(m)
@@ -1156,13 +1246,18 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
         resync = (it % 100 == 0)
         nb_causal = 0
         gv = 0.0
-        for is_sp, obj, start, k in fblocks:
+        for kind, obj, start, k, s in fblocks:
             sl = slice(start, start + k)
-            if is_sp:
+            if kind == 1:
                 nbc, gvb = _gibbs_one_sweep_sparse_jit(
                     obj.indptr, obj.indices, obj.data, beta_hat[sl], n[sl],
                     curr_beta[sl], Rb[sl], post_means[sl], unif[sl], gauss[sl],
                     c1, log_prior_odds, bool(sparse), n_const, n0, resync)
+            elif kind == 2:
+                nbc, gvb = _gibbs_one_sweep_lowrank_jit(
+                    obj.U, beta_hat[sl], n[sl], curr_beta[sl], s, post_means[sl],
+                    unif[sl], gauss[sl], c1, log_prior_odds, bool(sparse),
+                    n_const, n0, resync)
             else:
                 nbc, gvb = _gibbs_one_sweep_jit(
                     obj, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
@@ -1558,14 +1653,14 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
             tol=kwargs.pop("tol", 0.0), check_every=kwargs.pop("check_every", 50))
         h2_init = kwargs.pop("h2_init", 0.1)
         p_init = kwargs.pop("p_init", 0.1)
-        has_sparse = any(isinstance(cb, SparseLD) for cb, _ in blk)
-        if ncores and ncores > 1 and not has_sparse:
+        has_special = any(isinstance(cb, (SparseLD, LowRankLD)) for cb, _ in blk)
+        if ncores and ncores > 1 and not has_special:
             # Multicore: packed blocks + prange (more memory, parallel sweeps).
             avg_beta, _, _, _ = _gibbs_blocks(blk, beta_hat, n, h2_init, p_init,
                                               ncores=ncores, **common)
         else:
-            # Single core, or banded/SparseLD blocks (the packed multicore kernel
-            # is dense-only): streaming sampler -- O(k·bandwidth) memory per block.
+            # Single core, or banded/low-rank blocks (the packed multicore kernel
+            # is dense-only): streaming sampler -- O(k·bandwidth)/O(k·rank) memory.
             avg_beta, _, _, _ = _gibbs_blocks_stream(blk, beta_hat, n, h2_init,
                                                      p_init, **common)
         return avg_beta

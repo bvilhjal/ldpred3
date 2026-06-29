@@ -64,6 +64,53 @@ def test_sparse_streaming_auto_matches_dense():
         assert loaded[0][0].nnz == sparse[0][0].nnz
 
 
+def test_lowrank_streaming_auto_matches_dense():
+    # Eigenspace low-rank LD: global-hyper streaming auto should match the dense
+    # fit (genetic-value agreement), at a fraction of the memory, and round-trip.
+    from ldpred3.simulate import simulate_genotypes
+    from ldpred3.ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
+    from ldpred3 import LowRankLD, lowrank_ld, ldpred3_inf
+    import tempfile, os
+    nb, k, m, n = 6, 300, 1800, 20000
+    rng = np.random.default_rng(0)
+    maf = rng.uniform(0.05, 0.5, m)
+    G, _ = simulate_genotypes(4000, [k] * nb, maf, 0.85, rng)
+    dense = compute_ld_blocks(G, block_size=k)
+    lr = compute_ld_blocks(G, block_size=k, lowrank=True, lowrank_variance=0.99)
+    assert all(isinstance(R, LowRankLD) for R, _ in lr)
+    assert all(R.rank < k for R, _ in lr)              # genuinely reduced rank
+    Rf = [(R.astype(float), idx) for R, idx in dense]
+
+    def gv(a, b):
+        return sum(a[ix] @ (R @ b[ix]) for R, ix in Rf)
+
+    def r2(be, beta):
+        num = gv(be, beta); den = gv(be, be) * gv(beta, beta)
+        return float(num * num / den) if den > 0 else 0.0
+
+    c = rng.random(m) < 0.02
+    beta = np.zeros(m); beta[c] = rng.standard_normal(int(c.sum()))
+    beta *= np.sqrt(0.5 / gv(beta, beta))
+    bh = np.empty(m)
+    for R, ix in Rf:
+        ch = np.linalg.cholesky(R + 1e-4 * np.eye(len(ix)))
+        bh[ix] = R @ beta[ix] + (ch @ rng.standard_normal(len(ix))) / np.sqrt(n)
+    nv = np.full(m, float(n))
+    bd = ldpred3_by_blocks(dense, bh, nv, method="auto", burn_in=80, num_iter=120, seed=0)
+    bl = ldpred3_by_blocks(lr, bh, nv, method="auto", burn_in=80, num_iter=120, seed=0)
+    # genetic R2 against truth should be within a small margin of dense
+    assert r2(bl, beta) > r2(bd, beta) - 0.05
+    # Woodbury inf solve handles LowRankLD
+    _ = ldpred3_inf(lowrank_ld(Rf[0][0], 0.99), bh[:k], nv[:k], 0.5)
+    # round-trip through the on-disk cache (stores the U factor)
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "ld.npz")
+        save_ld_blocks(p, lr, [f"v{i}" for i in range(m)])
+        loaded, _ = load_ld_blocks(p)
+        assert all(isinstance(R, LowRankLD) for R, _ in loaded)
+        assert loaded[0][0].rank == lr[0][0].rank
+
+
 def test_shrink_ld_blocks_is_size_aware():
     # alpha = min(max_shrink, k / n_ref): small block ~untouched, large shrunk.
     rng = np.random.default_rng(0)

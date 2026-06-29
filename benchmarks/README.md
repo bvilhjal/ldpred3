@@ -59,6 +59,7 @@ panel internally, so they run anywhere.
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
 | `ld_shrink_large_blocks.py` | Size-aware LD shrinkage (`shrink_ld_blocks`): R² and h² on a finite reference panel, no-shrink vs uniform vs size-aware, across Nref |
 | `ld_memory_scaling.py` | Persistent LD storage dense O(k²) vs banded SparseLD O(k·w) across block sizes, with a 10M-SNP extrapolation (realistic coalescent LD) |
+| `ld_lowrank.py` | Low-rank `LowRankLD` (eigen/PC) vs dense vs banded on realistic LD: genetic R² and memory (low-rank matches dense at ~24% memory; banding loses accuracy) |
 | `sparse_ld_tradeoff.py` | Sparse / banded LD: storage (density) and fit time vs accuracy across thresholding / banding settings |
 | `block_splitting.py` | `optimal_ld_blocks` vs fixed-size blocks: discarded between-block LD², per-block storage and accuracy |
 | `numba_speedup.py` | Numba-JIT vs pure-Python fit time for the Gibbs sampler (runs itself twice, with/without JIT) |

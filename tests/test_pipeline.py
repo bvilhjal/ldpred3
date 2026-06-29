@@ -169,6 +169,23 @@ def test_pipeline_ld_sparse_runs_and_keeps_signal(tmp_path):
     assert all(isinstance(R, SparseLD) for R, _ in blocks)
 
 
+def test_pipeline_ld_lowrank_runs_and_keeps_signal(tmp_path):
+    # Low-rank LD blocks fit via the eigenspace streaming auto kernel, stay
+    # predictive, and round-trip through the on-disk cache as factors.
+    from ldpred3 import LowRankLD
+    from ldpred3.ld import load_ld_blocks
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=12)
+    cache = tmp_path / "ld_lr.npz"
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                          ld_lowrank=True,
+                          ld_lowrank_params={"lowrank_variance": 0.99},
+                          ld_out=str(cache))
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"PRS R^2 with low-rank LD too low: {r2:.3f}"
+    blocks, _ = load_ld_blocks(str(cache))
+    assert all(isinstance(R, LowRankLD) for R, _ in blocks)
+
+
 def test_pipeline_method_annot(tmp_path):
     # method="annot": reads an annotation file, learns enrichment, scores predict.
     rng = np.random.default_rng(3)

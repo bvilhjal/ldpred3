@@ -17,6 +17,8 @@ from .ldpred3 import (
     block_diagonal_ld,
     optimal_ld_blocks,
     shrink_ld_blocks,
+    LowRankLD,
+    lowrank_ld,
 )
 from .pipeline import (
     run_ldpred3_prs,
@@ -44,6 +46,8 @@ __all__ = [
     "block_diagonal_ld",
     "optimal_ld_blocks",
     "shrink_ld_blocks",
+    "LowRankLD",
+    "lowrank_ld",
     "run_ldpred3_prs",
     "PRSResult",
     "preflight_prs",
