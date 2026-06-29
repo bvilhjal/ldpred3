@@ -364,3 +364,108 @@ it. `inf` is flat ~0.91 across p by construction (it assumes all variants causal
 so sparsity neither helps nor hurts it). The practical reading: `auto` is the
 right default — it wins wherever there is concentrated signal and is only a hair
 behind a perfectly-matched `inf` when the trait is truly infinitesimal.
+
+## DENTIST LD-consistency filter
+
+Does the optional DENTIST filter (`--dentist`) actually recover accuracy when the
+sumstats contain LD-inconsistent errors, and what does it cost on clean data?
+This plants spurious genome-wide-significant hits at **non-causal** variants (an
+allele/strand error that inflates a null variant's z out of line with its LD
+neighbours), fits LDpred2-`auto` with and without the filter, and reports genetic
+R². AR(1) LD, m=4000 (20×200 blocks), Nref=10k, N=10k, h²=0.5, p=0.05, 5 reps.
+Regenerate with `benchmarks/dentist_recovery.py`.
+
+| condition | genetic R² |
+|-----------|-----------:|
+| clean (no errors) | 0.911 |
+| corrupted, no filter | 0.512 |
+| corrupted, `--dentist` | **0.684** |
+
+30 planted errors/rep; DENTIST catches **96%** of them. On *clean* sumstats it
+drops **0.59%** of genuine variants (the false-positive cost).
+
+Reading: a handful of LD-inconsistent false hits roughly halves the PRS (0.91 →
+0.51) because the LD adjustment propagates them to their neighbours; DENTIST
+recovers most of the loss (→ 0.68). But it is **not free** — it drops ~0.6% of
+genuine variants even with nothing wrong, and that cost climbs steeply with
+GWAS power (the per-variant z grows, so well-tagged true signals start tripping
+the residual test). That is exactly why it is **off by default**: turn it on when
+you suspect allele/strand errors or an LD-reference mismatch, and keep `p_cutoff`
+stringent.
+
+## Sparse / banded LD: storage vs accuracy
+
+Real LD is banded, so a dense block wastes memory on ~zero entries.
+`sparsify_ld` thresholds and/or distance-bands each block into a CSR `SparseLD`
+the sampler updates in O(bandwidth). Storage (density = stored entries / dense),
+single-core fit time and genetic R² across settings (AR(1) LD, m=4000 = 8×500
+blocks, Nref=5k, N=20k, h²=0.5, p=0.02). Regenerate with
+`benchmarks/sparse_ld_tradeoff.py`.
+
+| config | density | fit (s) | R² |
+|--------|--------:|--------:|---:|
+| dense | 100.0% | 0.10 | 0.983 |
+| threshold 1e-2 | 52.3% | 0.09 | 0.982 |
+| threshold 1e-3 | 94.9% | 0.10 | 0.983 |
+| band max_dist=50 | 19.1% | 0.09 | 0.974 |
+| band 25 + shrink 0.9 | 9.9% | 0.08 | 0.972 |
+
+Thresholding at 1e-2 **halves storage for free** (R² 0.982 vs 0.983). Distance
+banding is far more aggressive — a 50-SNP band keeps **~19%** of entries and a
+25-SNP band with `shrink=0.9` just **~10%**, at a small accuracy cost (~0.01 R²).
+Banding can break positive-definiteness, which destabilises the sampler;
+`shrink` < 1 restores diagonal dominance (and is why the tightest band stays
+accurate). At these block sizes (k=500) the time difference is minor — the win is
+memory; the speed win grows with bandwidth.
+
+## Optimal LD-block splitting
+
+`optimal_ld_blocks` (Privé 2022) places block boundaries in low-LD valleys
+instead of at fixed offsets. Here one region is built from unequal true
+sub-blocks `[137, 211, 89, 256, 170, 137]` (m=1000) so the fixed cuts land
+mid-block; both splits use the same `max_size=250`. Regenerate with
+`benchmarks/block_splitting.py`.
+
+| split | #blocks | discarded LD² | storage (Σk²) | R² |
+|-------|--------:|--------------:|--------------:|---:|
+| fixed | 4 | 116.9 | 250,000 | 0.903 |
+| optimal | 5 | **111.3** | **211,235** | **0.912** |
+
+Putting boundaries in the valleys discards **less true between-block LD**, needs
+**~16% less** per-block storage, and predicts slightly better — all from cutting
+where the LD is already weak rather than through the middle of a haplotype block.
+
+## Numba JIT speed-up
+
+The Gibbs sampler's inner sweep dominates runtime; `pyldpred2` JIT-compiles it
+with Numba and otherwise runs the *identical* pure-Python code. Same auto fit
+(m=2000, burn-in 60 / 150 sampling sweeps), with and without JIT (the script
+toggles `NUMBA_DISABLE_JIT` in a subprocess). Regenerate with
+`benchmarks/numba_speedup.py`.
+
+| mode | fit time (s) |
+|------|-------------:|
+| pure Python | 3.70 |
+| Numba JIT | 0.03 |
+
+A **~130×** speed-up (machine-dependent) — this is why `pip install numba` is
+strongly recommended. Without it everything still runs, just far slower.
+
+## Multi-core scaling (`--ncores`)
+
+The packed auto sampler parallelises its per-sweep block loop with Numba
+`prange`. Parallel speed-up and efficiency of one fixed kernel (m=20,000 = 40×500
+blocks, burn-in 100 / 200 sweeps, 4-CPU box). Regenerate with
+`benchmarks/cores_scaling.py`.
+
+| ncores | fit (s) | speed-up | efficiency |
+|-------:|--------:|---------:|-----------:|
+| 1 | 5.29 | 1.00× | 100% |
+| 2 | 2.48 | 2.13× | 107% |
+| 4 | 1.36 | 3.88× | 97% |
+
+Near-linear scaling (~97% efficiency on 4 cores) when there is enough per-block
+work. Note `--ncores 1` uses the low-memory *streaming* sampler while
+`--ncores > 1` switches to this packed parallel kernel (more memory, parallel
+sweeps); for small problems the single-core streaming path can already be fast
+enough that the packed kernel's setup isn't worth it.

@@ -33,6 +33,19 @@ no external data.
 | `plot_methods_1core.py` | Plots the 1-core pyLDpred2-vs-bigsnpr comparison (→ `cores_1core_benchmark.png`) | self-contained (reads CSV) |
 | `plot_methods_arch.py` | Renders the methods-by-architecture figure from the CSV | self-contained (reads CSV) |
 
+## Features: QC, LD representation & performance
+
+All **self-contained** (no `ld_library.npz`): they simulate an AR(1) genotype
+panel internally, so they run anywhere.
+
+| Script | What it measures |
+|--------|------------------|
+| `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
+| `sparse_ld_tradeoff.py` | Sparse / banded LD: storage (density) and fit time vs accuracy across thresholding / banding settings |
+| `block_splitting.py` | `optimal_ld_blocks` vs fixed-size blocks: discarded between-block LD², per-block storage and accuracy |
+| `numba_speedup.py` | Numba-JIT vs pure-Python fit time for the Gibbs sampler (runs itself twice, with/without JIT) |
+| `cores_scaling.py` | Multi-core (`--ncores`) speed-up and parallel efficiency of the packed auto sampler |
+
 ## Inference: h² / genetic correlation
 
 | Script | What it measures | Needs LD lib |
