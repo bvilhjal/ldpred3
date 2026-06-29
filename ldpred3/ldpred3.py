@@ -1029,6 +1029,77 @@ def _gibbs_one_sweep(corr, beta_hat, n, curr_beta, Rb, post_means, unif, gauss,
 _gibbs_one_sweep_jit = _jit(_gibbs_one_sweep)
 
 
+def _gibbs_one_sweep_sparse(indptr, indices, data, beta_hat, n, curr_beta, Rb,
+                            post_means, unif, gauss, c1, log_prior_odds, sparse,
+                            n_const, n0, resync):
+    """CSR counterpart of :func:`_gibbs_one_sweep`: one sweep over a banded block.
+
+    ``indptr``/``indices``/``data`` are the block's local CSR (indices in
+    ``0..k-1``); the rank-1 residual update and the resync touch only each SNP's
+    non-zero neighbours -- O(bandwidth) -- so a large block costs O(k·bandwidth)
+    memory and time instead of O(k²). Returns ``(nb_causal, beta^T R beta)`` for
+    global h2/p pooling.
+    """
+    k = beta_hat.shape[0]
+    if resync:
+        for li in range(k):
+            Rb[li] = 0.0
+        for lj in range(k):
+            bj = curr_beta[lj]
+            if bj != 0.0:
+                for idx in range(indptr[lj], indptr[lj + 1]):
+                    Rb[indices[idx]] += data[idx] * bj
+
+    if n_const:
+        nc1 = n0 * c1
+        pv0 = c1 / (nc1 + 1.0)
+        psd0 = np.sqrt(pv0)
+        half0 = 0.5 * np.log1p(nc1)
+        npv0 = n0 * pv0
+
+    nb_causal = 0
+    for lj in range(k):
+        old = curr_beta[lj]
+        res_beta_j = beta_hat[lj] - Rb[lj] + old
+        if n_const:
+            pv = pv0
+            psd = psd0
+            half = half0
+            post_mean = npv0 * res_beta_j
+        else:
+            nj = n[lj]
+            nc1 = nj * c1
+            pv = c1 / (nc1 + 1.0)
+            psd = np.sqrt(pv)
+            half = 0.5 * np.log1p(nc1)
+            post_mean = nj * pv * res_beta_j
+        log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
+        postp = _stable_postp(log_odds)
+        post_means[lj] = postp * post_mean
+
+        if sparse and postp < 0.5:
+            new = 0.0
+        elif unif[lj] < postp:
+            new = post_mean + gauss[lj] * psd
+            nb_causal += 1
+        else:
+            new = 0.0
+
+        delta = new - old
+        if delta != 0.0:
+            for idx in range(indptr[lj], indptr[lj + 1]):
+                Rb[indices[idx]] += data[idx] * delta
+            curr_beta[lj] = new
+
+    gv = 0.0
+    for i in range(k):
+        gv += curr_beta[i] * Rb[i]
+    return nb_causal, gv
+
+
+_gibbs_one_sweep_sparse_jit = _jit(_gibbs_one_sweep_sparse)
+
+
 def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
                          sparse, seed, estimate_hyper, h2_bounds,
                          warm_start=False, tol=0.0, check_every=50):
@@ -1048,21 +1119,27 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
     n_const = bool(n.size > 0 and n.min() == n.max())
     n0 = float(n[0]) if n_const else 0.0
 
-    # float32 blocks, de-duplicated by object identity (shared blocks -> 1 copy).
+    # Per-block payloads, de-duplicated by object identity (shared -> 1 copy).
+    # Dense blocks are stored as float32; SparseLD blocks keep their banded CSR
+    # so a large block costs O(k*bandwidth) memory, not O(k^2).
     cache = {}
-    fblocks = []
+    fblocks = []           # (is_sparse, obj, start, k)
     for cb, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
-        key = id(cb)
-        if key not in cache:
-            cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
         idx = np.asarray(idx)
-        fblocks.append((cache[key], int(idx[0]), int(idx.shape[0])))
+        start, k = int(idx[0]), int(idx.shape[0])
+        if isinstance(cb, SparseLD):
+            fblocks.append((True, cb, start, k))
+        else:
+            key = id(cb)
+            if key not in cache:
+                cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
+            fblocks.append((False, cache[key], start, k))
 
     curr_beta = np.zeros(m)
     if warm_start:
-        for cbf, start, k in fblocks:
+        for is_sp, obj, start, k in fblocks:
             sl = slice(start, start + k)
-            curr_beta[sl] = ldpred3_inf(cbf, beta_hat[sl], n[sl], h2 * k / m)
+            curr_beta[sl] = ldpred3_inf(obj, beta_hat[sl], n[sl], h2 * k / m)
     Rb = np.zeros(m)
     avg_beta = np.zeros(m)
     post_means = np.zeros(m)
@@ -1079,12 +1156,18 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
         resync = (it % 100 == 0)
         nb_causal = 0
         gv = 0.0
-        for cbf, start, k in fblocks:
+        for is_sp, obj, start, k in fblocks:
             sl = slice(start, start + k)
-            nbc, gvb = _gibbs_one_sweep_jit(
-                cbf, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
-                unif[sl], gauss[sl], c1, log_prior_odds, bool(sparse),
-                n_const, n0, resync)
+            if is_sp:
+                nbc, gvb = _gibbs_one_sweep_sparse_jit(
+                    obj.indptr, obj.indices, obj.data, beta_hat[sl], n[sl],
+                    curr_beta[sl], Rb[sl], post_means[sl], unif[sl], gauss[sl],
+                    c1, log_prior_odds, bool(sparse), n_const, n0, resync)
+            else:
+                nbc, gvb = _gibbs_one_sweep_jit(
+                    obj, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
+                    unif[sl], gauss[sl], c1, log_prior_odds, bool(sparse),
+                    n_const, n0, resync)
             nb_causal += nbc
             gv += gvb
 
@@ -1475,12 +1558,14 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
             tol=kwargs.pop("tol", 0.0), check_every=kwargs.pop("check_every", 50))
         h2_init = kwargs.pop("h2_init", 0.1)
         p_init = kwargs.pop("p_init", 0.1)
-        if ncores and ncores > 1:
+        has_sparse = any(isinstance(cb, SparseLD) for cb, _ in blk)
+        if ncores and ncores > 1 and not has_sparse:
             # Multicore: packed blocks + prange (more memory, parallel sweeps).
             avg_beta, _, _, _ = _gibbs_blocks(blk, beta_hat, n, h2_init, p_init,
                                               ncores=ncores, **common)
         else:
-            # Single core: streaming sampler (low memory).
+            # Single core, or banded/SparseLD blocks (the packed multicore kernel
+            # is dense-only): streaming sampler -- O(k·bandwidth) memory per block.
             avg_beta, _, _, _ = _gibbs_blocks_stream(blk, beta_hat, n, h2_init,
                                                      p_init, **common)
         return avg_beta

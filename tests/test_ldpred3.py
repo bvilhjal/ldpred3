@@ -30,6 +30,40 @@ from ldpred3.ldpred3 import (  # noqa: E402
 )
 
 
+def test_sparse_streaming_auto_matches_dense():
+    # The global-hyper streaming auto on banded SparseLD blocks should track the
+    # dense fit closely (correctness of the sparse per-sweep kernel).
+    from ldpred3.simulate import simulate_genotypes
+    from ldpred3.ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
+    from ldpred3 import SparseLD
+    import tempfile, os
+    nb, k, m, n = 6, 300, 1800, 20000
+    rng = np.random.default_rng(0)
+    maf = rng.uniform(0.05, 0.5, m)
+    G, _ = simulate_genotypes(4000, [k] * nb, maf, 0.8, rng)
+    dense = compute_ld_blocks(G, block_size=k)
+    sparse = compute_ld_blocks(G, block_size=k, sparse=True, max_dist=80)
+    assert all(isinstance(R, SparseLD) for R, _ in sparse)
+    Rf = [(R.astype(float), idx) for R, idx in dense]
+    c = rng.random(m) < 0.02
+    beta = np.zeros(m); beta[c] = rng.standard_normal(int(c.sum()))
+    bh = np.empty(m)
+    for R, ix in Rf:
+        ch = np.linalg.cholesky(R + 1e-6 * np.eye(len(ix)))
+        bh[ix] = R @ beta[ix] + (ch @ rng.standard_normal(len(ix))) / np.sqrt(n)
+    nv = np.full(m, float(n))
+    bd = ldpred3_by_blocks(dense, bh, nv, method="auto", burn_in=60, num_iter=80, seed=0)
+    bs = ldpred3_by_blocks(sparse, bh, nv, method="auto", burn_in=60, num_iter=80, seed=0)
+    assert np.corrcoef(bd, bs)[0, 1] > 0.95
+    # SparseLD blocks round-trip through the on-disk cache.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "ld.npz")
+        save_ld_blocks(p, sparse, [f"v{i}" for i in range(m)])
+        loaded, _ = load_ld_blocks(p)
+        assert all(isinstance(R, SparseLD) for R, _ in loaded)
+        assert loaded[0][0].nnz == sparse[0][0].nnz
+
+
 def test_shrink_ld_blocks_is_size_aware():
     # alpha = min(max_shrink, k / n_ref): small block ~untouched, large shrunk.
     rng = np.random.default_rng(0)

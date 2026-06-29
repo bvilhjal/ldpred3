@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from .prs import standardize_dosage
+from .ld_utils import sparsify_ld, SparseLD
 
 __all__ = ["compute_ld_blocks", "save_ld_blocks", "load_ld_blocks"]
 
@@ -30,12 +31,21 @@ def save_ld_blocks(path, blocks, variant_ids):
     reload the LD instead of recomputing it (see :func:`load_ld_blocks`).
     """
     ids = np.asarray(variant_ids, dtype=object).astype(str)
-    sizes = np.array([R.shape[0] for R, _ in blocks], dtype=np.int64)
+    sizes, kinds, arrays = [], [], {}
+    for i, (R, _) in enumerate(blocks):
+        if isinstance(R, SparseLD):           # banded CSR (memory-efficient on disk)
+            kinds.append(1); sizes.append(R.m)
+            arrays[f"R{i}_indptr"] = R.indptr
+            arrays[f"R{i}_indices"] = R.indices
+            arrays[f"R{i}_data"] = R.data
+        else:
+            kinds.append(0); sizes.append(R.shape[0])
+            arrays[f"R{i}"] = np.asarray(R, dtype=np.float32)
+    sizes = np.array(sizes, dtype=np.int64)
     if int(sizes.sum()) != len(ids):
         raise ValueError("variant_ids length does not match the blocks' columns")
-    arrays = {f"R{i}": np.asarray(R, dtype=np.float32)
-              for i, (R, _) in enumerate(blocks)}
-    np.savez_compressed(path, ids=ids, sizes=sizes, **arrays)
+    np.savez_compressed(path, ids=ids, sizes=sizes,
+                        kinds=np.array(kinds, dtype=np.int8), **arrays)
 
 
 def load_ld_blocks(path):
@@ -49,10 +59,15 @@ def load_ld_blocks(path):
     with np.load(path, allow_pickle=False) as z:
         ids = z["ids"].astype(str)
         sizes = z["sizes"]
+        kinds = z["kinds"] if "kinds" in z else np.zeros(len(sizes), np.int8)
         blocks, start = [], 0
         for i, k in enumerate(sizes):
             k = int(k)
-            R = z[f"R{i}"]
+            if int(kinds[i]) == 1:
+                R = SparseLD(z[f"R{i}_indptr"], z[f"R{i}_indices"],
+                             z[f"R{i}_data"], k)
+            else:
+                R = z[f"R{i}"]
             blocks.append((R, np.arange(start, start + k)))
             start += k
     return blocks, ids
@@ -71,7 +86,8 @@ def _block_bounds(chrom, block_size):
         start = stop
 
 
-def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0):
+def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
+                      sparse=False, ld_threshold=1e-3, max_dist=None):
     """Estimate per-block LD correlation matrices from a genotype panel.
 
     Parameters
@@ -87,11 +103,24 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0):
         If > 0, shrink each block towards the identity:
         ``R <- (1 - ridge) * R + ridge * I``. Guarantees positive-definiteness
         for downstream solvers when the panel has perfect-LD duplicates.
+    sparse : bool, default False
+        If True, store each block as a banded :class:`~ldpred3.SparseLD`
+        (thresholded at ``ld_threshold`` and, if ``max_dist`` is set, banded to
+        that window) instead of a dense matrix. The dense block is built
+        transiently and discarded, so **persistent** memory is O(k·bandwidth)
+        rather than O(k²) -- essential for large blocks (thousands of SNPs) at
+        genome scale. The sampler consumes these via ``global_hyper=False`` (the
+        dense global-hyper path requires dense blocks).
+    ld_threshold : float, default 1e-3
+        Drop off-diagonal entries with ``|r| < ld_threshold`` (sparse only).
+    max_dist : int or None
+        If set, also band each block to ``|i-j| <= max_dist`` (sparse only).
 
     Returns
     -------
-    blocks : list of (ndarray float32, ndarray int)
-        ``(R, idx)`` per block, ready for ``ldpred3_by_blocks``.
+    blocks : list of (R, idx)
+        ``R`` is a ``float32`` dense matrix, or a ``SparseLD`` when
+        ``sparse=True``; ``idx`` are the column indices the block covers.
     """
     dosage = np.asarray(dosage)
     n_variants = dosage.shape[1]
@@ -113,5 +142,10 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0):
             R *= (1.0 - ridge)
             R[np.diag_indices_from(R)] += ridge
         np.fill_diagonal(R, 1.0)
-        blocks.append((R.astype(np.float32), idx))
+        if sparse:
+            # Build dense transiently, store banded -> persistent O(k*bandwidth).
+            blocks.append((sparsify_ld(R, threshold=ld_threshold,
+                                       max_dist=max_dist), idx))
+        else:
+            blocks.append((R.astype(np.float32), idx))
     return blocks
