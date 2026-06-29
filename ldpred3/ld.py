@@ -151,7 +151,8 @@ def _block_bounds(chrom, block_size):
 
 def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
                       sparse=False, ld_threshold=1e-3, max_dist=None,
-                      lowrank=False, lowrank_variance=0.99, lowrank_max_rank=None):
+                      lowrank=False, lowrank_variance=0.99, lowrank_max_rank=None,
+                      lowrank_min_size=0):
     """Estimate per-block LD correlation matrices from a genotype panel.
 
     Parameters
@@ -189,6 +190,12 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
         Spectrum fraction to keep (low-rank only).
     lowrank_max_rank : int or None
         Hard cap on the kept rank per block (low-rank only).
+    lowrank_min_size : int, default 0
+        Only blocks with at least this many variants are stored low-rank; smaller
+        blocks are kept **dense** (a mixed representation). Small blocks are fast
+        and cheap dense and often barely compressible, so this keeps near-dense
+        speed genome-wide while compressing only the few large blocks that need
+        it. ``0`` (default) makes every block low-rank.
 
     Returns
     -------
@@ -218,8 +225,9 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
         np.fill_diagonal(R, 1.0)
         if sparse and lowrank:
             raise ValueError("use either sparse or lowrank, not both")
-        if lowrank:
+        if lowrank and idx.shape[0] >= lowrank_min_size:
             # Build dense transiently, store top-rank eigizmodes (O(k*rank)).
+            # Blocks below lowrank_min_size stay dense (mixed representation).
             blocks.append((lowrank_ld(R, variance=lowrank_variance,
                                       max_rank=lowrank_max_rank), idx))
         elif sparse:

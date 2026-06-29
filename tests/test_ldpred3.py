@@ -64,6 +64,28 @@ def test_sparse_streaming_auto_matches_dense():
         assert loaded[0][0].nnz == sparse[0][0].nnz
 
 
+def test_compute_ld_blocks_mixed_lowrank_by_size():
+    # lowrank_min_size -> small blocks stay dense, large blocks go low-rank, and
+    # the streaming auto sampler fits the mixed list.
+    from ldpred3.simulate import simulate_genotypes
+    from ldpred3.ld import compute_ld_blocks
+    from ldpred3 import LowRankLD
+    sizes = [100, 100, 600, 600]            # threshold 300 -> first two dense
+    m = sum(sizes)
+    chrom = np.concatenate([np.full(k, i, np.int32) for i, k in enumerate(sizes)])
+    rng = np.random.default_rng(0)
+    G, _ = simulate_genotypes(3000, sizes, rng.uniform(0.05, 0.5, m), 0.8, rng)
+    blocks = compute_ld_blocks(G, chrom=chrom, block_size=max(sizes),
+                               lowrank=True, lowrank_min_size=300)
+    kinds = [isinstance(R, LowRankLD) for R, _ in blocks]
+    assert kinds == [False, False, True, True]      # mixed: dense small, lowrank big
+    # the mixed list fits end to end
+    bh = rng.standard_normal(m) * 0.02
+    be = ldpred3_by_blocks(blocks, bh, np.full(m, 20000.0), method="auto",
+                           burn_in=20, num_iter=30, seed=0)
+    assert be.shape == (m,) and np.all(np.isfinite(be))
+
+
 def test_lowrank_streaming_auto_matches_dense():
     # Eigenspace low-rank LD: global-hyper streaming auto should match the dense
     # fit (genetic-value agreement), at a fraction of the memory, and round-trip.
