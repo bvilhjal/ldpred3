@@ -270,14 +270,23 @@ silently using stale LD — rebuild it with `--ld-out`.
 - **Install Numba** (`pip install numba`). The inner sampler is JIT-compiled and
   cached; without it you get identical results but a much slower pure-Python
   loop — fine for CI, not for genome-wide runs.
-- **Memory** is dominated by the LD. `auto`'s streaming sampler keeps only one
-  block resident (float32), so peak memory is the LD plus `O(m)` state — ~4 GB at
-  2M SNPs. Prefer `ldpred3_by_blocks(method="auto")` (global hyper) at genome
-  scale.
-- **Sparse / banded LD** (`sparsify_ld`, or `ldpred3_by_blocks(..., sparsify=True)`)
-  makes `inf` a cheap CG solve and trims the samplers; band by **distance**
-  (`max_dist=`) since in-sample LD has a ~1/√N noise floor. See
-  [algorithm.md](algorithm.md).
+- **Memory** is dominated by the LD: the dense per-block matrices (`Σ kᵦ²`
+  float32) are all held in RAM — fine for a curated ~2M-SNP panel (~4 GB), but it
+  blows up when blocks reach thousands of SNPs.
+- **Scaling to millions of SNPs (sequencing).** Use the composable LD levers —
+  recombination-aware **block splitting** to bound block sizes, **low-rank LD**
+  (`--ld-lowrank`) which fits huge blocks in ~¼ the memory *at matched accuracy on
+  realistic LD*, a dense/low-rank **mixed** policy (`--ld-lowrank-min-size`) that
+  compresses only the big blocks, and **on-disk streaming** (`--ld-stream`) for an
+  LD larger than RAM. Full recipe and trade-offs:
+  [pipeline.md → Scaling](pipeline.md#scaling-to-millions-of-snps). Note the
+  honest trade-off: the compact representations cut memory but fit *slower* — they
+  are for LD that would not fit dense, not a speed-up.
+- **Sparse / banded LD** (`--ld-sparse` / `sparsify_ld`) makes `inf` a cheap CG
+  solve and is a memory option for **genuinely banded** (array-like) LD — but on
+  realistic LD distance banding **discards real long-range structure and loses
+  accuracy**, so prefer `--ld-lowrank` there. Band by **distance** (`max_dist=`)
+  since in-sample LD has a ~1/√N noise floor. See [algorithm.md](algorithm.md).
 - **Fewer iterations:** `warm_start=True` and adaptive stopping (`tol=`) on the
   samplers (algorithm.md).
 
@@ -291,5 +300,6 @@ silently using stale LD — rebuild it with `--ld-out`.
 | Spurious **genome-wide hits** that disagree with their LD neighbours | likely allele/strand errors or an LD-reference mismatch the SD-check misses; try `--dentist` (off by default — it can also drop genuine poorly-tagged signals, so keep its cutoff stringent; see pipeline.md) |
 | `auto` `p_est` looks too high for an **ultra-sparse** trait | `p` is unidentifiable below ~2 causal/1000 variants; `h²`/`r²` stay fine (inference.md) |
 | `annot` **underperforms** `auto` | almost always under-converged map — keep `theta_every=1` (the default); raise iterations before raising `theta_every` |
-| Sampler **diverges** on noisy/ill-conditioned LD | keep `allow_jump_sign=False` (default), or `sparsify_ld(..., shrink=<1)` to restore diagonal dominance (algorithm.md) |
-| It's **slow** | check Numba is installed and the JIT cache is warm (first call compiles); pin BLAS threads for reproducible single-core timing |
+| Sampler **diverges** on noisy/ill-conditioned LD | keep `allow_jump_sign=False` (default), or `sparsify_ld(..., shrink=<1)` to restore diagonal dominance (algorithm.md); `--ld-shrink` shrinks large noisy blocks toward the identity |
+| **Out of memory** at genome / sequencing scale | the dense LD (`Σ kᵦ²`) is too big — use `--ld-lowrank` (low-rank LD, ~¼ memory at matched accuracy), `--ld-lowrank-min-size 1000` (compress only big blocks), and `--ld-out cache.npz --ld-stream` to stream the LD from disk ([scaling](pipeline.md#scaling-to-millions-of-snps)) |
+| It's **slow** | check Numba is installed and the JIT cache is warm (first call compiles); pin BLAS threads for reproducible single-core timing; note `--ld-lowrank`/`--ld-sparse` trade fit speed for memory (use them only when dense won't fit) |
