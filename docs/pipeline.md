@@ -80,8 +80,15 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--n-eff FLOAT` | none | Effective sample size, used when the sumstats have no `N` column. |
 | `--ld-prefix PREFIX` | in-sample | External LD reference panel (PLINK prefix); default is the target itself. |
 | `--ld-ridge FLOAT` | `0.0` | Shrink each LD block towards the identity by this fraction (stabilises noisy panels). |
+| `--ld-shrink` | off | Size-aware shrinkage of large LD blocks toward the identity (`α = min(0.5, k/Nref)`); helps on a finite/noisy LD panel. |
+| `--ld-sparse` | off | Store LD blocks as **banded** `SparseLD` (O(k·bandwidth) memory). Best for genuinely banded / array-like LD; lossy on realistic LD — prefer `--ld-lowrank`. |
+| `--ld-max-dist N` | none | Band half-width for `--ld-sparse` (variants). |
+| `--ld-lowrank` | off | Store LD blocks as **low-rank** `LowRankLD` (top eigenvectors), fit in the eigenspace at O(k·rank) memory. The right memory tool for **realistic / sequencing-scale** LD (matches dense accuracy at ~¼ memory). See [Scaling](#scaling-to-millions-of-snps). |
+| `--ld-lowrank-var FLOAT` | `0.99` | Spectrum fraction kept by `--ld-lowrank`. |
+| `--ld-lowrank-min-size N` | `0` | With `--ld-lowrank`, only compress blocks ≥ N variants; smaller blocks stay dense (mixed — near-dense speed, compress only big blocks). |
 | `--ld-out FILE` | none | Save the computed LD blocks to `.npz` for reuse. |
-| `--ld-cache FILE` | none | Reuse LD blocks saved earlier with `--ld-out` (skips LD construction). |
+| `--ld-stream` | off | With `--ld-out`, write a **memory-mappable** cache so a later `--ld-cache` run streams blocks from disk (LD can exceed RAM). |
+| `--ld-cache FILE` | none | Reuse LD blocks saved earlier with `--ld-out` (skips LD construction; streams automatically if the cache was written with `--ld-stream`). |
 | `--ncores N` | `1` | Threads for the Gibbs sampler (requires Numba). |
 | `--no-qc` | off | Skip the sumstats-only QC stage. |
 | `--no-sd-check` | off | Skip the SD-consistency QC stage. |
@@ -101,6 +108,42 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 The weights file is what `--weights` / `score_from_weights` reads back, so a
 fit-once-score-many workflow round-trips through it. From Python the same data is
 on the result object: `res.scores` (the PRS array) and `res.write_weights(path)`.
+
+## Scaling to millions of SNPs
+
+The default dense per-block LD is `Σ kᵦ²` floats held in RAM — fine for a curated
+~1M-SNP panel, but it blows up when blocks reach thousands of SNPs (≈160 GB for
+10M SNPs in 4000-SNP blocks). Four composable levers handle that regime (see
+[benchmarks.md](benchmarks.md#ld-representations-at-scale-memory-vs-running-time)
+for the numbers):
+
+1. **Recombination-aware splitting** (`optimal_ld_blocks`) keeps blocks bounded —
+   the first line of defence; smaller blocks stay cheap and dense.
+2. **Low-rank LD** (`--ld-lowrank`) is the right compressor for **realistic /
+   sequencing-scale** LD: it keeps each block's top eigenvectors and fits in the
+   eigenspace at O(k·rank), **matching dense accuracy at ~¼ the memory**. (Plain
+   distance **banding**, `--ld-sparse`, suits genuinely banded array-like LD but
+   is *lossy* on realistic LD, which has real long-range structure.)
+3. **Mixed** (`--ld-lowrank --ld-lowrank-min-size 1000`) keeps the many
+   small/moderate blocks dense (fast) and compresses only the few huge ones —
+   near-dense speed genome-wide, memory bounded.
+4. **On-disk streaming** (`--ld-out cache.npz --ld-stream`, reused via
+   `--ld-cache`) memory-maps the LD so blocks page from disk — an LD that exceeds
+   RAM still fits.
+
+The trade-off is honest: the compact representations **cut memory but fit slower**
+(the dense sampler reads the residual in O(1); the eigenspace fit recomputes it in
+O(rank) per SNP). They are the tools for LD that would not fit dense, not a way to
+speed up a problem that already fits in RAM. The low-rank eigendecomposition is a
+**one-time** construction cost, cached with the LD (`--ld-out`) and reused.
+
+Genome-scale recipe — build once, reuse cheaply:
+
+```bash
+ldpred3 --sumstats gwas.txt.gz --plink target \
+        --ld-lowrank --ld-lowrank-min-size 1000 --ld-out cache.npz --ld-stream --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --plink target --ld-cache cache.npz --out prs.txt   # streams
+```
 
 ## Supporting modules (each usable on its own)
 

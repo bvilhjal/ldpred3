@@ -7,13 +7,33 @@ follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Scaling to millions of SNPs.** Composable LD representations for the
+  genome / sequencing-scale regime (`docs/pipeline.md` → Scaling):
+  - **Low-rank LD** (`LowRankLD`, `--ld-lowrank`): top-eigenvector blocks fit in
+    the eigenspace at O(k·rank) memory — matches dense accuracy at ~¼ memory on
+    realistic LD (the SBayesRC-style representation, validated vs banding which is
+    lossy on realistic LD).
+  - **Mixed** dense + low-rank by block size (`--ld-lowrank-min-size`): compress
+    only the big blocks, keep small ones fast and dense.
+  - **Banded `SparseLD`** construction + a sparse streaming sampler kernel
+    (`--ld-sparse`/`--ld-max-dist`) for genuinely banded / array-like LD.
+  - **On-disk LD streaming** (`--ld-stream`): memory-mappable cache so an LD
+    larger than RAM streams from disk (fits bit-identical).
+  - **Size-aware LD shrinkage** (`--ld-shrink`) toward the identity for large,
+    noisy reference-panel blocks.
+- **DENTIST LD-consistency filter** (`--dentist`, `qc.dentist_outlier_mask`).
 - Complete CLI reference and output-format tables in `docs/pipeline.md`, a
   GWAS-sumstats input-format table (recognised column aliases), a `LICENSE`
   (MIT) and this changelog.
 - Help text and documented defaults for previously bare CLI flags
   (`--method`, `--block-size`, `--n-eff`, `--ld-ridge`, `--ncores`).
+- Self-contained benchmarks for the LD representations, DENTIST, inference and
+  bivariate analysis; the publication figure generator
+  (`benchmarks/make_paper_figures.py`) now covers them.
 
 ### Changed
+- **Project renamed pyLDpred2 → LDpred3** (package `ldpred3`, CLI `ldpred3`, API
+  `ldpred3_*`); citations to the LDpred2 method are kept.
 - `qc.dentist_outlier_mask` skips blocks that have settled, avoiding redundant
   matrix re-inversions across passes (no change in output). (#30)
 - `run_ldpred3_prs` now warns that `dentist=True` is ignored on the `ld_cache`

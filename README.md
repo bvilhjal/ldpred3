@@ -4,8 +4,9 @@ A dependency-light (NumPy-only, optional Numba) Python implementation of
 [LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029) with a complete
 polygenic-score pipeline: from GWAS summary statistics + genotypes to one score
 per individual, no R required. It matches the reference implementation
-(`bigsnpr`) on accuracy using **~2× less memory**, scales to 2M SNPs on a single
-core, and needs **no validation cohort**.
+(`bigsnpr`) on accuracy using **~2× less memory**, scales from 2M SNPs dense to
+**sequencing-size data** with low-rank / on-disk LD, and needs **no validation
+cohort**.
 
 > **New here?** Start with the **[user guide](docs/guide.md)** — it walks from a
 > GWAS + target dataset to a polygenic score, helps you choose a model, and lists
@@ -46,8 +47,9 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 | `--infer` | also estimate h², polygenicity and predictive r² |
 | `--method annot --annotations a.tsv` | use functional-annotation priors |
 | `--dentist` | drop LD-inconsistent variants (allele/strand errors, LD mismatch); off by default |
+| `--ld-lowrank` | low-rank (eigen) LD — fit huge blocks in ~¼ the memory at matched accuracy ([scaling](docs/pipeline.md#scaling-to-millions-of-snps)) |
 | `--save-weights w.txt` / `--weights w.txt` | save fitted weights / score a new cohort from them |
-| `--ld-out f.npz` / `--ld-cache f.npz` | cache the LD to skip recomputing it on re-runs |
+| `--ld-out f.npz` / `--ld-cache f.npz` / `--ld-stream` | cache the LD to skip recomputing it; `--ld-stream` streams it from disk (LD > RAM) |
 
 ### Choosing a model
 
@@ -68,12 +70,18 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
   **[LD Score regression](docs/inference.md)** cross-check (`ldsc_h2`).
 - **Genetic correlation & joint two-trait PRS** — `ldpred3_auto_bivariate` boosts
   a weak trait using a correlated well-powered one; `ldsc_rg` cross-checks the rg.
-- **Annotation-informed priors** (SBayesRC-style, supplied or learned), **sparse
-  / banded LD**, **optimal LD-block splitting**, and weight save/reuse + LD
-  caching for fast re-runs.
-- Internals (streaming genome-wide sampler, float32 LD, Numba JIT) are in
-  [docs/algorithm.md](docs/algorithm.md); the full bigsnpr comparison, scaling and
-  robustness studies are in [docs/benchmarks.md](docs/benchmarks.md).
+- **Annotation-informed priors** (SBayesRC-style, supplied or learned), and
+  weight save/reuse + LD caching for fast re-runs.
+- **Scales to sequencing-size data (millions of SNPs, thousands per block)** via
+  composable LD representations — recombination-aware block splitting, **low-rank
+  (eigen) LD** (matches dense accuracy at ~¼ memory on realistic LD), a dense/
+  low-rank **mixed** policy (compress only big blocks), banded sparse LD (for
+  array-like LD), and **on-disk streaming** (LD larger than RAM). See
+  [scaling](docs/pipeline.md#scaling-to-millions-of-snps).
+- Internals (streaming genome-wide sampler, eigenspace low-rank fit, float32 LD,
+  Numba JIT) are in [docs/algorithm.md](docs/algorithm.md); the full bigsnpr
+  comparison, scaling and robustness studies are in
+  [docs/benchmarks.md](docs/benchmarks.md).
 
 ### Working from your own LD blocks
 
