@@ -105,6 +105,25 @@ and the on-disk cache stores the `U` factor. Banding remains useful for genuinel
 banded LD (e.g. AR(1)-like / some array data), and recombination-aware splitting
 (`optimal_ld_blocks`) keeps blocks bounded regardless.
 
+### On-disk LD streaming (`--ld-stream`)
+
+Even compact blocks are all held in RAM by default. `save_ld_blocks(..., mmap=True)`
+(pipeline `--ld-out --ld-stream`) writes the block payloads into one
+memory-mappable `<cache>.dat.npy` sidecar; a later `--ld-cache` run then loads
+each block as a **memmap view**, and the streaming sampler reads one block at a
+time. Semantics to be precise about:
+
+* The LD is **file-backed**, not on the Python heap — so it is **reclaimable
+  under memory pressure and shareable across processes**, and an LD that exceeds
+  RAM still runs (the OS pages it). Fits are bit-identical to the in-RAM path.
+* On a machine with ample free RAM the OS caches all pages, so *resident* memory
+  is similar to in-RAM — the benefit is enabling data > RAM and avoiding a
+  per-process heap copy, not a smaller RSS when memory is plentiful.
+
+Build once (ideally with `lowrank=True` to keep the cache small), then reuse it
+cheaply across runs/cohorts: `--ld-out cache.npz --ld-stream` then
+`--ld-cache cache.npz`. Supports dense and low-rank caches.
+
 Two more caveats:
 
 * **In-sample LD has a noise floor (~1/√N)** that fills the matrix, so magnitude

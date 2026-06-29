@@ -169,6 +169,21 @@ def test_pipeline_ld_sparse_runs_and_keeps_signal(tmp_path):
     assert all(isinstance(R, SparseLD) for R, _ in blocks)
 
 
+def test_pipeline_ld_stream_cache_roundtrip(tmp_path):
+    # Build a memmap LD cache (--ld-stream), then a second run streams it from
+    # disk (--ld-cache) and gives identical scores at O(one block) resident.
+    import numpy as _np
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=13)
+    cache = tmp_path / "ld_stream.npz"
+    r1 = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                         ld_lowrank=True, ld_out=str(cache), ld_stream=True)
+    assert (tmp_path / "ld_stream.npz.dat.npy").exists()   # memmap sidecar
+    r2 = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                         ld_cache=str(cache))               # streams from disk
+    # Same model -> essentially identical PRS.
+    assert _np.corrcoef(r1.scores, r2.scores)[0, 1] > 0.999
+
+
 def test_pipeline_ld_lowrank_runs_and_keeps_signal(tmp_path):
     # Low-rank LD blocks fit via the eigenspace streaming auto kernel, stay
     # predictive, and round-trip through the on-disk cache as factors.
