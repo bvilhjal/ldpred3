@@ -5,9 +5,14 @@ One command -> ``benchmarks/figures.pdf`` with:
   p1  Running time & peak memory vs bigsnpr (1 core, realistic LD)
   p2  Accuracy by genetic architecture (N = 10k and 50k)
   p3  Inference evaluation: h² and polygenicity recovery vs truth (95% CIs)
-  p4  DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
-  p5  LD representation: sparse/banded storage-vs-accuracy; optimal block splitting
-  p6  Performance: Numba JIT speed-up; multi-core scaling
+  p4  Inference cross-checks: h² LDSC vs LDpred3-auto; predictive r² est-vs-realized
+  p5  Bivariate analysis: genetic-correlation recovery; weak-trait prediction gain
+  p6  DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
+  p7  LD representation: sparse/banded storage-vs-accuracy; optimal block splitting
+  p8  Performance: Numba JIT speed-up; multi-core scaling
+
+Pages 4-5 need realistic (coalescent) LD and are skipped with a note unless
+msprime is installed.
 
 Pages 1-2 read the committed CSVs (``cores_1core_benchmark.csv`` /
 ``methods_arch_benchmark.csv``); they are skipped with a note if absent. Pages
@@ -39,8 +44,16 @@ from ldpred3.simulate import simulate_genotypes
 from ldpred3.ld import compute_ld_blocks
 from ldpred3.qc import dentist_outlier_mask
 from ldpred3.infer import ldpred3_auto_infer
-from ldpred3 import ldpred3_by_blocks, sparsify_ld, optimal_ld_blocks
+from ldpred3 import (ldpred3_by_blocks, sparsify_ld, optimal_ld_blocks,
+                     ld_scores, ldsc_h2, ldsc_rg, ldpred3_auto_bivariate_blocks)
 from ldpred3._numba import HAVE_NUMBA
+
+try:  # realistic LD (coalescent) is needed for the LDSC comparisons
+    import msprime  # noqa: F401
+    from ldpred3.simulate import simulate_genotypes_coalescent
+    HAVE_MSPRIME = True
+except ImportError:  # pragma: no cover
+    HAVE_MSPRIME = False
 
 plt.rcParams.update({
     "figure.dpi": 110, "savefig.dpi": 200, "font.size": 11,
@@ -161,6 +174,106 @@ def data_inference():
             est.append(r.p_est); lo.append(r.p_ci[0]); hi.append(r.p_ci[1])
         rows.append({"kind": "p", "true": p, "est": np.mean(est),
                      "lo": np.mean(lo), "hi": np.mean(hi)})
+    return rows
+
+
+def coalescent_panel(seed, m=3000, k=500, n_ref=4000):
+    """Realistic (coalescent/msprime) LD panel + sumstats / LD-score helpers.
+
+    LDSC needs the LD-score distribution of *realistic* LD; the AR(1) panel used
+    elsewhere is too smooth and makes the LDSC regression blow up. These pages
+    therefore simulate a coalescent-with-recombination panel.
+    """
+    G, _ = simulate_genotypes_coalescent(n_ref, m, k, seed=seed)
+    mm = G.shape[1]
+    blocks = compute_ld_blocks(G, block_size=k)
+    Rf = [(R.astype(float), idx) for R, idx in blocks]
+
+    def gv(a, b):
+        return sum(a[ix] @ (R @ b[ix]) for R, ix in Rf)
+
+    def ss(beta, n, rng):
+        bh = np.empty(mm)
+        for R, ix in Rf:
+            chol = np.linalg.cholesky(R + 1e-4 * np.eye(len(ix)))
+            bh[ix] = R @ beta[ix] + (chol @ rng.standard_normal(len(ix))) / np.sqrt(n)
+        return bh
+
+    return blocks, mm, gv, ss, ld_scores(blocks, n_ref=n_ref)
+
+
+def data_infer_ldsc():
+    """h² recovery (LDSC vs LDpred3-auto) and predictive-r² est-vs-realized.
+
+    Realistic coalescent LD. ``realized`` predictive r² = genetic-R²(PRS, truth)
+    × h² (the out-of-sample phenotype r² the auto estimator targets).
+    """
+    blocks, m, gv, ss, ell = coalescent_panel(11)
+    N, REPS = 50000, 5
+    rows = []
+    for h2 in (0.1, 0.3, 0.5, 0.8):
+        hl, hi, est, lo, hi_ci, real = [], [], [], [], [], []
+        for rep in range(REPS):
+            rng = np.random.default_rng(400 + rep)
+            c = rng.random(m) < 0.02
+            beta = np.zeros(m); beta[c] = rng.standard_normal(int(c.sum()))
+            beta *= np.sqrt(h2 / gv(beta, beta))
+            bh = ss(beta, N, rng)
+            hl.append(ldsc_h2((bh * np.sqrt(N)) ** 2, ell, N, n_blocks=60).h2)
+            r = ldpred3_auto_infer(blocks, bh, np.full(m, float(N)),
+                                   n_chains=5, burn_in=120, num_iter=120, seed=rep)
+            hi.append(r.h2_est)
+            est.append(r.r2_est); lo.append(r.r2_ci[0]); hi_ci.append(r.r2_ci[1])
+            real.append(geneticr2(r.beta_est, gv, beta) * h2)
+        rows.append({"true_h2": h2, "ldsc": np.mean(hl), "ldsc_sd": np.std(hl),
+                     "auto": np.mean(hi), "auto_sd": np.std(hi),
+                     "r2_est": np.mean(est), "r2_lo": np.mean(lo),
+                     "r2_hi": np.mean(hi_ci), "r2_real": np.mean(real)})
+    return rows
+
+
+def data_bivariate():
+    """Genetic-correlation recovery (LDpred3 vs LDSC) and weak-trait gain.
+
+    Realistic coalescent LD. (A) sweep true rg, recover it; (B) a weak secondary
+    trait (small N2) scored alone vs boosted by a correlated well-powered trait.
+    """
+    blocks, m, gv, ss, ell = coalescent_panel(12)
+    rows = []
+    N1, N2, P, H2, REPS = 50000, 30000, 0.02, 0.5, 5
+    for rg in (0.0, 0.3, 0.6, 0.9):
+        bp, ld = [], []
+        for rep in range(REPS):
+            rng = np.random.default_rng(60 + rep)
+            c = rng.random(m) < P
+            L = np.linalg.cholesky([[1, rg], [rg, 1]])
+            raw = L @ rng.standard_normal((2, int(c.sum())))
+            b1 = np.zeros(m); b2 = np.zeros(m); b1[c] = raw[0]; b2[c] = raw[1]
+            b1 *= np.sqrt(H2 / gv(b1, b1)); b2 *= np.sqrt(H2 / gv(b2, b2))
+            bh1 = ss(b1, N1, rng); bh2 = ss(b2, N2, rng)
+            bp.append(ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, N1, N2,
+                                                    burn_in=100, num_iter=120, seed=rep).rg)
+            ld.append(ldsc_rg(bh1, bh2, ell, N1, N2, n_blocks=60).rg)
+        rows.append({"kind": "rg", "x": rg, "m1": np.mean(bp), "s1": np.std(bp),
+                     "m2": np.mean(ld), "s2": np.std(ld)})
+    N1g, N2g, Pg, H1, H2g, REPSg = 100000, 3000, 0.05, 0.5, 0.3, 5
+    for rg in (0.0, 0.3, 0.6, 0.9):
+        uni, bi = [], []
+        for rep in range(REPSg):
+            rng = np.random.default_rng(70 + rep)
+            c = rng.random(m) < Pg
+            L = np.linalg.cholesky([[1, rg], [rg, 1]])
+            raw = L @ rng.standard_normal((2, int(c.sum())))
+            b1 = np.zeros(m); b2 = np.zeros(m); b1[c] = raw[0]; b2[c] = raw[1]
+            b1 *= np.sqrt(H1 / gv(b1, b1)); b2 *= np.sqrt(H2g / gv(b2, b2))
+            bh1 = ss(b1, N1g, rng); bh2 = ss(b2, N2g, rng)
+            be2u = ldpred3_by_blocks(blocks, bh2, np.full(m, float(N2g)),
+                                     method="auto", burn_in=80, num_iter=120, seed=rep)
+            res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, N1g, N2g,
+                                                burn_in=100, num_iter=120, seed=rep)
+            uni.append(geneticr2(be2u, gv, b2)); bi.append(geneticr2(res.beta2_est, gv, b2))
+        rows.append({"kind": "gain", "x": rg, "m1": np.mean(uni), "s1": np.std(uni),
+                     "m2": np.mean(bi), "s2": np.std(bi)})
     return rows
 
 
@@ -370,6 +483,66 @@ def page_inference(pdf):
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
 
+def page_infer_ldsc(pdf):
+    if not HAVE_MSPRIME:
+        return note_page(pdf, "Inference: LDpred3-auto vs LDSC",
+                         "Needs realistic (coalescent) LD — install msprime\n"
+                         "(pip install msprime) to generate this page.")
+    rows = [{k: float(r[k]) for k in r} for r in data_infer_ldsc_rows]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.8))
+    tx = [r["true_h2"] for r in rows]
+    lim = (0, 0.9)
+    a1.plot(lim, lim, "--", color="#aaa", label="truth (y = x)")
+    a1.errorbar(tx, [r["ldsc"] for r in rows], yerr=[r["ldsc_sd"] for r in rows],
+                fmt="s", color="#ff7f0e", capsize=3, ms=6, label="LDSC")
+    a1.errorbar(tx, [r["auto"] for r in rows], yerr=[r["auto_sd"] for r in rows],
+                fmt="o", color="#1f77b4", capsize=3, ms=6, label="LDpred3-auto")
+    a1.set(title="Heritability h²: LDSC vs LDpred3-auto", xlabel="true h²",
+           ylabel="inferred h²", xlim=lim, ylim=lim); a1.legend(fontsize=9, loc="upper left")
+
+    xr = [r["r2_real"] for r in rows]; yr = [r["r2_est"] for r in rows]
+    yerr = [[r["r2_est"] - r["r2_lo"] for r in rows], [r["r2_hi"] - r["r2_est"] for r in rows]]
+    hi = max(max(xr), max(yr)) * 1.1
+    a2.plot([0, hi], [0, hi], "--", color="#aaa", label="y = x")
+    a2.errorbar(xr, yr, yerr=yerr, fmt="o", color="#2ca02c", capsize=3, ms=6,
+                label="estimate ± 95% CI")
+    a2.set(title="Predictive r²: estimated vs realized", xlabel="realized out-of-sample r²",
+           ylabel="inferred r² (no validation set)", xlim=(0, hi), ylim=(0, hi))
+    a2.legend(fontsize=9, loc="upper left")
+    fig.suptitle("Inference cross-checks (realistic coalescent LD)", fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
+
+
+def page_bivariate(pdf):
+    if not HAVE_MSPRIME:
+        return note_page(pdf, "Bivariate (genetic correlation)",
+                         "Needs realistic (coalescent) LD — install msprime\n"
+                         "(pip install msprime) to generate this page.")
+    rows = [{k: (r[k] if k == "kind" else float(r[k])) for k in r} for r in data_bivariate_rows]
+    rg = [r for r in rows if r["kind"] == "rg"]
+    gain = [r for r in rows if r["kind"] == "gain"]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.8))
+
+    tx = [r["x"] for r in rg]; lim = (-0.15, 1.0)
+    a1.plot([0, 1], [0, 1], "--", color="#aaa", label="truth (y = x)")
+    a1.errorbar(tx, [r["m2"] for r in rg], yerr=[r["s2"] for r in rg],
+                fmt="s", color="#ff7f0e", capsize=3, ms=6, label="bivariate LDSC")
+    a1.errorbar(tx, [r["m1"] for r in rg], yerr=[r["s1"] for r in rg],
+                fmt="o", color="#1f77b4", capsize=3, ms=6, label="bivariate LDpred3")
+    a1.set(title="Genetic correlation r_g recovery", xlabel="true r_g",
+           ylabel="inferred r_g", xlim=lim, ylim=lim); a1.legend(fontsize=9, loc="upper left")
+
+    gx = [r["x"] for r in gain]
+    a2.errorbar(gx, [r["m1"] for r in gain], yerr=[r["s1"] for r in gain],
+                fmt="-o", color="#7f7f7f", capsize=3, ms=6, label="univariate (weak trait)")
+    a2.errorbar(gx, [r["m2"] for r in gain], yerr=[r["s2"] for r in gain],
+                fmt="-o", color="#2ca02c", capsize=3, ms=6, label="bivariate (boosted)")
+    a2.set(title="Weak-trait prediction gain (N₂≪N₁)", xlabel="true r_g with the strong trait",
+           ylabel="weak-trait genetic R²"); a2.legend(fontsize=9, loc="upper left")
+    fig.suptitle("Bivariate analysis (realistic coalescent LD)", fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
+
+
 def page_dentist(pdf):
     d = data_dentist_rows
     r = {k: float(d[0][k]) for k in d[0]}
@@ -450,6 +623,11 @@ if __name__ == "__main__":
     t0 = time.time()
     print("Generating figure data (cached to benchmarks/figdata_*.csv) ...")
     data_infer_rows = cached("inference", ["kind", "true", "est", "lo", "hi"], data_inference)
+    if HAVE_MSPRIME:
+        data_infer_ldsc_rows = cached("infer_ldsc",
+            ["true_h2", "ldsc", "ldsc_sd", "auto", "auto_sd", "r2_est", "r2_lo", "r2_hi", "r2_real"],
+            data_infer_ldsc)
+        data_bivariate_rows = cached("bivariate", ["kind", "x", "m1", "s1", "m2", "s2"], data_bivariate)
     data_dentist_rows = cached("dentist", ["clean", "no_filter", "dentist", "caught_frac", "falsedrop_frac"], data_dentist)
     data_sparse_rows = cached("sparse", ["config", "density", "fit_s", "r2"], data_sparse)
     data_split_rows = cached("splitting", ["split", "nblocks", "discarded", "storage", "r2"], data_splitting)
@@ -462,6 +640,8 @@ if __name__ == "__main__":
         page_bigsnpr(pdf)
         page_arch(pdf)
         page_inference(pdf)
+        page_infer_ldsc(pdf)
+        page_bivariate(pdf)
         page_dentist(pdf)
         page_ld_repr(pdf)
         page_perf(pdf)
