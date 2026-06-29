@@ -10,10 +10,11 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/<script>.py
 
 **Publication figures.** `make_paper_figures.py` assembles the headline results
 into one multi-page PDF (`benchmarks/figures.pdf`): the bigsnpr time/memory
-comparison and accuracy-by-architecture (from the committed CSVs), plus DENTIST
-recovery, sparse/banded LD, optimal block splitting, the Numba speed-up and
-multi-core scaling (computed from a self-contained simulation and cached to
-`figdata_*.csv`). Needs `matplotlib` (and `numba` for the performance page).
+comparison and accuracy-by-architecture (from the committed CSVs), plus h²/
+polygenicity inference recovery, DENTIST recovery, sparse/banded LD, optimal
+block splitting, the Numba speed-up and multi-core scaling (computed from a
+self-contained simulation and cached to `figdata_*.csv`). Needs `matplotlib`
+(and `numba` for the performance page).
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py
@@ -51,6 +52,7 @@ panel internally, so they run anywhere.
 
 | Script | What it measures |
 |--------|------------------|
+| `infer_recovery.py` | LDpred2-auto-infer: h² and polygenicity recovery vs truth, CI width and empirical 95% coverage (no validation cohort) |
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
 | `sparse_ld_tradeoff.py` | Sparse / banded LD: storage (density) and fit time vs accuracy across thresholding / banding settings |
 | `block_splitting.py` | `optimal_ld_blocks` vs fixed-size blocks: discarded between-block LD², per-block storage and accuracy |

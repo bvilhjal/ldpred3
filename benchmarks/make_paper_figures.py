@@ -4,9 +4,10 @@ One command -> ``benchmarks/figures.pdf`` with:
 
   p1  Running time & peak memory vs bigsnpr (1 core, realistic LD)
   p2  Accuracy by genetic architecture (N = 10k and 50k)
-  p3  DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
-  p4  LD representation: sparse/banded storage-vs-accuracy; optimal block splitting
-  p5  Performance: Numba JIT speed-up; multi-core scaling
+  p3  Inference evaluation: h² and polygenicity recovery vs truth (95% CIs)
+  p4  DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
+  p5  LD representation: sparse/banded storage-vs-accuracy; optimal block splitting
+  p6  Performance: Numba JIT speed-up; multi-core scaling
 
 Pages 1-2 read the committed CSVs (``cores_1core_benchmark.csv`` /
 ``methods_arch_benchmark.csv``); they are skipped with a note if absent. Pages
@@ -37,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from pyldpred2.simulate import simulate_genotypes
 from pyldpred2.ld import compute_ld_blocks
 from pyldpred2.qc import dentist_outlier_mask
+from pyldpred2.infer import ldpred2_auto_infer
 from pyldpred2 import ldpred2_by_blocks, sparsify_ld, optimal_ld_blocks
 from pyldpred2._numba import HAVE_NUMBA
 
@@ -131,6 +133,35 @@ def data_dentist():
         fdrop.append(int((~keepc).sum()) / M)
     return [{"clean": np.mean(clean), "no_filter": np.mean(noflt), "dentist": np.mean(dent),
              "caught_frac": np.mean(caught), "falsedrop_frac": np.mean(fdrop)}]
+
+
+def data_inference():
+    """LDpred2-auto-infer recovery of h² and polygenicity p vs the truth.
+
+    Sweeps the true value, runs multi-chain inference on a self-contained AR(1)
+    panel, and records the posterior median + 95% CI. No validation cohort.
+    """
+    NB, K, M, NREF, N, RHO, REPS = 15, 200, 3000, 8000, 40000, 0.8, 3
+    rows = []
+    for h2 in (0.1, 0.2, 0.35, 0.5, 0.8):                  # h² sweep (fixed p=0.02)
+        est, lo, hi = [], [], []
+        for rep in range(REPS):
+            blocks, _, _, bh, _, _ = simulate(NREF, [K] * NB, N, h2, 0.02, RHO, 200 + rep)
+            r = ldpred2_auto_infer(blocks, bh, np.full(M, float(N)),
+                                   n_chains=6, burn_in=150, num_iter=150, seed=rep)
+            est.append(r.h2_est); lo.append(r.h2_ci[0]); hi.append(r.h2_ci[1])
+        rows.append({"kind": "h2", "true": h2, "est": np.mean(est),
+                     "lo": np.mean(lo), "hi": np.mean(hi)})
+    for p in (0.005, 0.02, 0.1):                           # p sweep (fixed h²=0.5)
+        est, lo, hi = [], [], []
+        for rep in range(REPS):
+            blocks, _, _, bh, _, _ = simulate(NREF, [K] * NB, N, 0.5, p, RHO, 300 + rep)
+            r = ldpred2_auto_infer(blocks, bh, np.full(M, float(N)),
+                                   n_chains=6, burn_in=150, num_iter=150, seed=rep)
+            est.append(r.p_est); lo.append(r.p_ci[0]); hi.append(r.p_ci[1])
+        rows.append({"kind": "p", "true": p, "est": np.mean(est),
+                     "lo": np.mean(lo), "hi": np.mean(hi)})
+    return rows
 
 
 def data_sparse():
@@ -308,6 +339,37 @@ def page_arch(pdf):
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
 
+def page_inference(pdf):
+    rows = [{k: r[k] for k in r} for r in data_infer_rows]
+    h2 = [r for r in rows if r["kind"] == "h2"]
+    pp = [r for r in rows if r["kind"] == "p"]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.8))
+
+    tx = [float(r["true"]) for r in h2]; ex = [float(r["est"]) for r in h2]
+    yerr = [[float(r["est"]) - float(r["lo"]) for r in h2],
+            [float(r["hi"]) - float(r["est"]) for r in h2]]
+    lim = (0, 0.9)
+    a1.plot(lim, lim, "--", color="#aaa", label="truth (y = x)")
+    a1.errorbar(tx, ex, yerr=yerr, fmt="o", color="#1f77b4", capsize=3, ms=6,
+                label="estimate ± 95% CI")
+    a1.set(title="Heritability h² recovery", xlabel="true h²", ylabel="inferred h²",
+           xlim=lim, ylim=lim); a1.legend(fontsize=9, loc="upper left")
+
+    tx = [float(r["true"]) for r in pp]; ex = [float(r["est"]) for r in pp]
+    yerr = [[max(1e-6, float(r["est"]) - float(r["lo"])) for r in pp],
+            [float(r["hi"]) - float(r["est"]) for r in pp]]
+    plim = (3e-3, 0.3)
+    a2.plot(plim, plim, "--", color="#aaa", label="truth (y = x)")
+    a2.errorbar(tx, ex, yerr=yerr, fmt="o", color="#2ca02c", capsize=3, ms=6,
+                label="estimate ± 95% CI")
+    a2.set(title="Polygenicity p recovery", xlabel="true p", ylabel="inferred p",
+           xscale="log", yscale="log", xlim=plim, ylim=plim)
+    a2.legend(fontsize=9, loc="upper left")
+    fig.suptitle("Inference evaluation (LDpred2-auto-infer, no validation cohort)",
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
+
+
 def page_dentist(pdf):
     d = data_dentist_rows
     r = {k: float(d[0][k]) for k in d[0]}
@@ -387,6 +449,7 @@ def page_perf(pdf):
 if __name__ == "__main__":
     t0 = time.time()
     print("Generating figure data (cached to benchmarks/figdata_*.csv) ...")
+    data_infer_rows = cached("inference", ["kind", "true", "est", "lo", "hi"], data_inference)
     data_dentist_rows = cached("dentist", ["clean", "no_filter", "dentist", "caught_frac", "falsedrop_frac"], data_dentist)
     data_sparse_rows = cached("sparse", ["config", "density", "fit_s", "r2"], data_sparse)
     data_split_rows = cached("splitting", ["split", "nblocks", "discarded", "storage", "r2"], data_splitting)
@@ -398,6 +461,7 @@ if __name__ == "__main__":
     with PdfPages(out) as pdf:
         page_bigsnpr(pdf)
         page_arch(pdf)
+        page_inference(pdf)
         page_dentist(pdf)
         page_ld_repr(pdf)
         page_perf(pdf)
