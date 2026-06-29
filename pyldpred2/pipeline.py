@@ -457,17 +457,24 @@ def _main(argv=None):
     g.add_argument("--bgen", help="target BGEN file (.bgen)")
     ap.add_argument("--sample", default=None, help="BGEN .sample file")
     ap.add_argument("--method", default="auto",
-                    choices=["auto", "grid", "inf", "annot"])
+                    choices=["auto", "grid", "inf", "annot"],
+                    help="LDpred2 model (default: auto; annot when "
+                         "--annotations is given)")
     ap.add_argument("--annotations", default=None,
                     help="per-SNP annotation table (for --method annot)")
-    ap.add_argument("--block-size", type=int, default=500)
-    ap.add_argument("--n-eff", type=float, default=None)
+    ap.add_argument("--block-size", type=int, default=500,
+                    help="max variants per LD block (default: 500)")
+    ap.add_argument("--n-eff", type=float, default=None,
+                    help="effective sample size, if the sumstats lack an N column")
     ap.add_argument("--ld-prefix", default=None, help="external LD panel prefix")
-    ap.add_argument("--ld-ridge", type=float, default=0.0)
+    ap.add_argument("--ld-ridge", type=float, default=0.0,
+                    help="shrink each LD block towards the identity by this "
+                         "fraction (default: 0.0)")
     ap.add_argument("--ld-out", default=None, help="save computed LD blocks (.npz)")
     ap.add_argument("--ld-cache", default=None,
                     help="reuse LD blocks saved earlier with --ld-out")
-    ap.add_argument("--ncores", type=int, default=1)
+    ap.add_argument("--ncores", type=int, default=1,
+                    help="threads for the Gibbs sampler (Numba; default: 1)")
     ap.add_argument("--no-qc", action="store_true", help="skip sumstats QC")
     ap.add_argument("--dentist", action="store_true",
                     help="apply the DENTIST LD-consistency outlier filter "

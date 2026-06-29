@@ -288,6 +288,7 @@ silently using stale LD — rebuild it with `--ld-out`.
 | Most variants dropped at **harmonisation** | build/allele-coding mismatch between sumstats and genotypes; check strand and that both are the same genome build |
 | Most variants dropped at **QC** | wrong column mapping (so `N`/SE parsed wrong), or a real `N`/MAF/INFO filter; inspect `res.qc_log` |
 | **SD-consistency** drops many variants | a wrong/!per-variant `N`, allele errors, or bad imputation — the check compares sumstats-implied SD to the reference (see pipeline.md) |
+| Spurious **genome-wide hits** that disagree with their LD neighbours | likely allele/strand errors or an LD-reference mismatch the SD-check misses; try `--dentist` (off by default — it can also drop genuine poorly-tagged signals, so keep its cutoff stringent; see pipeline.md) |
 | `auto` `p_est` looks too high for an **ultra-sparse** trait | `p` is unidentifiable below ~2 causal/1000 variants; `h²`/`r²` stay fine (inference.md) |
 | `annot` **underperforms** `auto` | almost always under-converged map — keep `theta_every=1` (the default); raise iterations before raising `theta_every` |
 | Sampler **diverges** on noisy/ill-conditioned LD | keep `allow_jump_sign=False` (default), or `sparsify_ld(..., shrink=<1)` to restore diagonal dominance (algorithm.md) |
