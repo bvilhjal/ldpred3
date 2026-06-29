@@ -418,6 +418,38 @@ Banding can break positive-definiteness, which destabilises the sampler;
 accurate). At these block sizes (k=500) the time difference is minor — the win is
 memory; the speed win grows with bandwidth.
 
+> **This table is AR(1) LD, which is genuinely banded.** On *realistic* LD,
+> distance banding is **lossy** (it discards real long-range structure) — see the
+> next section, where low-rank LD is the right memory tool instead.
+
+## LD representations at scale: memory vs running time
+
+At genome / sequencing scale (millions of SNPs, thousands per block) the dense
+per-block LD (Σ kᵦ²) does not fit in RAM. The compact representations the sampler
+can fit — banded `SparseLD` and low-rank `LowRankLD` — are compared here on
+**realistic** coalescent LD with **large blocks** (m=10,000 = 5×2000, N=50k,
+h²=0.5, p=0.01): persistent LD memory, build time (low-rank pays an
+eigendecomposition), per-fit time, and genetic R². Regenerate with
+`benchmarks/ld_representations.py`.
+
+| representation | LD memory | build (s) | fit (s) | R² |
+|----------------|----------:|----------:|--------:|---:|
+| dense | 80 MB | 3.1 | **0.18** | 0.987 |
+| band w200 | 30 MB | 3.2 | 1.9 | 0.758 |
+| **low-rank 99.5%** | **16 MB** | 10.2 | 1.6 | **0.986** |
+
+The honest trade-off: **low-rank cuts memory ~5× and matches dense accuracy
+(0.986 vs 0.987), but fits ~9× slower** (and the build pays an O(k³) eigen-
+decomposition). The slowdown is structural — the dense sampler keeps the full
+residual vector and reads `(Rβ)_j` in O(1), whereas the eigenspace fit recomputes
+`(Rβ)_j = U[j]·s` in O(rank) per SNP. **Banding is worse on realistic LD on every
+axis except a small memory edge over dense** (slower than dense *and* it drops
+accuracy to 0.76). So low-rank is the representation for *scale* — LD that would
+not fit dense — not a way to speed up a problem that already fits in RAM. For the
+latter, dense (or recombination-aware splitting to keep blocks bounded) is best;
+and the on-disk `--ld-stream` cache lets a low-rank LD exceed RAM (paged from
+disk, fits bit-identical).
+
 ## Optimal LD-block splitting
 
 `optimal_ld_blocks` (Privé 2022) places block boundaries in low-LD valleys
