@@ -71,7 +71,34 @@ On a clean population AR(1) block (m=4000, 0.47 % density) this gives, with
 | grid | 0.131 s | 0.070 s | 1.9× |
 | auto | 0.138 s | 0.071 s | 1.9× |
 
-Two important caveats:
+At genome / sequencing scale (millions of SNPs, thousands per block) *all* blocks
+are held in RAM, so persistent storage = Σ kᵦ² for dense blocks (≈160 GB for 10M
+SNPs in 4000-blocks). `compute_ld_blocks(sparse=True, max_dist=w)` stores each
+block banded (built dense transiently, then discarded), and the streaming auto
+sampler fits `SparseLD` blocks directly via a CSR per-sweep kernel
+(`_gibbs_one_sweep_sparse`) — so the accurate global-hyper fit runs at
+O(k·bandwidth). The on-disk LD cache (`--ld-out` / `--ld-cache`) also stores the
+CSR. Enable end-to-end with `--ld-sparse` (`--ld-max-dist w`).
+
+**Banding is only lossless when LD really is short-range.** On realistic LD it is
+**not**: banding discards genuine long-range structure. Measured on coalescent LD
+(m=6000, 1000-SNP blocks; `benchmarks/ld_memory_scaling.py`,
+`benchmarks/ld_shrink_large_blocks.py`):
+
+| representation | genetic R² | memory |
+|----------------|-----------:|-------:|
+| dense | 0.992 | 100% |
+| band w200 | 0.823 | 72% |
+| **low-rank (PCs), 99.5% var** | **0.993** | **24%** |
+
+So for realistic / sequencing-scale LD, **low-rank (eigen/PC) compression is the
+right memory tool** — it matches dense accuracy at ~4× compression where banding
+both loses accuracy and compresses less (SBayesRC's representation; not yet wired
+into the sampler — see roadmap). Banding remains useful for genuinely banded LD
+(e.g. AR(1)-like / some array data), and recombination-aware splitting
+(`optimal_ld_blocks`) keeps blocks bounded regardless.
+
+Two more caveats:
 
 * **In-sample LD has a noise floor (~1/√N)** that fills the matrix, so magnitude
   thresholding alone won't sparsify it — band by distance (`max_dist=`) to drop

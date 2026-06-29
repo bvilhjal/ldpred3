@@ -153,6 +153,22 @@ def test_pipeline_ld_shrink_runs_and_keeps_signal(tmp_path):
     assert r2 > 0.20, f"PRS R^2 with LD shrink too low: {r2:.3f}"
 
 
+def test_pipeline_ld_sparse_runs_and_keeps_signal(tmp_path):
+    # Banded SparseLD blocks fit via the streaming auto kernel, stay predictive,
+    # and round-trip through the on-disk cache.
+    from ldpred3 import SparseLD
+    from ldpred3.ld import load_ld_blocks
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=11)
+    cache = tmp_path / "ld_sparse.npz"
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                          ld_sparse=True, ld_sparse_params={"max_dist": 80},
+                          ld_out=str(cache))
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"PRS R^2 with sparse LD too low: {r2:.3f}"
+    blocks, _ = load_ld_blocks(str(cache))       # cache stores banded CSR
+    assert all(isinstance(R, SparseLD) for R, _ in blocks)
+
+
 def test_pipeline_method_annot(tmp_path):
     # method="annot": reads an annotation file, learns enrichment, scores predict.
     rng = np.random.default_rng(3)

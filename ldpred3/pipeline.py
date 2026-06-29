@@ -120,6 +120,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     qc=True, qc_params=None, sd_check=True,
                     dentist=False, dentist_params=None,
                     ld_shrink=False, ld_shrink_params=None,
+                    ld_sparse=False, ld_sparse_params=None,
                     annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
@@ -176,6 +177,13 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         reference (reduces sampler over-fit and h² inflation).
     ld_shrink_params : dict, optional
         Overrides for the shrinkage (e.g. ``{"max_shrink": 0.3, "intensity": 0.5}``).
+    ld_sparse : bool, default False
+        Store the LD blocks as banded :class:`~ldpred3.SparseLD` (built and fit
+        with O(k·bandwidth) memory instead of O(k²)). Essential at genome scale /
+        thousands of SNPs per block. The auto sampler fits these directly via the
+        streaming kernel. Not compatible with ``dentist`` (which needs dense LD).
+    ld_sparse_params : dict, optional
+        Overrides for the banding, e.g. ``{"max_dist": 500, "ld_threshold": 1e-3}``.
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
     **ldpred3_kwargs
@@ -265,8 +273,15 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
             ld_dos = ld_dos[:, keep_sd]
             chrom = chrom[keep_sd]
 
+        if ld_sparse and dentist:
+            raise ValueError("dentist requires dense LD blocks and is not "
+                             "compatible with ld_sparse; disable one of them")
+        # Banded (SparseLD) blocks keep persistent memory at O(k·bandwidth) for
+        # large blocks (genome-scale / thousands of SNPs per block); the dense
+        # block is built transiently per block and discarded.
+        sparse_kw = dict(sparse=True, **(ld_sparse_params or {})) if ld_sparse else {}
         blocks = compute_ld_blocks(ld_dos, chrom=chrom, block_size=block_size,
-                                   ridge=ld_ridge)
+                                   ridge=ld_ridge, **sparse_kw)
 
         # Optional DENTIST-style LD-consistency outlier removal. Catches
         # variants whose z-score disagrees with its LD neighbours (allele/strand
@@ -507,6 +522,12 @@ def _main(argv=None):
     ap.add_argument("--ld-shrink", action="store_true",
                     help="size-aware spectral shrinkage of large LD blocks "
                          "toward the identity (helps on a finite LD panel)")
+    ap.add_argument("--ld-sparse", action="store_true",
+                    help="store LD blocks as banded SparseLD (O(k*bandwidth) "
+                         "memory; for genome-scale / large blocks)")
+    ap.add_argument("--ld-max-dist", type=int, default=None,
+                    help="band half-width for --ld-sparse (variants; default: "
+                         "threshold only)")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
                          "(dense; for chromosome / curated-SNP scale)")
@@ -575,7 +596,11 @@ def _main(argv=None):
         ld_out=args.ld_out, ld_cache=args.ld_cache,
         annotations=args.annotations,
         qc=not args.no_qc, sd_check=not args.no_sd_check,
-        dentist=args.dentist, ld_shrink=args.ld_shrink, infer=args.infer)
+        dentist=args.dentist, ld_shrink=args.ld_shrink,
+        ld_sparse=args.ld_sparse,
+        ld_sparse_params=({"max_dist": args.ld_max_dist}
+                          if args.ld_max_dist else None),
+        infer=args.infer)
 
     if args.save_weights:
         res.write_weights(args.save_weights)
