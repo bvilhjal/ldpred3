@@ -1,4 +1,4 @@
-"""Plot genetic-R2 of LDpred2 variants across architectures (two power levels)."""
+"""Plot genetic-R2 of LDpred3 variants across architectures (two power levels)."""
 import csv
 import numpy as np
 import matplotlib
@@ -35,7 +35,7 @@ for ax, N in zip(axes, Ns):
     ax.set_ylim(0.4, 1.0)
 axes[0].set_ylabel("Genetic R² (PRS vs true genetic value)")
 axes[-1].legend(frameon=False, fontsize=9, title="method")
-fig.suptitle("LDpred2 variants on realistic (coalescent) LD, by genetic "
+fig.suptitle("LDpred3 variants on realistic (coalescent) LD, by genetic "
              "architecture — m=50000, h²=0.5", fontsize=11)
 fig.tight_layout(rect=(0, 0, 1, 0.96))
 fig.savefig("methods_arch.png", dpi=130)

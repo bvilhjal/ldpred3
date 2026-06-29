@@ -1,11 +1,11 @@
 """
-Learn the annotation -> prior map inside the LDpred2-auto sampler (SBayesRC).
+Learn the annotation -> prior map inside the LDpred3-auto sampler (SBayesRC).
 
 Each SNP's causal probability is modelled as ``p_j = sigmoid(a_j . theta)``
 where ``a_j`` is its functional-annotation vector and ``theta`` is learned
 jointly with the effects. The Gibbs sampler alternates:
 
-1. an effect-update sweep (the usual point-normal LDpred2 step) using the
+1. an effect-update sweep (the usual point-normal LDpred3 step) using the
    current per-SNP ``p_j``;
 2. an update of ``theta`` given the current causal pattern.
 
@@ -27,9 +27,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ldpred2 import _jit, _stable_postp, _as_n_vector, SparseLD
+from .ldpred3 import _jit, _stable_postp, _as_n_vector, SparseLD
 
-__all__ = ["AnnotResult", "ldpred2_auto_annot", "ldpred2_auto_annot_blocks",
+__all__ = ["AnnotResult", "ldpred3_auto_annot", "ldpred3_auto_annot_blocks",
            "read_annotations"]
 
 _ID_ALIASES = {"snp", "rsid", "rs", "id", "variant_id", "markername", "snpid"}
@@ -208,7 +208,7 @@ def _truncnorm(mu, gamma, rng):
 
 @dataclass
 class AnnotResult:
-    """Output of :func:`ldpred2_auto_annot`.
+    """Output of :func:`ldpred3_auto_annot`.
 
     ``theta`` are the learned annotation coefficients (the first is the
     intercept). A large positive coefficient means that annotation enriches for
@@ -303,11 +303,11 @@ def _add_intercept(A):
     return A, had
 
 
-def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
+def ldpred3_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
                        learn_variance=False, h2_init=0.1, p_init=0.1,
                        burn_in=200, num_iter=200, theta_every=1, ridge=5.0,
                        h2_bounds=(1e-4, 1.0), annotation_names=None, seed=None):
-    """LDpred2-auto that learns a per-SNP prior from functional annotations.
+    """LDpred3-auto that learns a per-SNP prior from functional annotations.
 
     Each SNP's causal probability is ``p_j = sigmoid(a_j . theta)`` and ``theta``
     is learned jointly with the effects (the SBayesRC idea). The learned
@@ -366,13 +366,13 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
 
     Examples
     --------
-    >>> res = ldpred2_auto_annot(corr, beta_hat, n_eff, A,
+    >>> res = ldpred3_auto_annot(corr, beta_hat, n_eff, A,
     ...                          annotation_names=["coding", "conserved"])
     >>> res.enrichment            # {"coding": 1.2, "conserved": 0.8}
     >>> res.beta_est              # adjusted effects to build the PRS
     """
     if isinstance(corr, SparseLD):
-        raise NotImplementedError("ldpred2_auto_annot needs a dense LD matrix")
+        raise NotImplementedError("ldpred3_auto_annot needs a dense LD matrix")
     if learn not in ("eb", "probit"):
         raise ValueError("learn must be 'eb' or 'probit'")
     if theta_every < 1:
@@ -427,18 +427,18 @@ def ldpred2_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
                        annotation_names=names)
 
 
-def ldpred2_auto_annot_blocks(blocks, beta_hat, n_eff, annotations, *,
+def ldpred3_auto_annot_blocks(blocks, beta_hat, n_eff, annotations, *,
                               learn="eb", learn_variance=False, h2_init=0.1,
                               p_init=0.1, burn_in=200, num_iter=200,
                               theta_every=1, ridge=5.0, h2_bounds=(1e-4, 1.0),
                               annotation_names=None, seed=None):
-    """Genome-wide (streaming) version of :func:`ldpred2_auto_annot`.
+    """Genome-wide (streaming) version of :func:`ldpred3_auto_annot`.
 
     The annotation maps ``theta`` / ``phi`` are global, but the effect-update
     sweeps run one LD block at a time, so the full genome-wide LD matrix is
     never materialised — only one block's dense ``corr`` is resident. ``blocks``
     is a list of ``(corr_block, idx)`` that tile ``0 .. m-1`` (as for
-    :func:`ldpred2.ldpred2_by_blocks`).
+    :func:`ldpred3.ldpred3_by_blocks`).
     """
     if learn not in ("eb", "probit"):
         raise ValueError("learn must be 'eb' or 'probit'")

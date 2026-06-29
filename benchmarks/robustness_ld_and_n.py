@@ -1,6 +1,6 @@
 """Robustness benchmarks (auto PRS): LD-reference quality and N misspecification.
 
-Both fit LDpred2-auto on summary statistics generated from the true population
+Both fit LDpred3-auto on summary statistics generated from the true population
 (coalescent) LD, and measure the genetic R2 of the resulting PRS plus the fitted
 genetic variance (a heritability proxy). Needs ``ld_library.npz`` in the cwd.
 
@@ -11,7 +11,7 @@ genetic variance (a heritability proxy). Needs ``ld_library.npz`` in the cwd.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_by_blocks
+from ldpred3 import ldpred3_by_blocks
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K, NB = 500, 12
@@ -78,7 +78,7 @@ for nref in (500, 1000, 2000, 5000, 10000, None):
     for rep in range(REPS):
         rng = np.random.default_rng(100 + rep)
         beta = make_beta(rng); bh = sumstats(beta, N_TRUE, rng)
-        be = ldpred2_by_blocks(ref, bh, np.full(M, float(N_TRUE)), method="auto",
+        be = ldpred3_by_blocks(ref, bh, np.full(M, float(N_TRUE)), method="auto",
                                burn_in=120, num_iter=150, seed=rep)
         r2s.append(r2(be, beta)); h2s.append(gv(be, be))
     label = "inf (true)" if nref is None else str(nref)
@@ -93,7 +93,7 @@ for factor in (0.7, 0.85, 1.0, 1.15, 1.3):
     for rep in range(REPS):
         rng = np.random.default_rng(100 + rep)
         beta = make_beta(rng); bh = sumstats(beta, N_TRUE, rng)
-        be = ldpred2_by_blocks(ref, bh, np.full(M, factor * N_TRUE), method="auto",
+        be = ldpred3_by_blocks(ref, bh, np.full(M, factor * N_TRUE), method="auto",
                                burn_in=120, num_iter=150, seed=rep)
         r2s.append(r2(be, beta)); h2s.append(gv(be, be))
     print(f"{factor:>8.2f} | {np.mean(r2s):>8.3f} | {np.mean(h2s):>9.3f}")

@@ -13,7 +13,7 @@ import math
 
 import numpy as np
 
-from pyldpred2.sumstats import read_sumstats, detect_columns
+from ldpred3.sumstats import read_sumstats, detect_columns
 
 
 def _write(tmp_path, text, name="ss.txt"):
@@ -137,7 +137,7 @@ def test_varying_per_variant_sample_size(tmp_path):
     # Meta-analysis sumstats: N differs per SNP. It must parse per-variant and
     # flow through the samplers / LDSC; and the per-SNP N path must reduce to the
     # constant fast path when N happens to be constant.
-    from pyldpred2 import ldpred2_by_blocks, ld_scores, ldsc_h2
+    from ldpred3 import ldpred3_by_blocks, ld_scores, ldsc_h2
 
     path = _write(tmp_path,
         "SNP\tA1\tA2\tBETA\tSE\tN\n"
@@ -154,16 +154,16 @@ def test_varying_per_variant_sample_size(tmp_path):
               for b in range(2)]
     bhat = rng.normal(0, 0.01, m)
     n_vec = np.linspace(8000, 60000, m)
-    be = ldpred2_by_blocks(blocks, bhat, n_vec, method="auto",
+    be = ldpred3_by_blocks(blocks, bhat, n_vec, method="auto",
                            burn_in=40, num_iter=60, seed=1)
     assert np.all(np.isfinite(be))                       # varying N runs
     h = ldsc_h2(n_vec * bhat ** 2, ld_scores(blocks), n_vec, n_blocks=20)
     assert np.isfinite(h.h2)                             # LDSC accepts a vector N
 
     # constant vector N == scalar N (per-SNP path matches the fast path)
-    v = ldpred2_by_blocks(blocks, bhat, np.full(m, 3e4), method="auto",
+    v = ldpred3_by_blocks(blocks, bhat, np.full(m, 3e4), method="auto",
                           burn_in=40, num_iter=60, seed=2)
-    s = ldpred2_by_blocks(blocks, bhat, 3e4, method="auto",
+    s = ldpred3_by_blocks(blocks, bhat, 3e4, method="auto",
                           burn_in=40, num_iter=60, seed=2)
     np.testing.assert_allclose(v, s)
 

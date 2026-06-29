@@ -1,5 +1,5 @@
 """
-Bivariate LDpred2-auto: jointly fit two traits that share an LD reference.
+Bivariate LDpred3-auto: jointly fit two traits that share an LD reference.
 
 Each variant falls in one of **four** latent states with probabilities
 ``(pi00, pi10, pi01, pi11)``: causal for neither trait, trait 1 only, trait 2
@@ -29,10 +29,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ldpred2 import _jit, _stable_postp, _as_n_vector, ldpred2_by_blocks
+from .ldpred3 import _jit, _stable_postp, _as_n_vector, ldpred3_by_blocks
 
-__all__ = ["BivariateResult", "ldpred2_auto_bivariate",
-           "ldpred2_auto_bivariate_blocks"]
+__all__ = ["BivariateResult", "ldpred3_auto_bivariate",
+           "ldpred3_auto_bivariate_blocks"]
 
 DAMP = 0.2          # damping factor for the variance-component updates
 
@@ -216,7 +216,7 @@ _bivar_one_sweep_jit = _jit(_bivar_one_sweep)
 
 @dataclass
 class BivariateResult:
-    """Output of :func:`ldpred2_auto_bivariate`.
+    """Output of :func:`ldpred3_auto_bivariate`.
 
     ``beta1_est`` / ``beta2_est`` are the posterior-mean (standardized) effects
     for the two traits, ``h2`` the pair of SNP heritabilities, ``rg`` the
@@ -237,11 +237,11 @@ class BivariateResult:
                 f"n_variants={len(self.beta1_est)})")
 
 
-def ldpred2_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
+def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
                                   h2_init=0.1, p_init=0.1, rg_init=0.0,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
                                   h2_bounds=(1e-4, 1.0), h2_cap=None, seed=None):
-    """Genome-wide (streaming) bivariate LDpred2-auto.
+    """Genome-wide (streaming) bivariate LDpred3-auto.
 
     ``blocks`` is the ``[(R, idx), ...]`` list (contiguous ``idx`` partitioning
     ``0..m-1``) used elsewhere; the two traits' summary statistics share it. The
@@ -307,9 +307,9 @@ def ldpred2_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # the univariate h2 as the cap keeps the joint scale honest. A caller that
     # already knows the heritabilities can pass h2_cap to skip the two fits.
     if h2_cap is None:
-        b1u = ldpred2_by_blocks(blocks, bh1, n1, method="auto",
+        b1u = ldpred3_by_blocks(blocks, bh1, n1, method="auto",
                                 burn_in=burn_in, num_iter=num_iter, seed=seed)
-        b2u = ldpred2_by_blocks(blocks, bh2, n2, method="auto",
+        b2u = ldpred3_by_blocks(blocks, bh2, n2, method="auto",
                                 burn_in=burn_in, num_iter=num_iter, seed=seed)
         h2_1c = _gv_blocks(fblocks, b1u)
         h2_2c = _gv_blocks(fblocks, b2u)
@@ -388,14 +388,14 @@ def ldpred2_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                            sigma=np.array([[s1, s12], [s12, s2]]))
 
 
-def ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
-    """Bivariate LDpred2-auto on a single dense LD matrix.
+def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
+    """Bivariate LDpred3-auto on a single dense LD matrix.
 
-    Convenience wrapper over :func:`ldpred2_auto_bivariate_blocks` for one block
+    Convenience wrapper over :func:`ldpred3_auto_bivariate_blocks` for one block
     (or a block-diagonal genome packed into one matrix). See that function and
     :class:`BivariateResult` for the parameters and output.
     """
     corr = np.ascontiguousarray(corr, dtype=np.float32)
     m = corr.shape[0]
-    return ldpred2_auto_bivariate_blocks([(corr, np.arange(m))], beta_hat1,
+    return ldpred3_auto_bivariate_blocks([(corr, np.arange(m))], beta_hat1,
                                          beta_hat2, n_eff1, n_eff2, **kwargs)

@@ -1,8 +1,8 @@
 """Numba JIT speed-up for the Gibbs sampler.
 
-The inner sampling sweep dominates LDpred2's runtime; ``pyldpred2`` JIT-compiles
+The inner sampling sweep dominates LDpred3's runtime; ``ldpred3`` JIT-compiles
 it with Numba when available and otherwise runs the *identical* pure-Python code
-(see ``pyldpred2/_numba.py``). This script measures the gap.
+(see ``ldpred3/_numba.py``). This script measures the gap.
 
 It runs itself twice in subprocesses: once normally (JIT on) and once with
 ``NUMBA_DISABLE_JIT=1`` (Numba's njit becomes a no-op, so the same code runs in
@@ -24,9 +24,9 @@ BURN, ITER = 60, 150
 def time_one_fit():
     """Build a problem and time a single auto fit (excludes JIT warm-up)."""
     import numpy as np
-    from pyldpred2.simulate import simulate_genotypes
-    from pyldpred2.ld import compute_ld_blocks
-    from pyldpred2 import ldpred2_by_blocks
+    from ldpred3.simulate import simulate_genotypes
+    from ldpred3.ld import compute_ld_blocks
+    from ldpred3 import ldpred3_by_blocks
     rng = np.random.default_rng(0)
     maf = rng.uniform(0.05, 0.5, M)
     G, _ = simulate_genotypes(5000, [K] * NB, maf, RHO, rng)
@@ -38,14 +38,14 @@ def time_one_fit():
         ch = np.linalg.cholesky(R + 1e-6 * np.eye(len(ix)))
         beta_hat[ix] = R @ beta[ix] + (ch @ rng.standard_normal(len(ix))) / np.sqrt(N_GWAS)
     n = np.full(M, float(N_GWAS))
-    ldpred2_by_blocks(blocks, beta_hat, n, method="auto", burn_in=5, num_iter=5)  # warm-up
+    ldpred3_by_blocks(blocks, beta_hat, n, method="auto", burn_in=5, num_iter=5)  # warm-up
     t = time.time()
-    ldpred2_by_blocks(blocks, beta_hat, n, method="auto", burn_in=BURN, num_iter=ITER)
+    ldpred3_by_blocks(blocks, beta_hat, n, method="auto", burn_in=BURN, num_iter=ITER)
     return time.time() - t
 
 
 if os.environ.get("PYLDPRED2_BENCH_CHILD") == "1":
-    from pyldpred2._numba import HAVE_NUMBA
+    from ldpred3._numba import HAVE_NUMBA
     dt = time_one_fit()
     print(f"{int(HAVE_NUMBA and not os.environ.get('NUMBA_DISABLE_JIT'))} {dt:.4f}")
     sys.exit(0)

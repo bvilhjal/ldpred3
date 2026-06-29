@@ -1,4 +1,4 @@
-"""Compare SNP-heritability estimates: LD Score regression vs LDpred2-auto.
+"""Compare SNP-heritability estimates: LD Score regression vs LDpred3-auto.
 
 Both estimate h2 from the *same* GWAS summary statistics (no individual data),
 on realistic coalescent LD. We report each against the known true h2, for two
@@ -8,7 +8,7 @@ blocks) in the working directory, as the other benchmarks do.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ld_scores, ldsc_h2, ldpred2_auto_infer
+from ldpred3 import ld_scores, ldsc_h2, ldpred3_auto_infer
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)
@@ -64,7 +64,7 @@ def sumstats(beta, rng):                        # GWAS from the TRUE population 
 t0 = time.time()
 n = np.full(M, float(N))
 print(f"h2 estimation on coalescent LD, m={M}, N={N}, {REPS} reps\n")
-print(f"{'model':>14} {'h2_true':>8} | {'LDSC':>16} | {'LDpred2-auto':>16}")
+print(f"{'model':>14} {'h2_true':>8} | {'LDSC':>16} | {'LDpred3-auto':>16}")
 print("-" * 64)
 for model in ("infinitesimal", "sparse"):
     for h2_true in (0.2, 0.5):
@@ -74,7 +74,7 @@ for model in ("infinitesimal", "sparse"):
             beta = make_beta(model, h2_true, rng)
             bhat = sumstats(beta, rng)
             ldsc_e.append(ldsc_h2(n * bhat ** 2, ell, n, n_blocks=100).h2)
-            r = ldpred2_auto_infer(dense, bhat, n, n_chains=8,
+            r = ldpred3_auto_infer(dense, bhat, n, n_chains=8,
                                    burn_in=120, num_iter=150, seed=rep)
             infer_e.append(r.h2_est)
         print(f"{model:>14} {h2_true:>8.2f} | "

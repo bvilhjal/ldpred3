@@ -1,5 +1,5 @@
 """
-A basic, self-contained Python implementation of LDpred2.
+A basic, self-contained Python implementation of LDpred3.
 
 LDpred2 (Privé, Arbel & Vilhjálmsson, *Bioinformatics* 2020) is a Bayesian
 polygenic-score method that re-weights GWAS marginal effect sizes using an LD
@@ -9,10 +9,10 @@ algorithms to NumPy so they can be used and inspected from Python.
 
 Three models are implemented here:
 
-* ``ldpred2_inf``  -- the infinitesimal model (closed-form solution).
-* ``ldpred2_grid`` -- the point-normal / spike-and-slab model fitted with a
+* ``ldpred3_inf``  -- the infinitesimal model (closed-form solution).
+* ``ldpred3_grid`` -- the point-normal / spike-and-slab model fitted with a
   Gibbs sampler for fixed hyper-parameters ``(h2, p)``.
-* ``ldpred2_auto`` -- the same Gibbs sampler, but ``h2`` (SNP heritability) and
+* ``ldpred3_auto`` -- the same Gibbs sampler, but ``h2`` (SNP heritability) and
   ``p`` (proportion of causal variants) are estimated on the fly.
 
 Notation
@@ -27,7 +27,7 @@ where ``N`` is the GWAS sample size and ``R`` is the SNP correlation matrix.
 
 The functions operate on a single LD block (a dense correlation matrix). Real
 analyses run genome-wide by applying the model to each (approximately
-independent) LD block separately; ``ldpred2_by_blocks`` is a thin helper for
+independent) LD block separately; ``ldpred3_by_blocks`` is a thin helper for
 that.
 """
 
@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # JIT decorators (no-op without Numba) and the LD utilities live in their own
-# modules; re-exported here so the historical ``from .ldpred2 import ...`` import
+# modules; re-exported here so the historical ``from .ldpred3 import ...`` import
 # surface (used by infer / annot / bivariate and the tests) keeps working.
 from ._numba import HAVE_NUMBA, _jit, _jit_parallel, _set_threads, prange  # noqa: F401,E402
 from .ld_utils import (SparseLD, sparsify_ld, block_diagonal_ld,  # noqa: F401,E402
@@ -63,10 +63,10 @@ _stable_postp = _jit(_stable_postp)
 
 __all__ = [
     "standardize_betas",
-    "ldpred2_inf",
-    "ldpred2_grid",
-    "ldpred2_auto",
-    "ldpred2_by_blocks",
+    "ldpred3_inf",
+    "ldpred3_grid",
+    "ldpred3_auto",
+    "ldpred3_by_blocks",
     "AutoResult",
     "SparseLD",
     "sparsify_ld",
@@ -79,9 +79,9 @@ def standardize_betas(beta, beta_se, n_eff):
     """Put marginal GWAS effects on the standardized (allele-correlation) scale.
 
     GWAS are reported on many different scales (per-allele, log-odds, ...).
-    LDpred2 works internally with effects scaled so that ``beta_hat`` is the
+    LDpred3 works internally with effects scaled so that ``beta_hat`` is the
     correlation between the (standardized) genotype and phenotype. The standard
-    transformation used by LDpred2 is::
+    transformation used by LDpred3 is::
 
         beta_std = beta / sqrt(n_eff * beta_se**2 + beta**2)
 
@@ -138,8 +138,8 @@ def _check_h2_p(h2=None, p=None):
         raise ValueError("p must be in (0, 1]")
 
 
-def ldpred2_inf(corr, beta_hat, n_eff, h2):
-    """LDpred2 infinitesimal model (closed form).
+def ldpred3_inf(corr, beta_hat, n_eff, h2):
+    """LDpred3 infinitesimal model (closed form).
 
     Assumes every variant is causal with effects drawn from
     ``beta ~ N(0, h2 / m)``. The posterior mean then has the closed form::
@@ -223,7 +223,7 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
         rs = rs_new
     if not converged:
         import warnings
-        warnings.warn(f"ldpred2_inf conjugate gradient did not converge in "
+        warnings.warn(f"ldpred3_inf conjugate gradient did not converge in "
                       f"{max_iter} iterations (residual {rs_new ** 0.5:.2e})",
                       RuntimeWarning)
     return x
@@ -240,7 +240,7 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
     and pure-Python paths; ``beta`` (used only for the -auto p-update) may differ
     slightly between the two but yields an equally valid sampler.
 
-    ``init_beta`` warm-starts the chain (e.g. from LDpred2-inf). When ``tol`` > 0,
+    ``init_beta`` warm-starts the chain (e.g. from LDpred3-inf). When ``tol`` > 0,
     the sampler stops early once the running posterior mean's relative RMS change
     over ``check_every`` sweeps falls below ``tol`` (adaptive stopping).
 
@@ -943,7 +943,7 @@ def _gibbs_blocks(blocks, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
         for cb, idx in blocks:
             idx = np.asarray(idx)
             k = idx.shape[0]
-            init_beta[idx] = ldpred2_inf(cb, beta_hat[idx], n[idx], h2 * k / m)
+            init_beta[idx] = ldpred3_inf(cb, beta_hat[idx], n[idx], h2 * k / m)
     else:
         init_beta = np.zeros(m)
 
@@ -1061,7 +1061,7 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
     if warm_start:
         for cbf, start, k in fblocks:
             sl = slice(start, start + k)
-            curr_beta[sl] = ldpred2_inf(cbf, beta_hat[sl], n[sl], h2 * k / m)
+            curr_beta[sl] = ldpred3_inf(cbf, beta_hat[sl], n[sl], h2 * k / m)
     Rb = np.zeros(m)
     avg_beta = np.zeros(m)
     post_means = np.zeros(m)
@@ -1120,7 +1120,7 @@ def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter
     The block-diagonal counterpart of :func:`_gibbs_kernel_sample`: it estimates
     ``h2``/``p`` each sweep (global hyper-parameters, pooled across blocks) and
     stores ``curr_beta`` every ``sample_every`` post-burn-in sweeps for the
-    LDpred2-auto predictive-r2 estimator -- without ever materialising a
+    LDpred3-auto predictive-r2 estimator -- without ever materialising a
     genome-wide LD matrix. Returns ``(avg_beta, h2_path, p_path, samples)`` with
     ``samples`` an ``(n_saved, m)`` float32 array.
     """
@@ -1195,7 +1195,7 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
 
     ``corr`` may be a dense ndarray or a :class:`SparseLD`; the matching dense or
     sparse kernel is used. With ``warm_start`` the chain is initialised from the
-    LDpred2-inf solution; with ``tol`` > 0 the sampler stops early once the
+    LDpred3-inf solution; with ``tol`` > 0 the sampler stops early once the
     running estimate converges. Returns ``(avg_beta, h2_path, p_path, count)``.
     """
     beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
@@ -1217,7 +1217,7 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     # Warm start from the (cheap) infinitesimal solution, else cold start.
     if warm_start:
         init_beta = np.ascontiguousarray(
-            ldpred2_inf(corr, beta_hat, n, h2), dtype=np.float64)
+            ldpred3_inf(corr, beta_hat, n, h2), dtype=np.float64)
     else:
         init_beta = np.zeros(beta_hat.shape[0])
 
@@ -1239,7 +1239,7 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     # precision. The accumulator Rb and effects stay in float64.
     corr = np.ascontiguousarray(corr, dtype=np.float32)
 
-    # Optionally shrink off-diagonal LD to stabilise the sampler (LDpred2
+    # Optionally shrink off-diagonal LD to stabilise the sampler (LDpred3
     # exposes this; default 1.0 = no shrinkage). Copy so the caller's matrix is
     # untouched.
     if shrink_corr != 1.0:
@@ -1254,17 +1254,17 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     )
 
 
-def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
+def ldpred3_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
                  sparse=False, shrink_corr=1.0, warm_start=False, tol=0.0,
                  check_every=50, allow_jump_sign=True, prior_weights=None,
                  seed=None):
-    """LDpred2 grid model: point-normal prior, fixed hyper-parameters.
+    """LDpred3 grid model: point-normal prior, fixed hyper-parameters.
 
     The prior is spike-and-slab: with probability ``p`` a variant is causal
     with effect ``N(0, h2 / (m * p))``, otherwise its effect is exactly zero.
     Posterior-mean effects are obtained by averaging a Gibbs sampler.
 
-    In practice LDpred2-grid is run over a grid of ``(h2, p, sparse)`` values
+    In practice LDpred3-grid is run over a grid of ``(h2, p, sparse)`` values
     and the best combination is chosen with a validation set; this function
     fits a single grid point.
 
@@ -1320,7 +1320,7 @@ def ldpred2_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
 
 @dataclass
 class AutoResult:
-    """Result of :func:`ldpred2_auto`.
+    """Result of :func:`ldpred3_auto`.
 
     ``beta_est`` are the posterior-mean effects; ``h2_est`` / ``p_est`` the
     estimated heritability and causal fraction.
@@ -1338,14 +1338,14 @@ class AutoResult:
                 f"n_iter={self.n_iter}, n_variants={len(self.beta_est)})")
 
 
-def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
+def ldpred3_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
                  burn_in=200, num_iter=200, shrink_corr=1.0,
                  h2_bounds=(1e-4, 1.0), warm_start=False, tol=0.0,
                  check_every=50, allow_jump_sign=True, prior_weights=None,
                  seed=None):
-    """LDpred2-auto: fit the point-normal model and estimate ``h2`` and ``p``.
+    """LDpred3-auto: fit the point-normal model and estimate ``h2`` and ``p``.
 
-    Unlike :func:`ldpred2_grid`, no validation set is needed: the proportion of
+    Unlike :func:`ldpred3_grid`, no validation set is needed: the proportion of
     causal variants ``p`` and the SNP heritability ``h2`` are updated within the
     Gibbs sampler and their posterior means are returned alongside the effects.
 
@@ -1400,12 +1400,12 @@ def ldpred2_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
     )
 
 
-def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
+def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
                       sparsify=False, ld_threshold=1e-3, ld_max_dist=None,
                       global_hyper=True, ncores=1, **kwargs):
-    """Apply an LDpred2 model independently to a list of LD blocks.
+    """Apply an LDpred3 model independently to a list of LD blocks.
 
-    Genome-wide LDpred2 treats (approximately) independent LD blocks
+    Genome-wide LDpred3 treats (approximately) independent LD blocks
     separately. This helper stitches the per-block results back into one vector.
 
     Parameters
@@ -1441,11 +1441,11 @@ def ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto",
     n = _as_n_vector(n_eff, m)
     out = np.zeros(m)
 
-    funcs = {"inf": ldpred2_inf, "grid": ldpred2_grid, "auto": ldpred2_auto}
+    funcs = {"inf": ldpred3_inf, "grid": ldpred3_grid, "auto": ldpred3_auto}
     if method not in funcs:
         raise ValueError(f"method must be one of {sorted(funcs)}")
 
-    # LDpred2-auto with GLOBAL hyper-parameters: assemble one block-diagonal
+    # LDpred3-auto with GLOBAL hyper-parameters: assemble one block-diagonal
     # matrix and run a single auto fit, so h2 and p are estimated jointly across
     # all variants (matching bigsnpr) rather than noisily per block. Falls back
     # to per-block when global_hyper is off.

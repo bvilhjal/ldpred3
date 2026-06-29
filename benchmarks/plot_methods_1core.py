@@ -1,4 +1,4 @@
-"""Plot 1-core method comparison: pyLDpred2 vs bigsnpr, inf/grid/auto."""
+"""Plot 1-core method comparison: LDpred3 vs bigsnpr, inf/grid/auto."""
 import csv
 import matplotlib
 matplotlib.use("Agg")
@@ -21,19 +21,19 @@ def series(tool, method, col):
 fig, (ax_t, ax_m) = plt.subplots(1, 2, figsize=(12, 4.8))
 
 for method in ("inf", "grid", "auto"):
-    x, y = series("pyLDpred2", method, 0)
+    x, y = series("LDpred3", method, 0)
     ax_t.plot(x, y, "-o", color=mcolor[method], lw=2, ms=6,
-              label=f"pyLDpred2 {method}")
+              label=f"LDpred3 {method}")
     x, y = series("bigsnpr", method, 0)
     ax_t.plot(x, y, "--s", color=mcolor[method], lw=1.6, ms=5, alpha=0.8,
               label=f"bigsnpr {method}")
-ax_t.set_title("Running time, 1 core (solid = pyLDpred2, dashed = bigsnpr)")
+ax_t.set_title("Running time, 1 core (solid = LDpred3, dashed = bigsnpr)")
 ax_t.set_xlabel("Number of SNPs (millions)")
 ax_t.set_ylabel("Wall-clock time (s)")
 ax_t.grid(alpha=0.3); ax_t.legend(frameon=False, fontsize=8, ncol=3)
 
-x, y = series("pyLDpred2", "auto", 1)
-ax_m.plot(x, y, "-o", color="#1f77b4", lw=2, ms=7, label="pyLDpred2")
+x, y = series("LDpred3", "auto", 1)
+ax_m.plot(x, y, "-o", color="#1f77b4", lw=2, ms=7, label="LDpred3")
 x, y = series("bigsnpr", "auto", 1)
 ax_m.plot(x, y, "-^", color="#2ca02c", lw=2, ms=7, label="bigsnpr")
 ax_m.set_title("Peak memory (LD-dominated, ~equal across methods)")

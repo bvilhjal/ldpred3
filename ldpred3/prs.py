@@ -7,7 +7,7 @@ individual is the weighted allele count::
 
     score_i = sum_j  beta_j * g_ij
 
-LDpred2 returns weights on the **standardized** (allele-correlation) scale, so
+LDpred3 returns weights on the **standardized** (allele-correlation) scale, so
 by default this module standardizes each genotype column (``z = (g - 2f) / sd``)
 before applying the weights -- the convention under which those weights are
 defined. Missing calls (``-1``) are mean-imputed (equivalently, set to ``0``
@@ -69,7 +69,7 @@ def prs_score(dosage, beta, *, standardize=True):
     beta : array_like, shape (n_variants,)
         Per-variant weights, aligned to the dosage's counted allele.
     standardize : bool, default True
-        If True (the LDpred2 convention), z-score genotype columns before
+        If True (the LDpred3 convention), z-score genotype columns before
         weighting. If False, weight the raw mean-imputed dosages directly.
 
     Returns

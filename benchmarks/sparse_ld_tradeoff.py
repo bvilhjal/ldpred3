@@ -18,9 +18,9 @@ shows a tight band with shrink applied.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2.simulate import simulate_genotypes
-from pyldpred2.ld import compute_ld_blocks
-from pyldpred2 import ldpred2_by_blocks, sparsify_ld
+from ldpred3.simulate import simulate_genotypes
+from ldpred3.ld import compute_ld_blocks
+from ldpred3 import ldpred3_by_blocks, sparsify_ld
 
 NB, K = 8, 500             # 8 blocks of 500 -> m = 4000 (large blocks: banding helps)
 M = NB * K
@@ -70,10 +70,10 @@ n = np.full(M, float(N_GWAS))
 # path requires dense LD. Use per-block auto throughout for an apples-to-apples
 # comparison. Warm up the JIT once so the first timed config is not penalised.
 _b, _gv, _beta, _bh = build(0)
-ldpred2_by_blocks(_b, _bh, n, method="auto", global_hyper=False,
+ldpred3_by_blocks(_b, _bh, n, method="auto", global_hyper=False,
                   burn_in=10, num_iter=10, seed=0)
 _sp = [(sparsify_ld(R, threshold=1e-2), idx) for R, idx in _b]   # warm sparse kernel
-ldpred2_by_blocks(_sp, _bh, n, method="auto", global_hyper=False,
+ldpred3_by_blocks(_sp, _bh, n, method="auto", global_hyper=False,
                   burn_in=10, num_iter=10, seed=0)
 
 t0 = time.time()
@@ -95,7 +95,7 @@ for label, thr, md, shrink in CONFIGS:
             dens.append(sum(b.nnz for b, _ in sp) / float(M * K))
             fit_blocks = sp
         t = time.time()
-        be = ldpred2_by_blocks(fit_blocks, beta_hat, n, method="auto",
+        be = ldpred3_by_blocks(fit_blocks, beta_hat, n, method="auto",
                                global_hyper=False, burn_in=60, num_iter=120, seed=0)
         times.append(time.time() - t)
         r2s.append(r2(be, gv, beta))

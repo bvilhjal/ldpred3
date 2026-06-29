@@ -1,5 +1,5 @@
 """
-End-to-end LDpred2 PRS pipeline.
+End-to-end LDpred3 PRS pipeline.
 
 Ties the pieces together:
 
@@ -13,15 +13,15 @@ Ties the pieces together:
         per-block LD from a reference panel  (in-sample or external)
           |
           v
-        ldpred2_by_blocks  (inf / grid / auto)  -> adjusted weights
+        ldpred3_by_blocks  (inf / grid / auto)  -> adjusted weights
           |
           v
         prs_score  ->  one polygenic score per target individual
 
 Usage from Python::
 
-    from pipeline import run_ldpred2_prs
-    res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
+    from pipeline import run_ldpred3_prs
+    res = run_ldpred3_prs("gwas.txt.gz", "target", method="auto")
     res.scores            # per-individual PRS
     res.harmonize_log     # QC counts
 
@@ -44,11 +44,11 @@ from .harmonize import harmonize
 from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
 from .prs import prs_score, allele_frequency
 from .qc import qc_sumstats, sd_consistency_mask, dentist_outlier_mask
-from .ldpred2 import standardize_betas, ldpred2_by_blocks
-from .infer import ldpred2_auto_infer
-from .annot import ldpred2_auto_annot_blocks, read_annotations
+from .ldpred3 import standardize_betas, ldpred3_by_blocks
+from .infer import ldpred3_auto_infer
+from .annot import ldpred3_auto_annot_blocks, read_annotations
 
-__all__ = ["PRSResult", "ScoreResult", "run_ldpred2_prs", "preflight_prs",
+__all__ = ["PRSResult", "ScoreResult", "run_ldpred3_prs", "preflight_prs",
            "score_from_weights", "load_genotypes"]
 
 
@@ -66,12 +66,12 @@ def load_genotypes(path, *, sample_path=None, variant_ids=None):
 
 @dataclass
 class PRSResult:
-    """Output of :func:`run_ldpred2_prs`."""
+    """Output of :func:`run_ldpred3_prs`."""
 
     scores: np.ndarray          # (n_target,) per-individual PRS
     sample_fid: np.ndarray
     sample_iid: np.ndarray
-    beta_adjusted: np.ndarray   # (n_matched,) standardized LDpred2 weights
+    beta_adjusted: np.ndarray   # (n_matched,) standardized LDpred3 weights
     var_index: np.ndarray       # genotype columns the weights apply to
     harmonize_log: dict
     qc_log: dict = None         # sumstats + SD-consistency QC counts
@@ -87,7 +87,7 @@ class PRSResult:
         """Write the fitted weights as a reusable table.
 
         Columns: ``ID CHR POS A1 A2 WEIGHT`` where ``A1`` is the allele the
-        weight counts and ``WEIGHT`` is the standardized LDpred2 effect. Feed the
+        weight counts and ``WEIGHT`` is the standardized LDpred3 effect. Feed the
         file to :func:`score_from_weights` to score a new cohort without
         refitting.
         """
@@ -113,7 +113,7 @@ class PRSResult:
                 f"n_variants={nm}{inf})")
 
 
-def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
+def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     n_eff=None, ld_prefix=None, ld_ridge=0.0,
                     ld_cache=None, ld_out=None,
                     sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
@@ -121,8 +121,8 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
                     dentist=False, dentist_params=None,
                     annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
-                    sumstats_cols=None, **ldpred2_kwargs):
-    """Run the full sumstats -> LDpred2 -> PRS pipeline.
+                    sumstats_cols=None, **ldpred3_kwargs):
+    """Run the full sumstats -> LDpred3 -> PRS pipeline.
 
     Parameters
     ----------
@@ -131,7 +131,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     plink : str
         PLINK fileset prefix for the **target** genotypes to be scored.
     method : {"auto", "grid", "inf"}, default "auto"
-        LDpred2 model.
+        LDpred3 model.
     block_size : int, default 500
         Maximum variants per LD block.
     n_eff : float, optional
@@ -155,7 +155,7 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     qc_params : dict, optional
         Overrides for the QC thresholds (e.g. ``{"min_maf": 0.005}``).
     sd_check : bool, default True
-        After harmonisation, drop variants failing the LDpred2 SD-consistency
+        After harmonisation, drop variants failing the LDpred3 SD-consistency
         check against the reference panel (:func:`qc.sd_consistency_mask`).
     dentist : bool, default False
         After building the LD blocks, drop variants flagged by the DENTIST-style
@@ -168,8 +168,8 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
         Overrides for the DENTIST thresholds (e.g. ``{"p_cutoff": 1e-6}``).
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
-    **ldpred2_kwargs
-        Forwarded to :func:`ldpred2_by_blocks` (e.g. ``ncores``, ``num_iter``).
+    **ldpred3_kwargs
+        Forwarded to :func:`ldpred3_by_blocks` (e.g. ``ncores``, ``num_iter``).
 
     Returns
     -------
@@ -292,22 +292,22 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
             A, annot_names = read_annotations(annotations, matched_ids)
         else:
             A, annot_names = np.asarray(annotations, dtype=float), None
-        ares = ldpred2_auto_annot_blocks(blocks, beta_std, h.n_eff, A,
+        ares = ldpred3_auto_annot_blocks(blocks, beta_std, h.n_eff, A,
                                          annotation_names=annot_names,
                                          **(annot_params or {}))
         beta_adj = ares.beta_est
         enrichment = ares.enrichment
     else:
-        beta_adj = ldpred2_by_blocks(blocks, beta_std, h.n_eff, method=method,
-                                     **ldpred2_kwargs)
+        beta_adj = ldpred3_by_blocks(blocks, beta_std, h.n_eff, method=method,
+                                     **ldpred3_kwargs)
     scores = prs_score(target_dos, beta_adj, standardize=True)
 
     inference = None
     if infer:
         # Streaming (block-diagonal) inference -- no dense genome-wide LD, so no
         # size cap. (infer_max_variants is kept for backwards compatibility.)
-        res = ldpred2_auto_infer(blocks, beta_std, h.n_eff,
-                                 ncores=ldpred2_kwargs.get("ncores", 1),
+        res = ldpred3_auto_infer(blocks, beta_std, h.n_eff,
+                                 ncores=ldpred3_kwargs.get("ncores", 1),
                                  **(infer_params or {}))
         inference = {"h2_est": res.h2_est, "h2_ci": res.h2_ci,
                      "p_est": res.p_est, "p_ci": res.p_ci,
@@ -450,7 +450,7 @@ def score_from_weights(weights, plink, *, sample_path=None):
 
 def _main(argv=None):
     import argparse
-    ap = argparse.ArgumentParser(description="LDpred2 PRS pipeline")
+    ap = argparse.ArgumentParser(description="LDpred3 PRS pipeline")
     ap.add_argument("--sumstats", help="GWAS sumstats file")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--plink", help="target PLINK prefix (.bed/.bim/.fam)")
@@ -458,7 +458,7 @@ def _main(argv=None):
     ap.add_argument("--sample", default=None, help="BGEN .sample file")
     ap.add_argument("--method", default="auto",
                     choices=["auto", "grid", "inf", "annot"],
-                    help="LDpred2 model (default: auto; annot when "
+                    help="LDpred3 model (default: auto; annot when "
                          "--annotations is given)")
     ap.add_argument("--annotations", default=None,
                     help="per-SNP annotation table (for --method annot)")
@@ -542,7 +542,7 @@ def _main(argv=None):
         method = "annot"
         print("note: --annotations given, using --method annot")
 
-    res = run_ldpred2_prs(
+    res = run_ldpred3_prs(
         args.sumstats, target, method=method,
         block_size=args.block_size, n_eff=args.n_eff, sample_path=args.sample,
         ld_prefix=args.ld_prefix, ld_ridge=args.ld_ridge, ncores=args.ncores,

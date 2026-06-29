@@ -1,7 +1,7 @@
 """
-Genotype-level simulation harness to benchmark the LDpred2 implementation.
+Genotype-level simulation harness to benchmark the LDpred3 implementation.
 
-The summary-statistic test (``tests/test_ldpred2.py``) feeds LDpred2 effects
+The summary-statistic test (``tests/test_ldpred3.py``) feeds LDpred3 effects
 drawn directly from its own model. This script is a tougher, more realistic
 end-to-end check:
 
@@ -10,7 +10,7 @@ end-to-end check:
    ``p`` (fraction of causal variants),
 3. run a marginal GWAS on the training sample,
 4. estimate the LD matrix per block from the training genotypes,
-5. fit LDpred2-inf / -grid / -auto,
+5. fit LDpred3-inf / -grid / -auto,
 6. build polygenic scores on the held-out test sample and report prediction
    accuracy (R^2 with the phenotype).
 
@@ -38,7 +38,7 @@ import time
 
 import numpy as np
 
-from .ldpred2 import HAVE_NUMBA, ldpred2_by_blocks, standardize_betas
+from .ldpred3 import HAVE_NUMBA, ldpred3_by_blocks, standardize_betas
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +203,7 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
 
     If ``return_timing`` is True, return ``(results, timing)`` where ``timing``
     splits ``prep_s`` (genotype sim + GWAS + LD construction, which scale with
-    N) from ``fit_s`` (the LDpred2 algorithm per method, which does not).
+    N) from ``fit_s`` (the LDpred3 algorithm per method, which does not).
     """
     t_start = time.time()
     rng = np.random.default_rng(seed)
@@ -275,24 +275,24 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
     n_vec = np.full(m, float(n_train))
     t_prep = time.time() - t_start   # sim + GWAS + LD build (scales with N)
 
-    # Fit each method (full adjusted-beta vector). Time the LDpred2 algorithm
+    # Fit each method (full adjusted-beta vector). Time the LDpred3 algorithm
     # itself (it operates on sumstats + LD only, independent of N) separately
     # from the data-prep / GWAS / LD-construction above (which do depend on N).
     fit_time = {}
     adj = {"marginal": beta_std}
     if "inf" in methods:
         t = time.time()
-        adj["inf"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="inf", h2=h2)
+        adj["inf"] = ldpred3_by_blocks(ld, beta_std, n_vec, method="inf", h2=h2)
         fit_time["inf"] = time.time() - t
     if "grid" in methods:
         t = time.time()
-        adj["grid"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="grid",
+        adj["grid"] = ldpred3_by_blocks(ld, beta_std, n_vec, method="grid",
                                         h2=h2, p=p, burn_in=burn_in,
                                         num_iter=num_iter, seed=seed)
         fit_time["grid"] = time.time() - t
     if "auto" in methods:
         t = time.time()
-        adj["auto"] = ldpred2_by_blocks(ld, beta_std, n_vec, method="auto",
+        adj["auto"] = ldpred3_by_blocks(ld, beta_std, n_vec, method="auto",
                                         burn_in=burn_in, num_iter=num_iter,
                                         seed=seed)
         fit_time["auto"] = time.time() - t
@@ -343,7 +343,7 @@ def run_grid(args):
 
     methods = ["marginal", "inf", "grid", "auto", "ceiling(h2)"]
     header = f"{'N':>7} {'h2':>5} {'p':>7} | " + " ".join(f"{x:>11}" for x in methods)
-    print(f"Genotype-level LDpred2 benchmark  (m={m} SNPs, blocks of "
+    print(f"Genotype-level LDpred3 benchmark  (m={m} SNPs, blocks of "
           f"{block_size}, LD={args.ld_model})")
     print(header)
     print("-" * len(header))
@@ -368,7 +368,7 @@ def run_scaling(args):
     h2, p = args.h2, args.p
     methods = ["marginal", "inf", "grid", "auto", "ceiling(h2)"]
 
-    print(f"LDpred2 #SNP-scaling benchmark  (numba={'on' if HAVE_NUMBA else 'off'}, "
+    print(f"LDpred3 #SNP-scaling benchmark  (numba={'on' if HAVE_NUMBA else 'off'}, "
           f"N_train={args.n_train}, blocks of {args.block_size}, h2={h2}, p={p})")
     head = (f"{'#SNPs':>8} {'prep(s)':>8} {'fit(s)':>7} {'mem(GB)':>8} | "
             + " ".join(f"{x:>11}" for x in methods))
@@ -395,7 +395,7 @@ def run_scaling(args):
 def run_ld_scaling(args):
     """Scale the LD block size at fixed total #SNPs.
 
-    This isolates the axis the LDpred2 algorithm actually depends on. Larger LD
+    This isolates the axis the LDpred3 algorithm actually depends on. Larger LD
     blocks make each block's sampler/solve more expensive: the Gibbs samplers
     (grid/auto) grow ~linearly in block size for fixed m (the rank-1 updates
     cost grows with block size), while the infinitesimal solve is a dense linear
@@ -406,7 +406,7 @@ def run_ld_scaling(args):
     h2, p = args.h2, args.p
     _warmup()
 
-    print(f"LDpred2 LD-block-size scaling  (numba={'on' if HAVE_NUMBA else 'off'}, "
+    print(f"LDpred3 LD-block-size scaling  (numba={'on' if HAVE_NUMBA else 'off'}, "
           f"m={m} SNPs fixed, N_train={args.n_train}, h2={h2}, p={p})")
     head = (f"{'block':>6} {'#blocks':>8} {'prep(s)':>8} | "
             f"{'fit_inf':>9} {'fit_grid':>9} {'fit_auto':>9} | "
@@ -439,7 +439,7 @@ def run_ld_scaling(args):
 def run_n_independence(args):
     """Vary the GWAS sample size at fixed LD; the fit time should be flat.
 
-    Demonstrates that the LDpred2 algorithm cost is independent of N: only the
+    Demonstrates that the LDpred3 algorithm cost is independent of N: only the
     data-prep / GWAS / LD-construction time grows with N, while the sampler time
     (which sees only sumstats + LD) stays roughly constant.
     """
@@ -448,7 +448,7 @@ def run_n_independence(args):
     h2, p = args.h2, args.p
     _warmup()
 
-    print(f"LDpred2 N-independence check  (numba={'on' if HAVE_NUMBA else 'off'}, "
+    print(f"LDpred3 N-independence check  (numba={'on' if HAVE_NUMBA else 'off'}, "
           f"m={m} SNPs, blocks of {args.block_size}, h2={h2}, p={p})")
     head = (f"{'N_train':>8} {'prep(s)':>8} | {'fit_grid(s)':>11} "
             f"{'fit_auto(s)':>11} | {'R2_grid':>8}")

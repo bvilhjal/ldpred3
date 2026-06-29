@@ -13,7 +13,7 @@ hyper-parameters (h2, effective p) of:
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_by_blocks, ldpred2_auto_annot_blocks, ldpred2_auto
+from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks, ldpred3_auto
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)
@@ -95,12 +95,12 @@ for model in MODELS:
         bhat = sumstats(beta, rng)
 
         # auto baseline
-        be = ldpred2_by_blocks(blocks, bhat, n, method="auto",
+        be = ldpred3_by_blocks(blocks, bhat, n, method="auto",
                                burn_in=80, num_iter=200, seed=1)
         acc.setdefault("auto", []).append((genetic_r2(be, beta), np.nan, np.nan, None))
 
         def run_annot(tag, A, **kw):
-            r = ldpred2_auto_annot_blocks(blocks, bhat, n, A, seed=1, **kw)
+            r = ldpred3_auto_annot_blocks(blocks, bhat, n, A, seed=1, **kw)
             acc.setdefault(tag, []).append(
                 (genetic_r2(r.beta_est, beta), r.h2_est, eff_p(A, r.theta),
                  np.round(r.theta, 2)))

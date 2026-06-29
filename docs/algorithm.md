@@ -2,7 +2,7 @@
 
 ## Global hyper-parameters for `-auto`
 
-`ldpred2_by_blocks(method="auto")` estimates `h2` and `p` **globally** by default
+`ldpred3_by_blocks(method="auto")` estimates `h2` and `p` **globally** by default
 (`global_hyper=True`): the sampler **streams the LD blocks one at a time** (a
 jitted per-block sweep), pooling the causal count and genetic variance across all
 variants each iteration (as in bigsnpr). Estimating them per block instead
@@ -54,12 +54,12 @@ paper.
 Real LD is banded — most off-diagonal entries are ~0 — so the LD can be stored
 sparse (CSR) and the sampler/solver need only touch non-zero neighbours
 (O(bandwidth) instead of O(block_size)). Build a `SparseLD` with `sparsify_ld`
-and pass it to any model (or `ldpred2_by_blocks(..., sparsify=True)`):
+and pass it to any model (or `ldpred3_by_blocks(..., sparsify=True)`):
 
 ```python
-from pyldpred2 import sparsify_ld, ldpred2_inf, ldpred2_auto
+from ldpred3 import sparsify_ld, ldpred3_inf, ldpred3_auto
 ld = sparsify_ld(corr, threshold=1e-3)        # drop |r| < 1e-3 (and/or max_dist=…)
-beta = ldpred2_inf(ld, beta_hat, n_eff, h2)   # sparse CG solve; samplers also accept ld
+beta = ldpred3_inf(ld, beta_hat, n_eff, h2)   # sparse CG solve; samplers also accept ld
 ```
 
 On a clean population AR(1) block (m=4000, 0.47 % density) this gives, with
@@ -83,9 +83,9 @@ Two important caveats:
 
 ## Fewer iterations: warm start & adaptive stopping
 
-`ldpred2_grid`/`ldpred2_auto` accept:
+`ldpred3_grid`/`ldpred3_auto` accept:
 
-* `warm_start=True` — initialise the chain from the LDpred2-inf solution instead
+* `warm_start=True` — initialise the chain from the LDpred3-inf solution instead
   of zeros, shortening burn-in. It pays for one `inf` solve up front, so it only
   helps when burn-in/mixing dominates **and** inf is cheap — i.e. paired with the
   sparse LD backend (CG inf). With a *dense* O(m³) inf solve it can cost more
@@ -99,7 +99,7 @@ Two important caveats:
 
 ## Per-variant priors (annotation-informed, SBayesRC-style)
 
-`ldpred2_grid` / `ldpred2_auto` accept `prior_weights` — a per-SNP relative
+`ldpred3_grid` / `ldpred3_auto` accept `prior_weights` — a per-SNP relative
 causal propensity from functional annotations. Each SNP's causal probability
 becomes `p_j = p · prior_weights[j]` (clamped to `(0,1)`); with mean-1 weights
 the expected causal count and `h²` stay coherent. SNPs in functionally
@@ -107,7 +107,7 @@ important regions (coding, conserved, enhancers, …) thus get a higher prior of
 being causal — the core idea of SBayesRC.
 
 ```python
-ldpred2_grid(corr, beta_hat, n_eff, h2, p, prior_weights=w)   # w_j >= 0, mean ~1
+ldpred3_grid(corr, beta_hat, n_eff, h2, p, prior_weights=w)   # w_j >= 0, mean ~1
 ```
 
 This injects **new information**, so unlike a change of slab shape it can
@@ -128,7 +128,7 @@ hurt in simulations where effect size was annotation-independent).
 
 ### Learning the annotation map (SBayesRC)
 
-`ldpred2_auto_annot` learns the annotation→prior map *inside* the sampler, so
+`ldpred3_auto_annot` learns the annotation→prior map *inside* the sampler, so
 the weights need not be supplied: each SNP's causal probability is
 `p_j = sigmoid(a_jᵀθ)` and `θ` is updated jointly with the effects. Two
 strategies (`learn=`):
@@ -140,8 +140,8 @@ strategies (`learn=`):
   Gaussian draw of `θ`.
 
 ```python
-from pyldpred2 import ldpred2_auto_annot
-res = ldpred2_auto_annot(corr, beta_hat, n_eff, annotations=A, learn="eb")
+from ldpred3 import ldpred3_auto_annot
+res = ldpred3_auto_annot(corr, beta_hat, n_eff, annotations=A, learn="eb")
 res.beta_est, res.theta      # effects + learned enrichment coefficients
 ```
 
@@ -173,14 +173,14 @@ Two further options complete the SBayesRC picture:
   map `σ²_j ∝ exp(a_jᵀφ)` (returned in `.phi` / `.variance_enrichment`). Being
   learned, `φ` collapses to ~0 when effect size is annotation-independent (no
   harm) and turns positive when functional SNPs carry larger effects.
-* **`ldpred2_auto_annot_blocks`** is the genome-wide streaming version: the maps
+* **`ldpred3_auto_annot_blocks`** is the genome-wide streaming version: the maps
   are global but the effect sweeps run one LD block at a time, so the
   genome-wide LD is never materialised (it matches the dense version on
   block-diagonal LD). This is what the pipeline's `--method annot` uses.
 
-## Bivariate (two-trait) LDpred2
+## Bivariate (two-trait) LDpred3
 
-`ldpred2_auto_bivariate` jointly fits **two traits that share one LD reference**.
+`ldpred3_auto_bivariate` jointly fits **two traits that share one LD reference**.
 Each variant takes one of **four** states — causal for neither trait, trait 1
 only, trait 2 only, or **both** — with probabilities `(π₀₀, π₁₀, π₀₁, π₁₁)`. A
 trait-1-causal effect is `N(0, s₁)`, a trait-2-causal one `N(0, s₂)`, and a
@@ -191,8 +191,8 @@ residual estimate, samples a state, and draws the effects; `π` and `s₁₂` ar
 re-estimated each sweep, and `r_g = β₁ᵀRβ₂ / √(h²₁h²₂)` is reported.
 
 ```python
-from pyldpred2 import ldpred2_auto_bivariate
-res = ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
+from ldpred3 import ldpred3_auto_bivariate
+res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
 res.beta1_est, res.beta2_est      # adjusted effects for the two traits
 res.h2, res.rg                    # (h2_1, h2_2) and the genetic correlation
 ```
@@ -228,31 +228,31 @@ under-powered trait 2 is: at N=1000 the rg=0.9 gain reaches ~+0.28, while for an
 already well-powered trait 2 there is little to borrow and a small overhead, so
 use the joint fit to boost an under-powered trait. (An earlier "fit with the true
 LD" benchmark overstated the gains — they shrink markedly under realistic
-reference-panel LD.) `ldpred2_auto_bivariate_blocks` is the streaming genome-wide
+reference-panel LD.) `ldpred3_auto_bivariate_blocks` is the streaming genome-wide
 version; both GWAS must use the same LD/ancestry, and sample overlap is handled
 via `cross_corr` (default 0). Regenerate with `benchmarks/bivariate_demo.py`.
 
 **Genetic correlation vs bivariate LDSC.** The reported `r_g` has an independent
 cross-check in `ldsc_rg` (cross-trait LD Score regression). Under the same
 realistic reference-panel LD both are roughly unbiased from the same summary
-statistics; bivariate LDpred2 is ~2× more precise (it uses the full LD
+statistics; bivariate LDpred3 is ~2× more precise (it uses the full LD
 likelihood):
 
-| true r_g | bivariate LDSC | bivariate LDpred2 |
+| true r_g | bivariate LDSC | bivariate LDpred3 |
 |---------:|---------------:|------------------:|
 | 0.0 | −0.04 ± 0.24 | −0.01 ± 0.15 |
 | 0.3 | 0.29 ± 0.18 | 0.30 ± 0.16 |
 | 0.6 | 0.59 ± 0.15 | 0.60 ± 0.13 |
 | 0.9 | 0.86 ± 0.07 | 0.90 ± 0.04 |
 
-(With the *true* LD the SEs are several-fold smaller and LDpred2's precision edge
+(With the *true* LD the SEs are several-fold smaller and LDpred3's precision edge
 larger; the reference-panel mismatch is what makes both noisier and narrows the
 gap — the realistic picture.) Regenerate with
 `benchmarks/compare_bivariate_rg.py`.
 
 ## Robustness: `allow_jump_sign`
 
-`ldpred2_grid` / `ldpred2_auto` / `ldpred2_auto_infer` accept
+`ldpred3_grid` / `ldpred3_auto` / `ldpred3_auto_infer` accept
 `allow_jump_sign` (default `True`). Setting it `False` forbids a variant's
 effect from flipping sign within a single Gibbs step (a sampled effect of the
 opposite sign to the current one is set to zero instead). On noisy or

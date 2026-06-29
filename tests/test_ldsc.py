@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pyldpred2 import ld_scores, ldsc_h2, ldsc_rg
+from ldpred3 import ld_scores, ldsc_h2, ldsc_rg
 
 
 def _ar1(k, rho):

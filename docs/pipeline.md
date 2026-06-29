@@ -1,6 +1,6 @@
 # End-to-end PRS pipeline
 
-`pyldpred2/pipeline.py` runs the whole workflow from GWAS summary statistics and
+`ldpred3/pipeline.py` runs the whole workflow from GWAS summary statistics and
 genotype files to one polygenic score per individual — no R, NumPy-only:
 
 ```
@@ -10,7 +10,7 @@ GWAS sumstats + genotypes (PLINK/BGEN)
   → SD-consistency QC vs the reference panel
   → per-block LD from a reference panel (in-sample or external)
   → [optional] DENTIST LD-consistency outlier removal (--dentist)
-  → ldpred2 (inf / grid / auto / annot)
+  → ldpred3 (inf / grid / auto / annot)
   → per-individual PRS
 ```
 
@@ -20,7 +20,7 @@ Pass a per-SNP annotation table to learn an SBayesRC-style functional prior
 genome-wide and report the enrichment:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method annot \
+ldpred3 --sumstats gwas.txt.gz --plink target --method annot \
     --annotations annot.tsv --out prs.txt
 # ... annotation enrichment: coding=+1.20, conserved=+0.80, ...
 ```
@@ -34,15 +34,15 @@ a streaming genome-wide learner, so it never materialises the genome-wide LD.
 From the command line:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
-pyldpred2-prs --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
 ```
 
 or from Python:
 
 ```python
-from pyldpred2 import run_ldpred2_prs
-res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
+from ldpred3 import run_ldpred3_prs
+res = run_ldpred3_prs("gwas.txt.gz", "target", method="auto")
 res.scores          # per-individual PRS
 res.harmonize_log   # matched / flipped / ambiguous / mismatched counts
 res.qc_log          # per-filter QC counts
@@ -65,7 +65,7 @@ When `--annotations` is given the method defaults to `annot`.
 
 ### CLI reference
 
-Every `pyldpred2-prs` flag (run `pyldpred2-prs --help` for the canonical list):
+Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 
 | Flag | Default | What it does |
 |------|---------|--------------|
@@ -74,7 +74,7 @@ Every `pyldpred2-prs` flag (run `pyldpred2-prs --help` for the canonical list):
 | `--bgen FILE` | — | Target genotypes as BGEN v1.2 (alternative to `--plink`). |
 | `--sample FILE` | none | BGEN `.sample` file (sample IDs for `--bgen`). |
 | `--out FILE` | — | Output scores file (required for a run; see [Outputs](#outputs)). |
-| `--method {auto,grid,inf,annot}` | `auto` | LDpred2 model; see [Choosing a model](../README.md#choosing-a-model). |
+| `--method {auto,grid,inf,annot}` | `auto` | LDpred3 model; see [Choosing a model](../README.md#choosing-a-model). |
 | `--annotations FILE` | none | Per-SNP annotation table; switches `--method` to `annot`. |
 | `--block-size N` | `500` | Maximum variants per LD block. |
 | `--n-eff FLOAT` | none | Effective sample size, used when the sumstats have no `N` column. |
@@ -152,7 +152,7 @@ The reader (`sumstats.read_sumstats`) auto-detects columns from a tab-, comma- o
 whitespace-delimited file (optionally `.gz`), matching a large set of
 case-insensitive aliases onto a canonical schema. From Python you can override
 any column explicitly with `sumstats_cols={...}` (e.g.
-`run_ldpred2_prs(..., sumstats_cols={"beta": "EFFECT"})`).
+`run_ldpred3_prs(..., sumstats_cols={"beta": "EFFECT"})`).
 
 | Field | Required? | Recognised aliases (case-insensitive) |
 |-------|-----------|---------------------------------------|

@@ -1,4 +1,4 @@
-"""Running time of LDpred2-auto inference: dense vs streaming, as m grows.
+"""Running time of LDpred3-auto inference: dense vs streaming, as m grows.
 
 The dense path assembles an m x m LD matrix (O(m^2) per sweep); the streaming
 path runs one LD block at a time (O(m * block_size)). This times both on the
@@ -8,7 +8,7 @@ Needs ``ld_library.npz`` in the cwd. Single core recommended.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_auto_infer
+from ldpred3 import ldpred3_auto_infer
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K = 500
@@ -51,10 +51,10 @@ bh = sumstats(pop, chol, idxs, 1000, np.random.default_rng(0))
 dense0 = np.zeros((1000, 1000), np.float32)
 for R, ix in ref:
     dense0[np.ix_(ix, ix)] = R
-ldpred2_auto_infer(dense0, bh, N, n_chains=2, burn_in=20, num_iter=20, seed=0)
-ldpred2_auto_infer(ref, bh, N, n_chains=2, burn_in=20, num_iter=20, seed=0)
+ldpred3_auto_infer(dense0, bh, N, n_chains=2, burn_in=20, num_iter=20, seed=0)
+ldpred3_auto_infer(ref, bh, N, n_chains=2, burn_in=20, num_iter=20, seed=0)
 
-print(f"LDpred2-auto inference time (s), single core, {NCHAINS} chains, "
+print(f"LDpred3-auto inference time (s), single core, {NCHAINS} chains, "
       f"burn {BURN}/iter {ITER}, blocks of {K}\n")
 print(f"{'m':>7} | {'dense (s)':>10} | {'stream (s)':>11} | {'speedup':>7} | "
       f"{'stream h2':>9}")
@@ -69,13 +69,13 @@ for m in M_LIST:
     for R, ix in ref:
         dense[np.ix_(ix, ix)] = R
     t = time.perf_counter()
-    rd = ldpred2_auto_infer(dense, bh, N, n_chains=NCHAINS, burn_in=BURN,
+    rd = ldpred3_auto_infer(dense, bh, N, n_chains=NCHAINS, burn_in=BURN,
                             num_iter=ITER, seed=1)
     t_dense = time.perf_counter() - t
     del dense
 
     t = time.perf_counter()
-    rs = ldpred2_auto_infer(ref, bh, N, n_chains=NCHAINS, burn_in=BURN,
+    rs = ldpred3_auto_infer(ref, bh, N, n_chains=NCHAINS, burn_in=BURN,
                             num_iter=ITER, seed=1)
     t_stream = time.perf_counter() - t
     print(f"{m:>7} | {t_dense:>10.2f} | {t_stream:>11.2f} | "

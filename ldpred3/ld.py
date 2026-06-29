@@ -1,7 +1,7 @@
 """
 Build LD (linkage-disequilibrium) correlation blocks from a genotype panel.
 
-LDpred2 operates on per-block SNP correlation matrices. This module estimates
+LDpred3 operates on per-block SNP correlation matrices. This module estimates
 those from a reference panel of genotypes -- in-sample (the target cohort) for a
 quick analysis, or an external panel passed separately. Variants are split into
 contiguous blocks, never spanning a chromosome boundary, and within each block
@@ -9,7 +9,7 @@ the correlation is computed from standardized (mean-imputed, z-scored) dosages.
 
 The returned ``blocks`` -- a list of ``(R, idx)`` pairs, ``R`` a ``float32``
 correlation matrix and ``idx`` the column indices it covers -- plug directly
-into :func:`ldpred2.ldpred2_by_blocks`.
+into :func:`ldpred3.ldpred3_by_blocks`.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def load_ld_blocks(path):
 
     Returns ``(blocks, variant_ids)`` with ``blocks`` a ``[(R, idx), ...]`` list
     (contiguous ``idx`` reconstructed from the stored block sizes) ready for
-    :func:`ldpred2.ldpred2_by_blocks`, and ``variant_ids`` the column-order IDs
+    :func:`ldpred3.ldpred3_by_blocks`, and ``variant_ids`` the column-order IDs
     the caller should align its summary statistics to.
     """
     with np.load(path, allow_pickle=False) as z:
@@ -91,7 +91,7 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0):
     Returns
     -------
     blocks : list of (ndarray float32, ndarray int)
-        ``(R, idx)`` per block, ready for ``ldpred2_by_blocks``.
+        ``(R, idx)`` per block, ready for ``ldpred3_by_blocks``.
     """
     dosage = np.asarray(dosage)
     n_variants = dosage.shape[1]

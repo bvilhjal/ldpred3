@@ -23,7 +23,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py
 **LD library.** Most scripts simulate from a cached coalescent LD library,
 `ld_library.npz` (100 blocks × 500×500 correlation matrices, ~200 MB, **not
 committed**), expected in the working directory. Generate it once with msprime
-(see `pyldpred2/simulate.py --ld-model coalescent`) or substitute your own
+(see `ldpred3/simulate.py --ld-model coalescent`) or substitute your own
 `{"R": array of shape (n_blocks, k, k)}`. The "self-contained" scripts below need
 no external data.
 
@@ -42,7 +42,7 @@ no external data.
 |--------|------------------|:---:|
 | `timing_bench.py` | Per-method fit time at m=50k; `annot` cost vs #annotations and `theta_every` | ✓ |
 | `bench_bigsnpr_blocks.R` | bigsnpr (R reference) side of the time/memory/accuracy comparison | — |
-| `plot_methods_1core.py` | Plots the 1-core pyLDpred2-vs-bigsnpr comparison (→ `cores_1core_benchmark.png`) | self-contained (reads CSV) |
+| `plot_methods_1core.py` | Plots the 1-core LDpred3-vs-bigsnpr comparison (→ `cores_1core_benchmark.png`) | self-contained (reads CSV) |
 | `plot_methods_arch.py` | Renders the methods-by-architecture figure from the CSV | self-contained (reads CSV) |
 
 ## Features: QC, LD representation & performance
@@ -52,7 +52,7 @@ panel internally, so they run anywhere.
 
 | Script | What it measures |
 |--------|------------------|
-| `infer_recovery.py` | LDpred2-auto-infer: h² and polygenicity recovery vs truth, CI width and empirical 95% coverage (no validation cohort) |
+| `infer_recovery.py` | LDpred3-auto-infer: h² and polygenicity recovery vs truth, CI width and empirical 95% coverage (no validation cohort) |
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
 | `sparse_ld_tradeoff.py` | Sparse / banded LD: storage (density) and fit time vs accuracy across thresholding / banding settings |
 | `block_splitting.py` | `optimal_ld_blocks` vs fixed-size blocks: discarded between-block LD², per-block storage and accuracy |
@@ -63,8 +63,8 @@ panel internally, so they run anywhere.
 
 | Script | What it measures | Needs LD lib |
 |--------|------------------|:---:|
-| `compare_ldsc_infer.py` | Heritability: LDSC vs LDpred2-auto-infer vs truth (reference-panel LD) | ✓ |
-| `compare_bivariate_rg.py` | Genetic correlation: bivariate LDSC vs bivariate LDpred2 vs truth | ✓ |
+| `compare_ldsc_infer.py` | Heritability: LDSC vs LDpred3-auto-infer vs truth (reference-panel LD) | ✓ |
+| `compare_bivariate_rg.py` | Genetic correlation: bivariate LDSC vs bivariate LDpred3 vs truth | ✓ |
 | `inference_benchmark.py` | Accuracy **and** running time for all inference estimators (incl. a marginal no-LD baseline) | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures | ✓ |
 | `calibration.py` | 95% interval coverage for the inference methods (clean vs reference-panel LD) | ✓ |

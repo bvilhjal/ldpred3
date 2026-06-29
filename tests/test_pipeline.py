@@ -6,9 +6,9 @@ import sys
 import numpy as np
 
 
-from pyldpred2.genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
-from pyldpred2.bgen_io import write_bgen                                   # noqa: E402
-from pyldpred2.pipeline import run_ldpred2_prs                             # noqa: E402
+from ldpred3.genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
+from ldpred3.bgen_io import write_bgen                                   # noqa: E402
+from ldpred3.pipeline import run_ldpred3_prs                             # noqa: E402
 
 
 def _simulate(tmp_path, n_train=4000, n_target=1500, m=600, p_causal=0.1,
@@ -77,7 +77,7 @@ def _simulate(tmp_path, n_train=4000, n_target=1500, m=600, p_causal=0.1,
 
 def test_end_to_end_prs_predicts_genetic_value(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, seed=1)
-    res = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
                           num_iter=150, burn_in=50, seed=1)
 
     assert res.scores.shape[0] == len(g_te)
@@ -88,7 +88,7 @@ def test_end_to_end_prs_predicts_genetic_value(tmp_path):
 
 def test_end_to_end_prs_via_bgen(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, seed=1)
-    res = run_ldpred2_prs(ss_path, str(tmp_path / "target.bgen"), method="auto",
+    res = run_ldpred3_prs(ss_path, str(tmp_path / "target.bgen"), method="auto",
                           block_size=200, num_iter=150, burn_in=50, seed=1)
     assert res.scores.shape[0] == len(g_te)
     r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
@@ -97,14 +97,14 @@ def test_end_to_end_prs_via_bgen(tmp_path):
 
 def test_end_to_end_inf_runs(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=2)
-    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200)
     r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
     assert r2 > 0.10
 
 
 def test_pipeline_infer_reports_h2_p_r2(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=4)
-    res = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
                           num_iter=120, burn_in=60, seed=1,
                           infer=True, infer_params={"n_chains": 6,
                                                     "burn_in": 100,
@@ -120,7 +120,7 @@ def test_pipeline_infer_streams_past_old_cap(tmp_path):
     # Inference now streams block-diagonal LD, so it runs even when the number of
     # variants exceeds the old dense-assembly cap (no size-guard error).
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=5)
-    res = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
                           num_iter=120, burn_in=60, seed=1, infer=True,
                           infer_max_variants=100,          # below m=400; ignored now
                           infer_params={"n_chains": 6, "burn_in": 80,
@@ -133,7 +133,7 @@ def test_pipeline_dentist_runs_and_keeps_signal(tmp_path):
     # The DENTIST filter runs end-to-end, logs its counts, and (on clean
     # simulated data) leaves the PRS predictive.
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=8)
-    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200,
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200,
                           dentist=True)
     assert "dentist" in res.qc_log
     assert res.qc_log["dentist"]["n_kept"] <= res.qc_log["dentist"]["n_input"]
@@ -169,7 +169,7 @@ def test_pipeline_method_annot(tmp_path):
         for i in range(m):
             fh.write(f"rs{i}\t{func[i]}\n")
 
-    res = run_ldpred2_prs(ss, prefix, method="annot", annotations=ann,
+    res = run_ldpred3_prs(ss, prefix, method="annot", annotations=ann,
                           block_size=100,
                           annot_params=dict(burn_in=60, num_iter=150, seed=1))
     assert res.enrichment is not None
@@ -178,7 +178,7 @@ def test_pipeline_method_annot(tmp_path):
 
     # method="annot" without annotations is an error.
     try:
-        run_ldpred2_prs(ss, prefix, method="annot", block_size=100)
+        run_ldpred3_prs(ss, prefix, method="annot", block_size=100)
     except ValueError as e:
         assert "annotations" in str(e)
     else:
@@ -187,15 +187,15 @@ def test_pipeline_method_annot(tmp_path):
 
 def test_prsresult_repr_is_compact(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, m=300, seed=8)
-    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150)
     r = repr(res)
     assert r.startswith("PRSResult(") and "n_samples=" in r
     assert "\n" not in r and len(r) < 200          # no array dump
     # Reading only the GWAS variants must give the same PRS as a full read.
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=7)
-    full = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,
+    full = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150,
                            subset_to_sumstats=False)
-    sub = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150,
+    sub = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150,
                           subset_to_sumstats=True)
     np.testing.assert_allclose(full.scores, sub.scores, rtol=1e-6, atol=1e-6)
 
@@ -203,7 +203,7 @@ def test_prsresult_repr_is_compact(tmp_path):
 def test_allele_flip_is_corrected(tmp_path):
     """Swapping A1/A2 in the sumstats must not change the PRS (sign realigned)."""
     prefix, ss_path, g_te = _simulate(tmp_path, m=300, seed=3)
-    res0 = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150)
+    res0 = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150)
 
     flipped = str(tmp_path / "gwas_flip.txt")
     with open(ss_path) as fin, open(flipped, "w") as fout:
@@ -211,6 +211,6 @@ def test_allele_flip_is_corrected(tmp_path):
         for line in fin:
             snp, a1, a2, beta, se, n = line.split()
             fout.write(f"{snp}\t{a2}\t{a1}\t{-float(beta):.6g}\t{se}\t{n}\n")
-    res1 = run_ldpred2_prs(flipped, prefix, method="inf", block_size=150)
+    res1 = run_ldpred3_prs(flipped, prefix, method="inf", block_size=150)
 
     np.testing.assert_allclose(res0.scores, res1.scores, rtol=1e-6, atol=1e-6)

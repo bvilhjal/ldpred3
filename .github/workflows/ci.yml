@@ -43,5 +43,5 @@ jobs:
         if: matrix.numba == 'no-numba'
         # The heavy multi-chain inference / end-to-end pipeline tests are slow
         # without the JIT and are fully covered by the with-numba job; the
-        # pure-Python sampler itself is still exercised by test_ldpred2.
+        # pure-Python sampler itself is still exercised by test_ldpred3.
         run: pytest -q --ignore=tests/test_infer.py --ignore=tests/test_pipeline.py

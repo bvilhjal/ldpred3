@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from pyldpred2.pipeline import (run_ldpred2_prs, preflight_prs,
+from ldpred3.pipeline import (run_ldpred3_prs, preflight_prs,
                                 score_from_weights)
 
 from test_pipeline import _simulate
@@ -29,7 +29,7 @@ def test_preflight_flags_missing_columns(tmp_path):
 
 def test_weights_roundtrip_reproduces_scores(tmp_path):
     prefix, ss_path, _ = _simulate(tmp_path, m=400, seed=2)
-    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200)
     wpath = str(tmp_path / "prs.weights.txt")
     res.write_weights(wpath)
 
@@ -42,14 +42,14 @@ def test_weights_roundtrip_reproduces_scores(tmp_path):
 def test_weights_scoring_handles_allele_flips(tmp_path):
     """Weights should still apply after the target swaps A1/A2."""
     prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=3)
-    res = run_ldpred2_prs(ss_path, prefix, method="inf", block_size=150)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150)
     wpath = str(tmp_path / "w.txt")
     res.write_weights(wpath)
     base = score_from_weights(wpath, prefix)
 
     # Build a target whose alleles are swapped relative to the weights and whose
     # dosage is therefore 2-g; the harmonised score should match the original.
-    from pyldpred2.genotype_io import read_plink, write_plink, VariantTable
+    from ldpred3.genotype_io import read_plink, write_plink, VariantTable
     g = read_plink(prefix)
     V = g.variants
     swapped = VariantTable(chrom=V.chrom, id=V.id, cm=V.cm, pos=V.pos,
@@ -66,9 +66,9 @@ def test_weights_scoring_handles_allele_flips(tmp_path):
 def test_ld_cache_reproduces_fresh_run(tmp_path):
     prefix, ss_path, _ = _simulate(tmp_path, m=400, seed=4)
     cache = str(tmp_path / "ld.npz")
-    fresh = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+    fresh = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
                             ld_out=cache, seed=1)
-    cached = run_ldpred2_prs(ss_path, prefix, method="auto", block_size=200,
+    cached = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
                              ld_cache=cache, seed=1)
     # same variants, same weights, same scores from the reloaded LD
     assert np.array_equal(fresh.variant_id, cached.variant_id)
@@ -80,12 +80,12 @@ def test_ld_cache_rejects_changed_variant_set(tmp_path):
     import pytest
     prefix, ss_path, _ = _simulate(tmp_path, m=400, seed=5)
     cache = str(tmp_path / "ld.npz")
-    run_ldpred2_prs(ss_path, prefix, method="inf", block_size=200, ld_out=cache)
+    run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200, ld_out=cache)
     # Truncate the sumstats so the harmonised set lacks the cached variants:
     # the cache no longer applies and should raise a clear error.
     lines = open(ss_path).read().splitlines()
     small = str(tmp_path / "small.txt")
     open(small, "w").write("\n".join(lines[:50]) + "\n")
     with pytest.raises(ValueError, match="cache"):
-        run_ldpred2_prs(small, prefix, method="inf", block_size=200,
+        run_ldpred3_prs(small, prefix, method="inf", block_size=200,
                         ld_cache=cache)

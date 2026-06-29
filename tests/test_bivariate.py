@@ -1,8 +1,8 @@
-"""Bivariate LDpred2-auto: rg / h2 recovery and cross-trait borrowing."""
+"""Bivariate LDpred3-auto: rg / h2 recovery and cross-trait borrowing."""
 
 import numpy as np
 
-from pyldpred2 import ldpred2_auto_bivariate_blocks, ldpred2_by_blocks
+from ldpred3 import ldpred3_auto_bivariate_blocks, ldpred3_by_blocks
 
 
 def _blocks(n_blocks=12, k=200, seed=0):
@@ -60,7 +60,7 @@ def test_recovers_rg_and_h2():
         b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.7, rng=rng)
         bh1 = _sumstats(blocks, chols, idxs, b1, 40000, k, rng)
         bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
-        res = ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
+        res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
                                             burn_in=120, num_iter=150, seed=rep)
         rgs.append(res.rg); h1s.append(res.h2[0]); h2s.append(res.h2[1])
     assert abs(np.mean(rgs) - 0.7) < 0.2, np.mean(rgs)
@@ -76,7 +76,7 @@ def test_rg_zero_is_recovered():
     b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.0, rng=rng)
     bh1 = _sumstats(blocks, chols, idxs, b1, 40000, k, rng)
     bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
-    res = ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
+    res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
                                         burn_in=120, num_iter=150, seed=1)
     assert abs(res.rg) < 0.25, res.rg
 
@@ -92,20 +92,20 @@ def test_h2_cap_skips_prepass_and_validations():
     bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
 
     # h2_cap path (skips the univariate pre-pass) still recovers rg
-    res = ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
+    res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
                                         burn_in=80, num_iter=120,
                                         h2_cap=(0.5, 0.5), seed=1)
     assert abs(res.rg - 0.6) < 0.25
 
     with pytest.raises(ValueError, match="cross_corr"):
-        ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
+        ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000,
                                       cross_corr=1.0, h2_cap=(0.5, 0.5))
 
     overlap = [(blocks[0][0], np.arange(0, k)),
                (blocks[1][0], np.arange(k // 2, k // 2 + k))] + \
         [(blocks[i][0], np.arange(i * k, (i + 1) * k)) for i in range(2, nb)]
     with pytest.raises(ValueError, match="partition"):
-        ldpred2_auto_bivariate_blocks(overlap, bh1, bh2, 40000, 40000,
+        ldpred3_auto_bivariate_blocks(overlap, bh1, bh2, 40000, 40000,
                                       h2_cap=(0.5, 0.5))
 
 
@@ -121,10 +121,10 @@ def test_borrows_strength_for_low_power_trait():
         b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.9, rng=rng)
         bh1 = _sumstats(blocks, chols, idxs, b1, N1, k, rng)
         bh2 = _sumstats(blocks, chols, idxs, b2, N2, k, rng)
-        res = ldpred2_auto_bivariate_blocks(blocks, bh1, bh2, N1, N2,
+        res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, N1, N2,
                                             burn_in=120, num_iter=150, seed=rep)
         bi.append(_genetic_r2(res.beta2_est, b2, blocks, idxs))
-        solo = ldpred2_by_blocks(blocks, bh2, np.full(m, float(N2)),
+        solo = ldpred3_by_blocks(blocks, bh2, np.full(m, float(N2)),
                                  method="auto", burn_in=120, num_iter=150, seed=rep)
         uni.append(_genetic_r2(solo, b2, blocks, idxs))
     assert np.mean(bi) > np.mean(uni) + 0.02, (np.mean(bi), np.mean(uni))
