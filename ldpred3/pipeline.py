@@ -121,7 +121,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     dentist=False, dentist_params=None,
                     ld_shrink=False, ld_shrink_params=None,
                     ld_sparse=False, ld_sparse_params=None,
-                    ld_lowrank=False, ld_lowrank_params=None,
+                    ld_lowrank=False, ld_lowrank_params=None, ld_stream=False,
                     annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
@@ -193,6 +193,12 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         long-range LD). Not compatible with ``ld_sparse`` or ``dentist``.
     ld_lowrank_params : dict, optional
         Overrides, e.g. ``{"lowrank_variance": 0.995, "lowrank_max_rank": 1000}``.
+    ld_stream : bool, default False
+        When writing ``ld_out``, store a memory-mappable LD cache (dense /
+        low-rank). A later run with ``ld_cache`` then **streams blocks from disk**
+        (memmap), so resident memory is ~O(one block) and an LD larger than RAM
+        still fits. Build once with ``ld_lowrank=True, ld_out=…, ld_stream=True``;
+        reuse cheaply with ``ld_cache=…``.
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
     **ldpred3_kwargs
@@ -332,7 +338,8 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                                    "max_block": int(max(sizes)) if sizes else 0}
 
         if ld_out is not None:
-            save_ld_blocks(ld_out, blocks, geno.variants.id[h.var_index])
+            save_ld_blocks(ld_out, blocks, geno.variants.id[h.var_index],
+                           mmap=ld_stream)
 
     beta_std, _ = standardize_betas(h.beta, h.se, h.n_eff)
 
@@ -548,6 +555,9 @@ def _main(argv=None):
                          "memory; preferred for realistic / sequencing-scale LD)")
     ap.add_argument("--ld-lowrank-var", type=float, default=0.99,
                     help="spectrum fraction kept by --ld-lowrank (default: 0.99)")
+    ap.add_argument("--ld-stream", action="store_true",
+                    help="write a memory-mappable LD cache (with --ld-out) so a "
+                         "later --ld-cache run streams blocks from disk")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
                          "(dense; for chromosome / curated-SNP scale)")
@@ -622,6 +632,7 @@ def _main(argv=None):
                           if args.ld_max_dist else None),
         ld_lowrank=args.ld_lowrank,
         ld_lowrank_params={"lowrank_variance": args.ld_lowrank_var},
+        ld_stream=args.ld_stream,
         infer=args.infer)
 
     if args.save_weights:

@@ -14,6 +14,8 @@ into :func:`ldpred3.ldpred3_by_blocks`.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from .prs import standardize_dosage
@@ -22,14 +24,24 @@ from .ld_utils import sparsify_ld, SparseLD, lowrank_ld, LowRankLD
 __all__ = ["compute_ld_blocks", "save_ld_blocks", "load_ld_blocks"]
 
 
-def save_ld_blocks(path, blocks, variant_ids):
+def save_ld_blocks(path, blocks, variant_ids, mmap=False):
     """Save computed LD ``blocks`` and the variant IDs they cover to ``path``.
 
     ``blocks`` is the ``[(R, idx), ...]`` list from :func:`compute_ld_blocks`;
     ``variant_ids`` are the IDs of the variants in column order (one per
     column the blocks tile). Stored as a compressed ``.npz`` so a later run can
     reload the LD instead of recomputing it (see :func:`load_ld_blocks`).
+
+    With ``mmap=True`` the block payloads are concatenated into a single
+    **memory-mappable** ``<path>.dat.npy`` sidecar (uncompressed float32), with
+    only small metadata in the ``.npz``. :func:`load_ld_blocks` then returns the
+    blocks as *memmap views* — the sampler reads one block at a time and the OS
+    pages memory in/out, so a genome-scale LD that exceeds RAM still fits
+    (resident memory ~ O(one block), not the whole LD). Supports dense and
+    :class:`~ldpred3.LowRankLD` blocks (both float32 payloads).
     """
+    if mmap:
+        return _save_ld_blocks_mmap(path, blocks, variant_ids)
     ids = np.asarray(variant_ids, dtype=object).astype(str)
     sizes, kinds, arrays = [], [], {}
     for i, (R, _) in enumerate(blocks):
@@ -51,6 +63,31 @@ def save_ld_blocks(path, blocks, variant_ids):
                         kinds=np.array(kinds, dtype=np.int8), **arrays)
 
 
+def _save_ld_blocks_mmap(path, blocks, variant_ids):
+    """Memmap layout: small metadata .npz + a concatenated float32 .dat.npy."""
+    ids = np.asarray(variant_ids, dtype=object).astype(str)
+    sizes, kinds, ranks, offsets, parts = [], [], [], [], []
+    off = 0
+    for R, _ in blocks:
+        if isinstance(R, LowRankLD):
+            arr = np.asarray(R.U, dtype=np.float32).ravel()
+            kinds.append(2); sizes.append(R.m); ranks.append(R.rank)
+        elif isinstance(R, SparseLD):
+            raise ValueError("mmap on-disk streaming supports dense / LowRankLD "
+                             "blocks (uniform float32 payload), not SparseLD")
+        else:
+            R = np.asarray(R, dtype=np.float32)
+            arr = R.ravel(); kinds.append(0); sizes.append(R.shape[0]); ranks.append(0)
+        offsets.append(off); off += arr.size; parts.append(arr)
+    if int(np.sum(sizes)) != len(ids):
+        raise ValueError("variant_ids length does not match the blocks' columns")
+    payload = np.concatenate(parts) if parts else np.empty(0, np.float32)
+    np.save(str(path) + ".dat.npy", payload.astype(np.float32))
+    np.savez(path, ids=ids, sizes=np.array(sizes, np.int64),
+             kinds=np.array(kinds, np.int8), ranks=np.array(ranks, np.int64),
+             offsets=np.array(offsets, np.int64), ondisk=np.array([1], np.int8))
+
+
 def load_ld_blocks(path):
     """Load LD blocks saved by :func:`save_ld_blocks`.
 
@@ -58,7 +95,28 @@ def load_ld_blocks(path):
     (contiguous ``idx`` reconstructed from the stored block sizes) ready for
     :func:`ldpred3.ldpred3_by_blocks`, and ``variant_ids`` the column-order IDs
     the caller should align its summary statistics to.
+
+    A cache written with ``mmap=True`` is detected automatically: its payload is
+    **memory-mapped** and each block returned as a view into the mapped file, so
+    fitting reads one block at a time with resident memory ~ O(one block).
     """
+    if os.path.exists(str(path) + ".dat.npy"):
+        with np.load(path, allow_pickle=False) as z:
+            ids = z["ids"].astype(str)
+            sizes = z["sizes"]; kinds = z["kinds"]; ranks = z["ranks"]
+            offsets = z["offsets"]
+        payload = np.load(str(path) + ".dat.npy", mmap_mode="r")   # file-backed
+        blocks, start = [], 0
+        for i, k in enumerate(sizes):
+            k = int(k); off = int(offsets[i])
+            if int(kinds[i]) == 2:
+                r = int(ranks[i])
+                R = LowRankLD(payload[off:off + k * r].reshape(k, r), k)
+            else:
+                R = payload[off:off + k * k].reshape(k, k)
+            blocks.append((R, np.arange(start, start + k)))
+            start += k
+        return blocks, ids
     with np.load(path, allow_pickle=False) as z:
         ids = z["ids"].astype(str)
         sizes = z["sizes"]
