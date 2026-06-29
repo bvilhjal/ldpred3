@@ -161,7 +161,9 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
         After building the LD blocks, drop variants flagged by the DENTIST-style
         LD-consistency filter (:func:`qc.dentist_outlier_mask`) and rebuild the
         blocks on the survivors. Off by default — it can remove genuine,
-        poorly-tagged independent signals along with true errors.
+        poorly-tagged independent signals along with true errors. Ignored (with
+        a warning) when ``ld_cache`` is given, since the cached blocks are
+        authoritative; rebuild the cache from a ``dentist=True`` run to apply it.
     dentist_params : dict, optional
         Overrides for the DENTIST thresholds (e.g. ``{"p_cutoff": 1e-6}``).
     sumstats_cols : dict, optional
@@ -223,6 +225,12 @@ def run_ldpred2_prs(sumstats, plink, *, method="auto", block_size=500,
     if ld_cache is not None:
         # Cached LD is authoritative: align the harmonised variants to its column
         # order (the cache was built post-SD-check), then skip SD + recompute.
+        if dentist:
+            import warnings
+            warnings.warn(
+                "dentist=True is ignored when ld_cache is given: the cached LD "
+                "blocks are used as-is. Rebuild the cache (ld_out=) from a run "
+                "with dentist=True to apply the filter.", stacklevel=2)
         blocks, cached_ids = load_ld_blocks(ld_cache)
         pos_of = {vid: i for i, vid in enumerate(geno.variants.id[h.var_index])}
         missing = [c for c in cached_ids if c not in pos_of]
