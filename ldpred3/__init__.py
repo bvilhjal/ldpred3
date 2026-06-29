@@ -16,6 +16,7 @@ from .ldpred3 import (
     sparsify_ld,
     block_diagonal_ld,
     optimal_ld_blocks,
+    shrink_ld_blocks,
 )
 from .pipeline import (
     run_ldpred3_prs,
@@ -42,6 +43,7 @@ __all__ = [
     "sparsify_ld",
     "block_diagonal_ld",
     "optimal_ld_blocks",
+    "shrink_ld_blocks",
     "run_ldpred3_prs",
     "PRSResult",
     "preflight_prs",

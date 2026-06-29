@@ -24,9 +24,27 @@ from ldpred3.ldpred3 import (  # noqa: E402
     ldpred3_grid,
     ldpred3_inf,
     optimal_ld_blocks,
+    shrink_ld_blocks,
     sparsify_ld,
     standardize_betas,
 )
+
+
+def test_shrink_ld_blocks_is_size_aware():
+    # alpha = min(max_shrink, k / n_ref): small block ~untouched, large shrunk.
+    rng = np.random.default_rng(0)
+    small = _ar1_corr(50, 0.6).astype(np.float32)
+    big = _ar1_corr(800, 0.6).astype(np.float32)
+    blocks = [(small, np.arange(50)), (big, np.arange(50, 850))]
+    out = shrink_ld_blocks(blocks, n_ref=1000, max_shrink=0.5)
+    (Rs, _), (Rb, _) = out
+    # diagonal stays 1; off-diagonals shrink by alpha (0.05 small, 0.5 big).
+    assert np.allclose(np.diag(Rs), 1.0) and np.allclose(np.diag(Rb), 1.0)
+    a_small, a_big = 50 / 1000, min(0.5, 800 / 1000)
+    assert np.allclose(Rs[0, 1], small[0, 1] * (1 - a_small), atol=1e-5)
+    assert np.allclose(Rb[0, 1], big[0, 1] * (1 - a_big), atol=1e-5)
+    # shrinkage toward identity keeps the matrix positive-definite.
+    assert np.linalg.eigvalsh(Rb)[0] > 0
 
 
 def _ar1_corr(m, rho):

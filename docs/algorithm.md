@@ -81,6 +81,36 @@ Two important caveats:
   `inf`'s ridge is unaffected). Use `sparsify_ld(..., shrink=<1)` to restore
   diagonal dominance, or supply an already-valid windowed LD matrix.
 
+## Size-aware LD shrinkage (finite reference panels)
+
+A block's sample LD estimated from `n_ref` reference individuals carries noise
+that grows with the block size `k` relative to `n_ref` (Marchenko–Pastur: the
+sample eigenvalues spread/inflate as `k/n_ref` grows). Small blocks
+(`k ≪ n_ref`) are well estimated; **large blocks (`k` approaching or exceeding
+`n_ref`) are noise-dominated**, and that noise makes the Gibbs sampler over-fit
+and inflate `h²`.
+
+`shrink_ld_blocks(blocks, n_ref)` (pipeline `--ld-shrink`) shrinks each block
+toward the identity by `alpha = min(max_shrink, k/n_ref)` —
+`R ← (1-alpha)·R + alpha·I`, diagonal kept 1 — so **large blocks are regularised
+while small, well-estimated ones are left essentially untouched**. This is a
+*uniform eigenvalue shrinkage* (`λ → (1-alpha)λ + alpha`).
+
+A note on the spectral alternatives we tried (see
+`benchmarks/ld_shrink_large_blocks.py`): on a finite panel,
+
+* **PC truncation** (keep the top eigenvectors to a variance threshold, à la a
+  naive low-rank LD) does **not** help as a drop-in — it preserves the
+  Marchenko–Pastur-*inflated* top eigenvalues and, when `k < n_ref`, discards
+  real signal directions.
+* **RMT eigenvalue clipping** (flatten the noise bulk below the MP edge) helps,
+  but **less** than the simpler size-aware shrinkage above.
+
+so the shipped lever is the size-aware shrinkage. (Capturing SBayesRC's full PC
+benefit would mean running the sampler in the *eigenspace* with a low-rank
+likelihood rather than reconstructing `R̃` for the existing sampler — a larger
+change, not yet implemented.)
+
 ## Fewer iterations: warm start & adaptive stopping
 
 `ldpred3_grid`/`ldpred3_auto` accept:

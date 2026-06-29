@@ -142,6 +142,17 @@ def test_pipeline_dentist_runs_and_keeps_signal(tmp_path):
     assert r2 > 0.20, f"PRS R^2 after DENTIST too low: {r2:.3f}"
 
 
+def test_pipeline_ld_shrink_runs_and_keeps_signal(tmp_path):
+    # Size-aware LD shrinkage runs end-to-end, logs n_ref, and stays predictive.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=9)
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                          ld_shrink=True)
+    assert "ld_shrink" in res.qc_log
+    assert res.qc_log["ld_shrink"]["n_ref"] > 0
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"PRS R^2 with LD shrink too low: {r2:.3f}"
+
+
 def test_pipeline_method_annot(tmp_path):
     # method="annot": reads an annotation file, learns enrichment, scores predict.
     rng = np.random.default_rng(3)
