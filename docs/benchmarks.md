@@ -459,6 +459,24 @@ problem that already fits in RAM. For the latter, dense (or recombination-aware
 splitting to keep blocks bounded) is best; and the on-disk `--ld-stream` cache
 lets a low-rank LD exceed RAM (paged from disk, fits bit-identical).
 
+**Mixed dense + low-rank (`lowrank_min_size`).** Genome-wide, most blocks are
+small/moderate and only a few are huge. `compute_ld_blocks(lowrank=True,
+lowrank_min_size=K)` (CLI `--ld-lowrank-min-size`) keeps small blocks **dense**
+(fast, cheap, often barely compressible) and compresses only blocks ≥ `K`. On a
+mixed genome (40×300 + 2×2500 blocks, realistic LD) it is the Pareto choice:
+
+| strategy | LD memory | fit (s) | R² |
+|----------|----------:|--------:|---:|
+| all dense | 64 MB | 0.26 | 0.979 |
+| all low-rank | 14 MB | 1.57 | 0.979 |
+| **mixed (≥1000 low-rank)** | 24 MB | **1.12** | 0.978 |
+
+Mixed **dominates all-low-rank** (28 % faster at the same accuracy — small blocks
+stay fast dense) and **bounds memory vs all-dense** (only the few huge blocks are
+compressed). The big blocks still dominate fit time, so it is the right default
+when *some* blocks are too big for dense but most are not — not when everything
+already fits dense (then dense is fastest).
+
 ## Optimal LD-block splitting
 
 `optimal_ld_blocks` (Privé 2022) places block boundaries in low-LD valleys

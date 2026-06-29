@@ -193,6 +193,10 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         long-range LD). Not compatible with ``ld_sparse`` or ``dentist``.
     ld_lowrank_params : dict, optional
         Overrides, e.g. ``{"lowrank_variance": 0.995, "lowrank_max_rank": 1000}``.
+        Set ``lowrank_min_size`` (CLI ``--ld-lowrank-min-size``) for a **mixed**
+        representation: only blocks at least that large are compressed, smaller
+        ones stay dense — near-dense speed genome-wide, compressing just the few
+        big blocks that need it.
     ld_stream : bool, default False
         When writing ``ld_out``, store a memory-mappable LD cache (dense /
         low-rank). A later run with ``ld_cache`` then **streams blocks from disk**
@@ -555,6 +559,9 @@ def _main(argv=None):
                          "memory; preferred for realistic / sequencing-scale LD)")
     ap.add_argument("--ld-lowrank-var", type=float, default=0.99,
                     help="spectrum fraction kept by --ld-lowrank (default: 0.99)")
+    ap.add_argument("--ld-lowrank-min-size", type=int, default=0,
+                    help="with --ld-lowrank, only compress blocks >= this size; "
+                         "smaller blocks stay dense (mixed; default: 0 = all)")
     ap.add_argument("--ld-stream", action="store_true",
                     help="write a memory-mappable LD cache (with --ld-out) so a "
                          "later --ld-cache run streams blocks from disk")
@@ -631,7 +638,8 @@ def _main(argv=None):
         ld_sparse_params=({"max_dist": args.ld_max_dist}
                           if args.ld_max_dist else None),
         ld_lowrank=args.ld_lowrank,
-        ld_lowrank_params={"lowrank_variance": args.ld_lowrank_var},
+        ld_lowrank_params={"lowrank_variance": args.ld_lowrank_var,
+                           "lowrank_min_size": args.ld_lowrank_min_size},
         ld_stream=args.ld_stream,
         infer=args.infer)
 
