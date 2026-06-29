@@ -92,5 +92,7 @@ for kind in ("dense", "band w200", "lowrank 99.5%"):
     print(f"{kind:>14} | {mem_mb(blocks):>6.0f} | {bt:>7.2f} | "
           f"{np.mean(fits):>6.2f} | {np.mean(accs):>6.3f}")
 
-print("\n(compact reps trade fit time for memory; low-rank matches dense accuracy "
-      "at ~1/4 memory and is the tool for LD that would not fit dense.)")
+print("\n(build is one-time and cached -- saved as the U factor (--ld-out) and "
+      "reused via --ld-cache -- so it amortises to ~0; the recurring cost is the "
+      "fit time. low-rank matches dense accuracy at ~1/4 memory: the tool for LD "
+      "that would not fit dense, not a speedup for what already fits in RAM.)")

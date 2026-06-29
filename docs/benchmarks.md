@@ -438,17 +438,26 @@ eigendecomposition), per-fit time, and genetic R². Regenerate with
 | band w200 | 30 MB | 3.2 | 1.9 | 0.758 |
 | **low-rank 99.5%** | **16 MB** | 10.2 | 1.6 | **0.986** |
 
-The honest trade-off: **low-rank cuts memory ~5× and matches dense accuracy
-(0.986 vs 0.987), but fits ~9× slower** (and the build pays an O(k³) eigen-
-decomposition). The slowdown is structural — the dense sampler keeps the full
-residual vector and reads `(Rβ)_j` in O(1), whereas the eigenspace fit recomputes
-`(Rβ)_j = U[j]·s` in O(rank) per SNP. **Banding is worse on realistic LD on every
-axis except a small memory edge over dense** (slower than dense *and* it drops
-accuracy to 0.76). So low-rank is the representation for *scale* — LD that would
-not fit dense — not a way to speed up a problem that already fits in RAM. For the
-latter, dense (or recombination-aware splitting to keep blocks bounded) is best;
-and the on-disk `--ld-stream` cache lets a low-rank LD exceed RAM (paged from
-disk, fits bit-identical).
+Two costs, and they are different in kind:
+
+* **Build (the eigendecomposition) is one-time and cached.** It is part of LD
+  *construction*, not the fit — computed once, saved as the `U` factor (`--ld-out`,
+  including the memmap `--ld-stream` cache) and reused across every later fit /
+  cohort via `--ld-cache`. So the 10.2 s amortises to ~0 per run, exactly as the
+  dense LD's own `Z·Zᵀ` does; it should not be charged to a fit.
+* **The recurring cost is fit time.** Low-rank **cuts memory ~5× and matches
+  dense accuracy (0.986 vs 0.987) but fits ~9× slower**, and that part does not
+  amortise. The slowdown is structural — the dense sampler keeps the full
+  residual vector and reads `(Rβ)_j` in O(1), whereas the eigenspace fit
+  recomputes `(Rβ)_j = U[j]·s` in O(rank) per SNP (a batched `U·s` matvec could
+  narrow this).
+
+**Banding is worse on realistic LD on every axis except a small memory edge over
+dense** (slower than dense *and* it drops accuracy to 0.76). So low-rank is the
+representation for *scale* — LD that would not fit dense — not a way to speed up a
+problem that already fits in RAM. For the latter, dense (or recombination-aware
+splitting to keep blocks bounded) is best; and the on-disk `--ld-stream` cache
+lets a low-rank LD exceed RAM (paged from disk, fits bit-identical).
 
 ## Optimal LD-block splitting
 
