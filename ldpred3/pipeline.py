@@ -121,6 +121,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     dentist=False, dentist_params=None,
                     ld_shrink=False, ld_shrink_params=None,
                     ld_sparse=False, ld_sparse_params=None,
+                    ld_lowrank=False, ld_lowrank_params=None,
                     annotations=None, annot_params=None,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
@@ -184,6 +185,14 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         streaming kernel. Not compatible with ``dentist`` (which needs dense LD).
     ld_sparse_params : dict, optional
         Overrides for the banding, e.g. ``{"max_dist": 500, "ld_threshold": 1e-3}``.
+    ld_lowrank : bool, default False
+        Store the LD blocks as low-rank :class:`~ldpred3.LowRankLD` (top
+        eigenvectors), fit by the eigenspace streaming auto sampler at O(k·rank)
+        memory. On **realistic** LD this matches the dense fit at a fraction of
+        the memory (preferred over ``ld_sparse`` banding, which discards
+        long-range LD). Not compatible with ``ld_sparse`` or ``dentist``.
+    ld_lowrank_params : dict, optional
+        Overrides, e.g. ``{"lowrank_variance": 0.995, "lowrank_max_rank": 1000}``.
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
     **ldpred3_kwargs
@@ -273,15 +282,21 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
             ld_dos = ld_dos[:, keep_sd]
             chrom = chrom[keep_sd]
 
-        if ld_sparse and dentist:
+        if (ld_sparse or ld_lowrank) and dentist:
             raise ValueError("dentist requires dense LD blocks and is not "
-                             "compatible with ld_sparse; disable one of them")
-        # Banded (SparseLD) blocks keep persistent memory at O(k·bandwidth) for
-        # large blocks (genome-scale / thousands of SNPs per block); the dense
+                             "compatible with ld_sparse / ld_lowrank")
+        # Compact LD representations keep persistent memory sub-O(k²) for large
+        # blocks (genome / sequencing scale): banded SparseLD (O(k·bandwidth)) or
+        # low-rank LowRankLD (O(k·rank), preferred on realistic LD). The dense
         # block is built transiently per block and discarded.
-        sparse_kw = dict(sparse=True, **(ld_sparse_params or {})) if ld_sparse else {}
+        if ld_lowrank:
+            ld_kw = dict(lowrank=True, **(ld_lowrank_params or {}))
+        elif ld_sparse:
+            ld_kw = dict(sparse=True, **(ld_sparse_params or {}))
+        else:
+            ld_kw = {}
         blocks = compute_ld_blocks(ld_dos, chrom=chrom, block_size=block_size,
-                                   ridge=ld_ridge, **sparse_kw)
+                                   ridge=ld_ridge, **ld_kw)
 
         # Optional DENTIST-style LD-consistency outlier removal. Catches
         # variants whose z-score disagrees with its LD neighbours (allele/strand
@@ -528,6 +543,11 @@ def _main(argv=None):
     ap.add_argument("--ld-max-dist", type=int, default=None,
                     help="band half-width for --ld-sparse (variants; default: "
                          "threshold only)")
+    ap.add_argument("--ld-lowrank", action="store_true",
+                    help="store LD blocks as low-rank LowRankLD (O(k*rank) "
+                         "memory; preferred for realistic / sequencing-scale LD)")
+    ap.add_argument("--ld-lowrank-var", type=float, default=0.99,
+                    help="spectrum fraction kept by --ld-lowrank (default: 0.99)")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
                          "(dense; for chromosome / curated-SNP scale)")
@@ -600,6 +620,8 @@ def _main(argv=None):
         ld_sparse=args.ld_sparse,
         ld_sparse_params=({"max_dist": args.ld_max_dist}
                           if args.ld_max_dist else None),
+        ld_lowrank=args.ld_lowrank,
+        ld_lowrank_params={"lowrank_variance": args.ld_lowrank_var},
         infer=args.infer)
 
     if args.save_weights:

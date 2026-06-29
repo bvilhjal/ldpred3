@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from .prs import standardize_dosage
-from .ld_utils import sparsify_ld, SparseLD
+from .ld_utils import sparsify_ld, SparseLD, lowrank_ld, LowRankLD
 
 __all__ = ["compute_ld_blocks", "save_ld_blocks", "load_ld_blocks"]
 
@@ -38,6 +38,9 @@ def save_ld_blocks(path, blocks, variant_ids):
             arrays[f"R{i}_indptr"] = R.indptr
             arrays[f"R{i}_indices"] = R.indices
             arrays[f"R{i}_data"] = R.data
+        elif isinstance(R, LowRankLD):        # low-rank factor U (k x r)
+            kinds.append(2); sizes.append(R.m)
+            arrays[f"R{i}_U"] = R.U
         else:
             kinds.append(0); sizes.append(R.shape[0])
             arrays[f"R{i}"] = np.asarray(R, dtype=np.float32)
@@ -66,6 +69,8 @@ def load_ld_blocks(path):
             if int(kinds[i]) == 1:
                 R = SparseLD(z[f"R{i}_indptr"], z[f"R{i}_indices"],
                              z[f"R{i}_data"], k)
+            elif int(kinds[i]) == 2:
+                R = LowRankLD(z[f"R{i}_U"], k)
             else:
                 R = z[f"R{i}"]
             blocks.append((R, np.arange(start, start + k)))
@@ -87,7 +92,8 @@ def _block_bounds(chrom, block_size):
 
 
 def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
-                      sparse=False, ld_threshold=1e-3, max_dist=None):
+                      sparse=False, ld_threshold=1e-3, max_dist=None,
+                      lowrank=False, lowrank_variance=0.99, lowrank_max_rank=None):
     """Estimate per-block LD correlation matrices from a genotype panel.
 
     Parameters
@@ -115,6 +121,16 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
         Drop off-diagonal entries with ``|r| < ld_threshold`` (sparse only).
     max_dist : int or None
         If set, also band each block to ``|i-j| <= max_dist`` (sparse only).
+    lowrank : bool, default False
+        If True, store each block as a :class:`~ldpred3.LowRankLD` (top
+        eigenvectors to ``lowrank_variance`` of the spectrum). Persistent memory
+        is O(k·rank); on **realistic** LD this matches the dense fit at a fraction
+        of the memory (preferred over banding, which discards long-range LD).
+        Fit via ``global_hyper`` auto (the eigenspace streaming kernel).
+    lowrank_variance : float, default 0.99
+        Spectrum fraction to keep (low-rank only).
+    lowrank_max_rank : int or None
+        Hard cap on the kept rank per block (low-rank only).
 
     Returns
     -------
@@ -142,7 +158,13 @@ def compute_ld_blocks(dosage, *, chrom=None, block_size=500, ridge=0.0,
             R *= (1.0 - ridge)
             R[np.diag_indices_from(R)] += ridge
         np.fill_diagonal(R, 1.0)
-        if sparse:
+        if sparse and lowrank:
+            raise ValueError("use either sparse or lowrank, not both")
+        if lowrank:
+            # Build dense transiently, store top-rank eigizmodes (O(k*rank)).
+            blocks.append((lowrank_ld(R, variance=lowrank_variance,
+                                      max_rank=lowrank_max_rank), idx))
+        elif sparse:
             # Build dense transiently, store banded -> persistent O(k*bandwidth).
             blocks.append((sparsify_ld(R, threshold=ld_threshold,
                                        max_dist=max_dist), idx))

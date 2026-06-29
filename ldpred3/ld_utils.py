@@ -21,7 +21,7 @@ import numpy as np
 from ._numba import _jit
 
 __all__ = ["SparseLD", "sparsify_ld", "block_diagonal_ld", "optimal_ld_blocks",
-           "shrink_ld_blocks"]
+           "shrink_ld_blocks", "LowRankLD", "lowrank_ld"]
 
 
 def shrink_ld_blocks(blocks, n_ref, *, max_shrink=0.5, intensity=1.0, min_block=1):
@@ -101,6 +101,72 @@ class SparseLD:
     @property
     def density(self):
         return self.nnz / float(self.m * self.m)
+
+
+@dataclass
+class LowRankLD:
+    """A low-rank LD approximation ``R ~= U @ U.T`` with unit diagonal.
+
+    Realistic LD is close to low rank, so keeping the top eigenvectors captures
+    it at a fraction of the memory and lets the sampler work in the r-dimensional
+    eigenspace: the residual ``(R beta)`` is recovered from ``s = U.T beta``
+    (length r) as ``U @ s``, and each effect update touches only ``s`` -- O(r)
+    per SNP, O(k*r) memory, vs O(k^2) dense. ``U`` (k x r, float32) already
+    absorbs ``sqrt(eigenvalue)`` and is row-scaled so ``(U U.T)_jj = 1``. Build
+    with :func:`lowrank_ld`.
+    """
+
+    U: np.ndarray
+    m: int
+
+    @property
+    def rank(self):
+        return int(self.U.shape[1])
+
+    @property
+    def density(self):
+        return self.U.size / float(self.m * self.m)
+
+
+def lowrank_ld(corr, variance=0.99, max_rank=None, min_eig=1e-6):
+    """Build a :class:`LowRankLD` from a dense LD matrix by eigen-truncation.
+
+    Keeps the top eigenvectors until they explain ``variance`` of the total
+    spectrum (capped at ``max_rank``), folds ``sqrt(eigenvalue)`` into ``U`` and
+    row-scales so the reconstruction has unit diagonal. This is the SBayesRC-style
+    low-rank LD: on realistic LD it matches the dense fit at a fraction of the
+    memory (the spectrum is concentrated), whereas distance banding discards real
+    long-range structure.
+
+    Parameters
+    ----------
+    corr : ndarray (m, m)
+        Dense symmetric LD matrix.
+    variance : float, default 0.99
+        Keep the fewest top eigenvectors explaining this fraction of ``sum(eig)``.
+    max_rank : int or None
+        Hard cap on the kept rank.
+    min_eig : float
+        Floor on kept eigenvalues (numerical safety; they are already > 0).
+    """
+    corr = np.asarray(corr, dtype=float)
+    m = corr.shape[0]
+    w, V = np.linalg.eigh(corr)
+    w = w[::-1]; V = V[:, ::-1]                      # descending
+    w = np.maximum(w, 0.0)
+    total = w.sum()
+    if total <= 0:
+        r = 1
+    else:
+        r = int(np.searchsorted(np.cumsum(w), variance * total) + 1)
+    r = max(1, min(r, m))
+    if max_rank is not None:
+        r = min(r, int(max_rank))
+    wk = np.maximum(w[:r], min_eig)
+    U = V[:, :r] * np.sqrt(wk)                       # R ~= U U^T
+    d = np.sqrt(np.clip((U * U).sum(axis=1), 1e-12, None))
+    U = U / d[:, None]                              # unit diagonal
+    return LowRankLD(U.astype(np.float32), m)
 
 
 def sparsify_ld(corr, threshold=1e-3, max_dist=None, shrink=1.0):

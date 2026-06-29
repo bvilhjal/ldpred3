@@ -93,9 +93,16 @@ CSR. Enable end-to-end with `--ld-sparse` (`--ld-max-dist w`).
 
 So for realistic / sequencing-scale LD, **low-rank (eigen/PC) compression is the
 right memory tool** — it matches dense accuracy at ~4× compression where banding
-both loses accuracy and compresses less (SBayesRC's representation; not yet wired
-into the sampler — see roadmap). Banding remains useful for genuinely banded LD
-(e.g. AR(1)-like / some array data), and recombination-aware splitting
+both loses accuracy and compresses less (SBayesRC's representation). This is
+implemented: `compute_ld_blocks(lowrank=True, lowrank_variance=…)` (CLI
+`--ld-lowrank`) stores each block as a `LowRankLD` (`R ≈ U Uᵀ`, unit diagonal,
+top eigenvectors), and the global-hyper streaming auto sampler fits it **in the
+r-dimensional eigenspace** via `_gibbs_one_sweep_lowrank`: it carries the block
+residual as `s = Uᵀβ` (length r), recovers `(Rβ)_j = U[j]·s`, updates `s += Δ·U[j]`
+on each effect change (O(r)), and uses `βᵀRβ = ‖s‖²` — so the fit is O(k·r) in
+time and memory with no dense k×k. `ldpred3_inf` solves `LowRankLD` via Woodbury,
+and the on-disk cache stores the `U` factor. Banding remains useful for genuinely
+banded LD (e.g. AR(1)-like / some array data), and recombination-aware splitting
 (`optimal_ld_blocks`) keeps blocks bounded regardless.
 
 Two more caveats:
