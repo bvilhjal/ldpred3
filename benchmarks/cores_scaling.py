@@ -47,6 +47,11 @@ if not HAVE_NUMBA:
     print("Install numba (`pip install numba`) to measure parallel scaling.")
     sys.exit(0)
 
+# Numba caps threads at NUMBA_NUM_THREADS; don't request more than that.
+import numba
+_max = numba.config.NUMBA_NUM_THREADS
+CORES = [c for c in CORES if c <= _max] or [1]
+
 blocks, beta_hat = build(0)
 n = np.full(M, float(N_GWAS))
 common = dict(sparse=False, seed=0, estimate_hyper=True, h2_bounds=(1e-4, 1.0))
