@@ -39,13 +39,15 @@ res.harmonize_log   # matched / flipped / ambiguous / mismatched counts
 res.qc_log          # per-filter QC counts
 ```
 
-Handy flags (see [docs/pipeline.md](docs/pipeline.md)):
+Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
+[output formats](docs/pipeline.md#outputs) in the pipeline docs):
 
 | flag | what it does |
 |------|--------------|
 | `--dry-run` | preflight inputs (column mapping, ID match, harmonisation) — no fitting |
 | `--infer` | also estimate h², polygenicity and predictive r² |
 | `--method annot --annotations a.tsv` | use functional-annotation priors |
+| `--dentist` | drop LD-inconsistent variants (allele/strand errors, LD mismatch); off by default |
 | `--save-weights w.txt` / `--weights w.txt` | save fitted weights / score a new cohort from them |
 | `--ld-out f.npz` / `--ld-cache f.npz` | cache the LD to skip recomputing it on re-runs |
 
@@ -113,3 +115,8 @@ python -m pytest tests/        # full suite
 - [docs/inference.md](docs/inference.md) — h² / polygenicity / r² / genetic-correlation inference
 - [docs/algorithm.md](docs/algorithm.md) — sampler internals, sparse LD, LD splitting, bivariate model
 - [docs/benchmarks.md](docs/benchmarks.md) — accuracy, speed, scaling and robustness benchmarks
+- [CHANGELOG.md](CHANGELOG.md) — release history
+
+### License
+
+[MIT](LICENSE) © Bjarni Vilhjálmsson
