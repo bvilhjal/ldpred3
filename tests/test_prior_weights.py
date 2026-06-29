@@ -5,8 +5,8 @@ import sys
 
 import numpy as np
 
-from pyldpred2 import ldpred2_grid, ldpred2_auto
-from pyldpred2.prs import standardize_dosage
+from ldpred3 import ldpred3_grid, ldpred3_auto
+from ldpred3.prs import standardize_dosage
 
 
 def _ar1(m, rho):
@@ -20,14 +20,14 @@ def test_equal_weights_match_default():
     R = _ar1(m, 0.5)
     beta = np.zeros(m); beta[::15] = 0.3
     bhat = R @ beta + rng.standard_normal(m) / np.sqrt(5000)
-    a = ldpred2_grid(R, bhat, 5000, h2=0.5, p=0.05, burn_in=40, num_iter=120,
+    a = ldpred3_grid(R, bhat, 5000, h2=0.5, p=0.05, burn_in=40, num_iter=120,
                      seed=1)
-    b = ldpred2_grid(R, bhat, 5000, h2=0.5, p=0.05, burn_in=40, num_iter=120,
+    b = ldpred3_grid(R, bhat, 5000, h2=0.5, p=0.05, burn_in=40, num_iter=120,
                      seed=1, prior_weights=np.ones(m))
     np.testing.assert_allclose(a, b, rtol=1e-10, atol=1e-12)
     # same for auto
-    ra = ldpred2_auto(R, bhat, 5000, burn_in=40, num_iter=120, seed=1)
-    rb = ldpred2_auto(R, bhat, 5000, burn_in=40, num_iter=120, seed=1,
+    ra = ldpred3_auto(R, bhat, 5000, burn_in=40, num_iter=120, seed=1)
+    rb = ldpred3_auto(R, bhat, 5000, burn_in=40, num_iter=120, seed=1,
                       prior_weights=np.ones(m))
     np.testing.assert_allclose(ra.beta_est, rb.beta_est, rtol=1e-10, atol=1e-12)
 
@@ -36,7 +36,7 @@ def test_prior_weights_validation():
     R = _ar1(50, 0.5); bhat = np.zeros(50)
     for bad in (np.ones(49), -np.ones(50)):
         try:
-            ldpred2_grid(R, bhat, 5000, h2=0.5, p=0.05, prior_weights=bad)
+            ldpred3_grid(R, bhat, 5000, h2=0.5, p=0.05, prior_weights=bad)
         except ValueError:
             pass
         else:
@@ -72,9 +72,9 @@ def _one(seed, N=2000, m=400, h2=0.5, p=0.05, enrich=15.0):
     bhat = (ZA.T @ y) / N
     yte = ZB @ beta + rng.normal(0, np.sqrt(1 - h2), 3000)
     w = np.where(func, enrich, 1.0)
-    b_plain = ldpred2_grid(R, bhat, N, h2=h2, p=p, burn_in=80, num_iter=200,
+    b_plain = ldpred3_grid(R, bhat, N, h2=h2, p=p, burn_in=80, num_iter=200,
                            seed=1)
-    b_annot = ldpred2_grid(R, bhat, N, h2=h2, p=p, burn_in=80, num_iter=200,
+    b_annot = ldpred3_grid(R, bhat, N, h2=h2, p=p, burn_in=80, num_iter=200,
                            seed=1, prior_weights=w)
     r2 = lambda b: np.corrcoef(ZB @ b, yte)[0, 1] ** 2
     return r2(b_plain), r2(b_annot)

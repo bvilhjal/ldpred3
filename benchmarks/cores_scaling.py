@@ -1,4 +1,4 @@
-"""Multi-core scaling of the LDpred2-auto Gibbs sampler (``--ncores``).
+"""Multi-core scaling of the LDpred3-auto Gibbs sampler (``--ncores``).
 
 Self-contained. Times the *packed* auto sampler (the one ``--ncores>1`` uses,
 whose per-sweep block loop is parallelised with Numba ``prange``) at increasing
@@ -11,10 +11,10 @@ than the streaming-vs-packed switch. Needs Numba for any parallelism.
 import os, sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2._numba import HAVE_NUMBA
-from pyldpred2.simulate import simulate_genotypes
-from pyldpred2.ld import compute_ld_blocks
-from pyldpred2.ldpred2 import _gibbs_blocks
+from ldpred3._numba import HAVE_NUMBA
+from ldpred3.simulate import simulate_genotypes
+from ldpred3.ld import compute_ld_blocks
+from ldpred3.ldpred3 import _gibbs_blocks
 
 NB, K = 40, 500            # m = 20000, large blocks -> heavy per-sweep matmuls
 M = NB * K

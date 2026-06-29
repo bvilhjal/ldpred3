@@ -6,8 +6,8 @@ import sys
 import numpy as np
 
 
-from pyldpred2.sumstats import Sumstats                              # noqa: E402
-from pyldpred2.qc import (                                           # noqa: E402
+from ldpred3.sumstats import Sumstats                              # noqa: E402
+from ldpred3.qc import (                                           # noqa: E402
     qc_sumstats,
     sd_consistency_mask,
     dentist_outlier_mask,

@@ -1,4 +1,4 @@
-"""Benchmark LDpred2 variants on realistic (coalescent) LD across architectures.
+"""Benchmark LDpred3 variants on realistic (coalescent) LD across architectures.
 
 Metric: genetic R2 = squared correlation between the PRS and the true genetic
 value under population LD, (b^T R beta)^2 / [(b^T R b)(beta^T R beta)], summed
@@ -7,7 +7,7 @@ over the block-diagonal LD. Averaged over replicates. h2=0.5, N=50000.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_by_blocks, ldpred2_auto_annot_blocks
+from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)          # (100, 500, 500)
@@ -72,15 +72,15 @@ def fit(method, bhat, n, true_p, A):
     if method == "marginal":
         return bhat
     if method == "inf":
-        return ldpred2_by_blocks(blocks, bhat, n, method="inf", h2=H2)
+        return ldpred3_by_blocks(blocks, bhat, n, method="inf", h2=H2)
     if method == "grid":                          # oracle h2, p
-        return ldpred2_by_blocks(blocks, bhat, n, method="grid", h2=H2,
+        return ldpred3_by_blocks(blocks, bhat, n, method="grid", h2=H2,
                                  p=max(true_p, 1e-3), burn_in=80, num_iter=200)
     if method == "auto":
-        return ldpred2_by_blocks(blocks, bhat, n, method="auto", burn_in=80,
+        return ldpred3_by_blocks(blocks, bhat, n, method="auto", burn_in=80,
                                  num_iter=200, seed=1)
     if method == "annot":
-        return ldpred2_auto_annot_blocks(blocks, bhat, n, A, burn_in=80,
+        return ldpred3_auto_annot_blocks(blocks, bhat, n, A, burn_in=80,
                                          num_iter=200, seed=1).beta_est
 
 

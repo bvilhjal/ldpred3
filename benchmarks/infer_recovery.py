@@ -1,7 +1,7 @@
-"""Inference evaluation: does LDpred2-auto-infer recover h² and polygenicity?
+"""Inference evaluation: does LDpred3-auto-infer recover h² and polygenicity?
 
 Self-contained (no external LD library). Simulates a GWAS on an AR(1) panel,
-runs multi-chain LDpred2-auto inference (no validation cohort), and checks the
+runs multi-chain LDpred3-auto inference (no validation cohort), and checks the
 posterior median and 95% credible interval against the known truth:
 
   (A) Heritability h²: swept with p fixed.
@@ -16,9 +16,9 @@ truth (should be ~0.95 if the intervals are calibrated).
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2.simulate import simulate_genotypes
-from pyldpred2.ld import compute_ld_blocks
-from pyldpred2.infer import ldpred2_auto_infer
+from ldpred3.simulate import simulate_genotypes
+from ldpred3.ld import compute_ld_blocks
+from ldpred3.infer import ldpred3_auto_infer
 
 NB, K = 15, 200            # m = 3000
 M = NB * K
@@ -50,7 +50,7 @@ def simulate(h2, p, seed):
 
 
 def infer(blocks, beta_hat, seed):
-    return ldpred2_auto_infer(blocks, beta_hat, np.full(M, float(N_GWAS)),
+    return ldpred3_auto_infer(blocks, beta_hat, np.full(M, float(N_GWAS)),
                               n_chains=CHAINS, burn_in=BURN, num_iter=ITER, seed=seed)
 
 

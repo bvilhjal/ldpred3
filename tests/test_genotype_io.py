@@ -6,7 +6,7 @@ import sys
 import numpy as np
 
 
-from pyldpred2.genotype_io import (         # noqa: E402
+from ldpred3.genotype_io import (         # noqa: E402
     VariantTable, SampleTable, read_plink, write_plink, read_bed,
     _BED_MAGIC, _BED_SNP_MAJOR,
 )

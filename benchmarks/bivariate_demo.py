@@ -1,4 +1,4 @@
-"""Bivariate LDpred2-auto across two-trait architectures, with realistic LD.
+"""Bivariate LDpred3-auto across two-trait architectures, with realistic LD.
 
 The GWAS is generated from the true population (coalescent) LD but fitted with an
 LD matrix estimated from a finite reference panel (Nref) -- the mismatch that
@@ -10,7 +10,7 @@ their causal variants are disjoint. Needs ``ld_library.npz`` in the cwd.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_auto_bivariate_blocks, ldpred2_by_blocks
+from ldpred3 import ldpred3_auto_bivariate_blocks, ldpred3_by_blocks
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K, NB = 500, 12
@@ -97,9 +97,9 @@ for label, simfn in CASES:
         rng = np.random.default_rng(300 + rep)
         b1, b2 = simfn(rng)
         bh1 = sumstats(b1, N1, rng); bh2 = sumstats(b2, N2, rng)
-        res = ldpred2_auto_bivariate_blocks(ref, bh1, bh2, N1, N2,
+        res = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2,
                                             burn_in=150, num_iter=200, seed=rep)
-        s = ldpred2_by_blocks(ref, bh2, np.full(M, float(N2)), method="auto",
+        s = ldpred3_by_blocks(ref, bh2, np.full(M, float(N2)), method="auto",
                               burn_in=150, num_iter=200, seed=rep)
         joint.append(r2(res.beta2_est, b2)); solo.append(r2(s, b2)); rge.append(res.rg)
     a, j = np.mean(solo), np.mean(joint)

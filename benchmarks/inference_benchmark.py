@@ -2,9 +2,9 @@
 under realistic reference-panel LD (coalescent population LD; fit/score with an
 LD estimated from a finite reference panel).
 
-Heritability:        LDSC (ldsc_h2)  vs  LDpred2-auto (ldpred2_auto_infer)
-Genetic correlation: bivariate LDSC (ldsc_rg)  vs  bivariate LDpred2
-                     (ldpred2_auto_bivariate)
+Heritability:        LDSC (ldsc_h2)  vs  LDpred3-auto (ldpred3_auto_infer)
+Genetic correlation: bivariate LDSC (ldsc_rg)  vs  bivariate LDpred3
+                     (ldpred3_auto_bivariate)
 
 Reports the estimate (mean ± SD vs the known truth) and the wall-clock time per
 run. Needs ``ld_library.npz`` in the cwd. Single core recommended
@@ -13,8 +13,8 @@ run. Needs ``ld_library.npz`` in the cwd. Single core recommended
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import (ld_scores, ldsc_h2, ldsc_rg, ldpred2_auto_infer,
-                       ldpred2_auto_bivariate_blocks)
+from ldpred3 import (ld_scores, ldsc_h2, ldsc_rg, ldpred3_auto_infer,
+                       ldpred3_auto_bivariate_blocks)
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K, NB = 500, 12
@@ -65,8 +65,8 @@ def timed(fn):
 # Warm up the Numba kernels (infer / bivariate) so timings are steady-state.
 rng = np.random.default_rng(1)
 b1, b2 = sim_pair(rng); bh1 = sumstats(b1, N1, rng); bh2 = sumstats(b2, N2, rng)
-ldpred2_auto_infer(dense, bh1, N1, n_chains=4, burn_in=40, num_iter=40, seed=0)
-ldpred2_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=40, num_iter=40,
+ldpred3_auto_infer(dense, bh1, N1, n_chains=4, burn_in=40, num_iter=40, seed=0)
+ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=40, num_iter=40,
                               h2_cap=(H2, H2), seed=0)
 
 def marginal_h2(bh, n):
@@ -94,7 +94,7 @@ for rep in range(REPS):
     h2_marg.append(r); t_margh2.append(dt)
     (r, dt) = timed(lambda: ldsc_h2(N1 * bh1 ** 2, ell, N1, n_blocks=80))
     h2_ldsc.append(r.h2); t_ldsch2.append(dt)
-    (r, dt) = timed(lambda: ldpred2_auto_infer(dense, bh1, N1, n_chains=8,
+    (r, dt) = timed(lambda: ldpred3_auto_infer(dense, bh1, N1, n_chains=8,
                                                burn_in=120, num_iter=150, seed=rep))
     h2_inf.append(r.h2_est); t_inf.append(dt)
 
@@ -102,7 +102,7 @@ for rep in range(REPS):
     rg_marg.append(r); t_margrg.append(dt)
     (r, dt) = timed(lambda: ldsc_rg(bh1, bh2, ell, N1, N2, n_blocks=80))
     rg_ldsc.append(r.rg); t_ldscrg.append(dt)
-    (r, dt) = timed(lambda: ldpred2_auto_bivariate_blocks(
+    (r, dt) = timed(lambda: ldpred3_auto_bivariate_blocks(
         ref, bh1, bh2, N1, N2, burn_in=120, num_iter=150, seed=rep))
     rg_biv.append(r.rg); t_biv.append(dt)
 
@@ -119,8 +119,8 @@ print("-" * 62)
 print("heritability:")
 row("marginal (no LD)", h2_marg, t_margh2, H2)
 row("LDSC", h2_ldsc, t_ldsch2, H2)
-row("LDpred2-auto", h2_inf, t_inf, H2)
+row("LDpred3-auto", h2_inf, t_inf, H2)
 print("genetic correlation:")
 row("marginal (no LD)", rg_marg, t_margrg, RG)
 row("bivariate LDSC", rg_ldsc, t_ldscrg, RG)
-row("bivariate LDpred2", rg_biv, t_biv, RG)
+row("bivariate LDpred3", rg_biv, t_biv, RG)

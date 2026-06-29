@@ -1,4 +1,4 @@
-"""Generate a multi-page, publication-quality PDF of the key pyLDpred2 results.
+"""Generate a multi-page, publication-quality PDF of the key LDpred3 results.
 
 One command -> ``benchmarks/figures.pdf`` with:
 
@@ -35,12 +35,12 @@ from matplotlib.backends.backend_pdf import PdfPages
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-from pyldpred2.simulate import simulate_genotypes
-from pyldpred2.ld import compute_ld_blocks
-from pyldpred2.qc import dentist_outlier_mask
-from pyldpred2.infer import ldpred2_auto_infer
-from pyldpred2 import ldpred2_by_blocks, sparsify_ld, optimal_ld_blocks
-from pyldpred2._numba import HAVE_NUMBA
+from ldpred3.simulate import simulate_genotypes
+from ldpred3.ld import compute_ld_blocks
+from ldpred3.qc import dentist_outlier_mask
+from ldpred3.infer import ldpred3_auto_infer
+from ldpred3 import ldpred3_by_blocks, sparsify_ld, optimal_ld_blocks
+from ldpred3._numba import HAVE_NUMBA
 
 plt.rcParams.update({
     "figure.dpi": 110, "savefig.dpi": 200, "font.size": 11,
@@ -112,10 +112,10 @@ def data_dentist():
     def fit(blocks, bh, keep, gv, beta):
         n = np.full(M, float(N))
         if keep is None:
-            be = ldpred2_by_blocks(blocks, bh, n, method="auto", burn_in=80, num_iter=150, seed=0)
+            be = ldpred3_by_blocks(blocks, bh, n, method="auto", burn_in=80, num_iter=150, seed=0)
         else:
             sub, ki = subset(blocks, keep)
-            bes = ldpred2_by_blocks(sub, bh[ki], n[ki], method="auto", burn_in=80, num_iter=150, seed=0)
+            bes = ldpred3_by_blocks(sub, bh[ki], n[ki], method="auto", burn_in=80, num_iter=150, seed=0)
             be = np.zeros(M); be[ki] = bes
         return geneticr2(be, gv, beta)
 
@@ -136,7 +136,7 @@ def data_dentist():
 
 
 def data_inference():
-    """LDpred2-auto-infer recovery of h² and polygenicity p vs the truth.
+    """LDpred3-auto-infer recovery of h² and polygenicity p vs the truth.
 
     Sweeps the true value, runs multi-chain inference on a self-contained AR(1)
     panel, and records the posterior median + 95% CI. No validation cohort.
@@ -147,7 +147,7 @@ def data_inference():
         est, lo, hi = [], [], []
         for rep in range(REPS):
             blocks, _, _, bh, _, _ = simulate(NREF, [K] * NB, N, h2, 0.02, RHO, 200 + rep)
-            r = ldpred2_auto_infer(blocks, bh, np.full(M, float(N)),
+            r = ldpred3_auto_infer(blocks, bh, np.full(M, float(N)),
                                    n_chains=6, burn_in=150, num_iter=150, seed=rep)
             est.append(r.h2_est); lo.append(r.h2_ci[0]); hi.append(r.h2_ci[1])
         rows.append({"kind": "h2", "true": h2, "est": np.mean(est),
@@ -156,7 +156,7 @@ def data_inference():
         est, lo, hi = [], [], []
         for rep in range(REPS):
             blocks, _, _, bh, _, _ = simulate(NREF, [K] * NB, N, 0.5, p, RHO, 300 + rep)
-            r = ldpred2_auto_infer(blocks, bh, np.full(M, float(N)),
+            r = ldpred3_auto_infer(blocks, bh, np.full(M, float(N)),
                                    n_chains=6, burn_in=150, num_iter=150, seed=rep)
             est.append(r.p_est); lo.append(r.p_ci[0]); hi.append(r.p_ci[1])
         rows.append({"kind": "p", "true": p, "est": np.mean(est),
@@ -171,9 +171,9 @@ def data_sparse():
                ("band 25\n+shrink", 1e-4, 25, 0.9)]
     n = np.full(M, float(N))
     b0, gv0, be0, bh0, _, _ = simulate(NREF, [K] * NB, N, H2, P, RHO, 0)
-    ldpred2_by_blocks(b0, bh0, n, method="auto", global_hyper=False, burn_in=10, num_iter=10, seed=0)
+    ldpred3_by_blocks(b0, bh0, n, method="auto", global_hyper=False, burn_in=10, num_iter=10, seed=0)
     sp0 = [(sparsify_ld(R, threshold=1e-2), idx) for R, idx in b0]
-    ldpred2_by_blocks(sp0, bh0, n, method="auto", global_hyper=False, burn_in=10, num_iter=10, seed=0)
+    ldpred3_by_blocks(sp0, bh0, n, method="auto", global_hyper=False, burn_in=10, num_iter=10, seed=0)
     rows = []
     for label, thr, md, shr in configs:
         dens, tt, r2 = [], [], []
@@ -185,7 +185,7 @@ def data_sparse():
                 fb = [(sparsify_ld(R, threshold=thr, max_dist=md, shrink=shr), idx) for R, idx in blocks]
                 dens.append(sum(b.nnz for b, _ in fb) / float(M * K))
             t = time.time()
-            be = ldpred2_by_blocks(fb, bh, n, method="auto", global_hyper=False, burn_in=60, num_iter=120, seed=0)
+            be = ldpred3_by_blocks(fb, bh, n, method="auto", global_hyper=False, burn_in=60, num_iter=120, seed=0)
             tt.append(time.time() - t); r2.append(geneticr2(be, gv, beta))
         rows.append({"config": label, "density": np.mean(dens), "fit_s": np.mean(tt), "r2": np.mean(r2)})
     return rows
@@ -202,7 +202,7 @@ def data_splitting():
 
     def fit(R, bounds, bh, beta, n):
         blocks = [(R[s:e, s:e].astype(np.float32), np.arange(s, e)) for s, e in bounds]
-        be = ldpred2_by_blocks(blocks, bh, n, method="auto", global_hyper=False, burn_in=60, num_iter=120, seed=0)
+        be = ldpred3_by_blocks(blocks, bh, n, method="auto", global_hyper=False, burn_in=60, num_iter=120, seed=0)
         num = be @ (R @ beta); den = (be @ (R @ be)) * (beta @ (R @ beta))
         return float(num * num / den) if den > 0 else 0.0
 
@@ -228,9 +228,9 @@ def data_splitting():
 def data_numba():
     code = (
         "import time,numpy as np,sys;sys.path.insert(0,%r)\n"
-        "from pyldpred2.simulate import simulate_genotypes\n"
-        "from pyldpred2.ld import compute_ld_blocks\n"
-        "from pyldpred2 import ldpred2_by_blocks\n"
+        "from ldpred3.simulate import simulate_genotypes\n"
+        "from ldpred3.ld import compute_ld_blocks\n"
+        "from ldpred3 import ldpred3_by_blocks\n"
         "NB,K=10,200;M=NB*K;N=20000\n"
         "rng=np.random.default_rng(0);maf=rng.uniform(.05,.5,M)\n"
         "G,_=simulate_genotypes(5000,[K]*NB,maf,.8,rng);bl=compute_ld_blocks(G,block_size=K)\n"
@@ -239,8 +239,8 @@ def data_numba():
         "for R,ix in [(R.astype(float),idx) for R,idx in bl]:\n"
         " ch=np.linalg.cholesky(R+1e-6*np.eye(len(ix)));bh[ix]=R@beta[ix]+(ch@rng.standard_normal(len(ix)))/np.sqrt(N)\n"
         "n=np.full(M,float(N))\n"
-        "ldpred2_by_blocks(bl,bh,n,method='auto',burn_in=5,num_iter=5)\n"
-        "t=time.time();ldpred2_by_blocks(bl,bh,n,method='auto',burn_in=60,num_iter=150);print(time.time()-t)\n"
+        "ldpred3_by_blocks(bl,bh,n,method='auto',burn_in=5,num_iter=5)\n"
+        "t=time.time();ldpred3_by_blocks(bl,bh,n,method='auto',burn_in=60,num_iter=150);print(time.time()-t)\n"
     ) % os.path.dirname(HERE)
 
     def run(disable):
@@ -257,7 +257,7 @@ def data_numba():
 
 
 def data_cores():
-    from pyldpred2.ldpred2 import _gibbs_blocks
+    from ldpred3.ldpred3 import _gibbs_blocks
     NB, K, M, NREF, N, RHO = 40, 500, 20000, 2000, 50000, 0.8
     rng = np.random.default_rng(0); maf = rng.uniform(0.05, 0.5, M)
     G, _ = simulate_genotypes(NREF, [K] * NB, maf, RHO, rng)
@@ -304,14 +304,14 @@ def page_bigsnpr(pdf):
 
     fig, (ax_t, ax_m) = plt.subplots(1, 2, figsize=(11, 4.8))
     for me in ("inf", "grid", "auto"):
-        x, y = series("pyLDpred2", me, 0); ax_t.plot(x, y, "-o", color=MCOLOR[me], lw=2, ms=5, label=f"py {me}")
+        x, y = series("LDpred3", me, 0); ax_t.plot(x, y, "-o", color=MCOLOR[me], lw=2, ms=5, label=f"py {me}")
         x, y = series("bigsnpr", me, 0); ax_t.plot(x, y, "--s", color=MCOLOR[me], lw=1.5, ms=4, alpha=0.8, label=f"big {me}")
     ax_t.set(title="Running time, 1 core", xlabel="SNPs (millions)", ylabel="wall-clock (s)")
     ax_t.legend(fontsize=8, ncol=3)
-    x, y = series("pyLDpred2", "auto", 1); ax_m.plot(x, y, "-o", color="#1f77b4", lw=2, ms=6, label="pyLDpred2")
+    x, y = series("LDpred3", "auto", 1); ax_m.plot(x, y, "-o", color="#1f77b4", lw=2, ms=6, label="LDpred3")
     x, y = series("bigsnpr", "auto", 1); ax_m.plot(x, y, "-^", color="#2ca02c", lw=2, ms=6, label="bigsnpr")
     ax_m.set(title="Peak memory", xlabel="SNPs (millions)", ylabel="peak RSS (GB)"); ax_m.legend(fontsize=9)
-    fig.suptitle("pyLDpred2 vs bigsnpr — realistic LD (coalescent), N=100k, h²=0.5", fontsize=12)
+    fig.suptitle("LDpred3 vs bigsnpr — realistic LD (coalescent), N=100k, h²=0.5", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
 
@@ -365,7 +365,7 @@ def page_inference(pdf):
     a2.set(title="Polygenicity p recovery", xlabel="true p", ylabel="inferred p",
            xscale="log", yscale="log", xlim=plim, ylim=plim)
     a2.legend(fontsize=9, loc="upper left")
-    fig.suptitle("Inference evaluation (LDpred2-auto-infer, no validation cohort)",
+    fig.suptitle("Inference evaluation (LDpred3-auto-infer, no validation cohort)",
                  fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
@@ -466,6 +466,6 @@ if __name__ == "__main__":
         page_ld_repr(pdf)
         page_perf(pdf)
         meta = pdf.infodict()
-        meta["Title"] = "pyLDpred2 benchmark figures"
-        meta["Author"] = "pyLDpred2"
+        meta["Title"] = "LDpred3 benchmark figures"
+        meta["Author"] = "LDpred3"
     print(f"wrote {out} ({time.time()-t0:.0f}s)")

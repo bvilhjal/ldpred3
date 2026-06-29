@@ -9,7 +9,7 @@ estimated from a finite reference panel). `inf` is given the true h2 (oracle);
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_by_blocks
+from ldpred3 import ldpred3_by_blocks
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K, NB = 500, 16
@@ -59,8 +59,8 @@ def fit(method, bh, n, h2):
     if method == "marginal":
         return bh
     if method == "inf":
-        return ldpred2_by_blocks(ref, bh, np.full(M, float(n)), method="inf", h2=h2)
-    return ldpred2_by_blocks(ref, bh, np.full(M, float(n)), method="auto",
+        return ldpred3_by_blocks(ref, bh, np.full(M, float(n)), method="inf", h2=h2)
+    return ldpred3_by_blocks(ref, bh, np.full(M, float(n)), method="auto",
                              burn_in=120, num_iter=150, seed=0)
 
 

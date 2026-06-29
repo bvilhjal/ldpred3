@@ -28,7 +28,7 @@ Wall-clock time (s), single core:
 
 Peak memory (GB) — LD-dominated, so ~equal across the three methods:
 
-| #SNPs | pyLDpred2 | bigsnpr |
+| #SNPs | LDpred3 | bigsnpr |
 |-------|----------:|--------:|
 | 200k  | **0.73** | 1.06 |
 | 500k  | **1.33** | 2.24 |
@@ -40,28 +40,28 @@ Peak memory (GB) — LD-dominated, so ~equal across the three methods:
 
 The picture is method-dependent — there is no blanket "N× faster":
 
-- **Memory:** pyLDpred2 is **~2× leaner** everywhere (`float32` LD + one block
+- **Memory:** LDpred3 is **~2× leaner** everywhere (`float32` LD + one block
   resident; bigsnpr's SFBM stores `float64` values plus per-entry indices).
-- **`-auto`:** pyLDpred2 is **~1.1–1.4× faster** — its streaming global-hyper
+- **`-auto`:** LDpred3 is **~1.1–1.4× faster** — its streaming global-hyper
   sampler is the strongest path.
-- **`-inf`:** roughly on par — pyLDpred2 faster up to 1M, bigsnpr slightly faster
+- **`-inf`:** roughly on par — LDpred3 faster up to 1M, bigsnpr slightly faster
   at 2M.
 - **`-grid`:** **bigsnpr is ~2× faster** here; its compiled C++ grid sampler
-  beats pyLDpred2's per-block Python-orchestrated one. This is pyLDpred2's weak
+  beats LDpred3's per-block Python-orchestrated one. This is LDpred3's weak
   spot at fixed hyper-parameters.
 
 ## End-to-end pipeline vs bigsnpr
 
 Beyond the per-block accuracy check above, the **whole pipeline** was validated
 against bigsnpr: the same simulated PLINK target + GWAS sumstats + in-sample LD
-were run through pyLDpred2's complete pipeline (QC → harmonise → per-block LD →
-`-auto` → scoring) and through bigsnpr's `snp_ldpred2_auto`, and the
+were run through LDpred3's complete pipeline (QC → harmonise → per-block LD →
+`-auto` → scoring) and through bigsnpr's `snp_ldpred3_auto`, and the
 per-individual polygenic scores compared.
 
 | metric | result |
 |--------|--------|
-| PRS correlation (pyLDpred2 vs bigsnpr) | **r = 0.9995** |
-| R² vs true genetic value | 0.567 (pyLDpred2) / 0.575 (bigsnpr) |
+| PRS correlation (LDpred3 vs bigsnpr) | **r = 0.9995** |
+| R² vs true genetic value | 0.567 (LDpred3) / 0.575 (bigsnpr) |
 
 So the pipeline glue — allele harmonisation, QC, LD construction and scoring —
 reproduces bigsnpr's polygenic scores essentially exactly. (Validation against a
@@ -70,7 +70,7 @@ real-data quirks the simulation can't, but needs multi-GB inputs.)
 
 ## Methods by genetic architecture (realistic LD)
 
-How do the LDpred2 variants compare across genetic architectures? The genome is
+How do the LDpred3 variants compare across genetic architectures? The genome is
 100 distinct coalescent/msprime LD blocks of 500 SNPs (m=50,000, h²=0.5); for
 each architecture we simulate true effects, generate summary statistics, fit
 every method, and measure the **genetic R²** — the squared correlation between
@@ -171,10 +171,10 @@ default cheap; without it `annot` was ~3× `auto` instead of ~1.9×.)
 
 ## Genotype-level simulation
 
-`pyldpred2/simulate.py` is a full end-to-end simulation: it generates genotypes with
+`ldpred3/simulate.py` is a full end-to-end simulation: it generates genotypes with
 block LD, simulates a phenotype under a chosen heritability and polygenicity,
 runs a marginal GWAS, estimates the LD matrix from the training sample, fits
-LDpred2, and reports **out-of-sample** prediction R² on a held-out test set. It
+LDpred3, and reports **out-of-sample** prediction R² on a held-out test set. It
 sweeps a grid of polygenicity × heritability × sample size.
 
 To stay within memory at scale, genotypes are stored as `int8` dosages and
@@ -192,15 +192,15 @@ so a full float genotype matrix is never materialised.
   hotspots, a heavy LD decay tail and sporadic long-range LD — the structure of
   real reference panels (mean r² stays ~0.02 at 200 SNPs apart, vs ~0 for AR(1)).
 
-LDpred2's advantage over the raw marginal PRS is *larger* under realistic LD
+LDpred3's advantage over the raw marginal PRS is *larger* under realistic LD
 (e.g. h²=0.5, p=0.01: marginal 0.21 → grid/auto 0.43 with coalescent LD, vs
 0.32 → 0.50 with AR(1)), because realistic long-range LD inflates the naive
-score that LDpred2's LD-adjustment removes.
+score that LDpred3's LD-adjustment removes.
 
 ```bash
-python -m pyldpred2.simulate --quick                        # fast (AR(1))
-python -m pyldpred2.simulate --quick --ld-model coalescent  # realistic LD (needs msprime)
-python -m pyldpred2.simulate --csv sim.csv                  # full accuracy grid, save results
+python -m ldpred3.simulate --quick                        # fast (AR(1))
+python -m ldpred3.simulate --quick --ld-model coalescent  # realistic LD (needs msprime)
+python -m ldpred3.simulate --csv sim.csv                  # full accuracy grid, save results
 ```
 
 Representative results (m=10000 SNPs, blocks of 200, AR(1) LD; prediction R² vs
@@ -213,7 +213,7 @@ phenotype):
 | 20000 | 0.5 | 0.1   | 0.245 | 0.265 | 0.417 | 0.417 | 0.512 |
 | 20000 | 0.3 | 0.01  | 0.135 | 0.139 | 0.301 | 0.300 | 0.311 |
 
-LDpred2 always beats the raw marginal baseline; accuracy rises with heritability
+LDpred3 always beats the raw marginal baseline; accuracy rises with heritability
 and sample size; `grid`/`auto` approach the ceiling for sparse architectures and
 remain best across the grid. The infinitesimal model only modestly beats the
 marginal score — its all-causal prior leaves accuracy on the table whenever the
@@ -221,7 +221,7 @@ trait is even mildly sparse.
 
 ## Scaling: what the algorithm actually depends on
 
-The LDpred2 *algorithm* works from summary statistics + the LD matrix, so its
+The LDpred3 *algorithm* works from summary statistics + the LD matrix, so its
 cost is **independent of the GWAS sample size N** and is driven instead by the
 **LD structure (block size)**. The benchmarks below separate the algorithm's
 `fit` time from the simulation/GWAS/LD-construction `prep` time (which does scale
@@ -268,7 +268,7 @@ motivates the banded / sparse-LD backend (see [algorithm.md](algorithm.md)).
 ## Robustness: LD reference quality & sample size
 
 How sensitive is the PRS to two things you don't control perfectly in practice —
-the LD reference panel and the GWAS sample size? Both fit LDpred2-`auto` on
+the LD reference panel and the GWAS sample size? Both fit LDpred3-`auto` on
 summary statistics generated from the true coalescent LD (m=6000, h²=0.5,
 p=0.01, N=50000) and report the held-out **genetic R²** and the fitted genetic
 variance (an h² proxy). Regenerate with `benchmarks/robustness_ld_and_n.py`.
@@ -302,7 +302,7 @@ the largest matched-ancestry panel you can.
 | 1.15 | 0.958 | 0.574 |
 | 1.30 | 0.951 | 0.586 |
 
-LDpred2-`auto` is **fairly robust to N**: ±30% changes R² by only ~±1.5% and
+LDpred3-`auto` is **fairly robust to N**: ±30% changes R² by only ~±1.5% and
 moves the h² proxy roughly in proportion to `N_used`. There is even a mild twist
 — slightly *under*-stating `N` (0.70–0.85) predicts a touch **better** here,
 because the extra shrinkage offsets the over-fit that noisy reference LD induces.
@@ -371,7 +371,7 @@ Does the optional DENTIST filter (`--dentist`) actually recover accuracy when th
 sumstats contain LD-inconsistent errors, and what does it cost on clean data?
 This plants spurious genome-wide-significant hits at **non-causal** variants (an
 allele/strand error that inflates a null variant's z out of line with its LD
-neighbours), fits LDpred2-`auto` with and without the filter, and reports genetic
+neighbours), fits LDpred3-`auto` with and without the filter, and reports genetic
 R². AR(1) LD, m=4000 (20×200 blocks), Nref=10k, N=10k, h²=0.5, p=0.05, 5 reps.
 Regenerate with `benchmarks/dentist_recovery.py`.
 
@@ -437,7 +437,7 @@ where the LD is already weak rather than through the middle of a haplotype block
 
 ## Numba JIT speed-up
 
-The Gibbs sampler's inner sweep dominates runtime; `pyldpred2` JIT-compiles it
+The Gibbs sampler's inner sweep dominates runtime; `ldpred3` JIT-compiles it
 with Numba and otherwise runs the *identical* pure-Python code. Same auto fit
 (m=2000, burn-in 60 / 150 sampling sweeps), with and without JIT (the script
 toggles `NUMBA_DISABLE_JIT` in a subprocess). Regenerate with

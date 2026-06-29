@@ -6,9 +6,9 @@ import sys
 import numpy as np
 
 
-from pyldpred2.sumstats import read_sumstats                      # noqa: E402
-from pyldpred2.harmonize import harmonize, _complement, _is_palindromic   # noqa: E402
-from pyldpred2.genotype_io import VariantTable                    # noqa: E402
+from ldpred3.sumstats import read_sumstats                      # noqa: E402
+from ldpred3.harmonize import harmonize, _complement, _is_palindromic   # noqa: E402
+from ldpred3.genotype_io import VariantTable                    # noqa: E402
 
 
 def _write(tmp_path, text, name="ss.txt"):

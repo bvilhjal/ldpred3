@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from pyldpred2 import (ldpred2_auto_annot, ldpred2_auto_annot_blocks,
-                       ldpred2_auto)
-from pyldpred2.annot import _Phi, _Phi_inv, _truncnorm
-from pyldpred2.prs import standardize_dosage
+from ldpred3 import (ldpred3_auto_annot, ldpred3_auto_annot_blocks,
+                       ldpred3_auto)
+from ldpred3.annot import _Phi, _Phi_inv, _truncnorm
+from ldpred3.prs import standardize_dosage
 
 
 # --------------------------------------------------------------------------- #
@@ -52,7 +52,7 @@ def test_learns_enrichment_and_ignores_noise(learn):
     tf = tn = 0.0
     for seed in range(4):
         R, bhat, N, A, _, _ = _data(seed)
-        res = ldpred2_auto_annot(R, bhat, N, A, learn=learn, burn_in=80,
+        res = ldpred3_auto_annot(R, bhat, N, A, learn=learn, burn_in=80,
                                  num_iter=200, seed=1,
                                  annotation_names=["func", "noise"])
         tf += res.enrichment["func"]; tn += res.enrichment["noise"]
@@ -65,8 +65,8 @@ def test_annot_predicts_at_least_as_well_as_uniform():
     r_uni = r_ann = 0.0
     for seed in range(4):
         R, bhat, N, A, ZB, yte = _data(seed)
-        b_uni = ldpred2_auto(R, bhat, N, burn_in=80, num_iter=200, seed=1).beta_est
-        b_ann = ldpred2_auto_annot(R, bhat, N, A, learn="eb", burn_in=80,
+        b_uni = ldpred3_auto(R, bhat, N, burn_in=80, num_iter=200, seed=1).beta_est
+        b_ann = ldpred3_auto_annot(R, bhat, N, A, learn="eb", burn_in=80,
                                    num_iter=200, seed=1).beta_est
         r_uni += np.corrcoef(ZB @ b_uni, yte)[0, 1] ** 2
         r_ann += np.corrcoef(ZB @ b_ann, yte)[0, 1] ** 2
@@ -84,7 +84,7 @@ def test_continuous_annotation_recovered():
     beta = np.zeros(m)
     beta[causal] = rng.normal(0, 0.3, causal.sum())
     bhat = R @ beta + rng.standard_normal(m) / np.sqrt(8000)
-    res = ldpred2_auto_annot(R, bhat, 8000, a, learn="eb", burn_in=80,
+    res = ldpred3_auto_annot(R, bhat, 8000, a, learn="eb", burn_in=80,
                              num_iter=200, seed=1, annotation_names=["score"])
     assert res.enrichment["score"] > 0.2
 
@@ -105,7 +105,7 @@ def test_learn_variance_recovers_effect_size_map():
         beta *= np.sqrt(h2 / (beta @ (R @ beta)))
         y = Z @ beta + rng.normal(0, np.sqrt(0.5), N)
         bhat = (Z.T @ y) / N
-        res = ldpred2_auto_annot(R, bhat, N, func[:, None], learn="eb",
+        res = ldpred3_auto_annot(R, bhat, N, func[:, None], learn="eb",
                                  learn_variance=True, burn_in=80, num_iter=200,
                                  seed=1, annotation_names=["func"])
         assert res.phi is not None
@@ -115,7 +115,7 @@ def test_learn_variance_recovers_effect_size_map():
 
 def test_variance_off_gives_no_phi():
     R, bhat, N, A, _, _ = _data(0)
-    res = ldpred2_auto_annot(R, bhat, N, A, learn_variance=False, burn_in=40,
+    res = ldpred3_auto_annot(R, bhat, N, A, learn_variance=False, burn_in=40,
                              num_iter=80, seed=1)
     assert res.phi is None and res.variance_enrichment is None
 
@@ -124,7 +124,7 @@ def test_intercept_only_runs_like_uniform():
     # No informative annotation (a constant column) -> still produces sane betas.
     R, bhat, N, A, ZB, yte = _data(0)
     const = np.zeros((bhat.shape[0], 1))          # uninformative constant
-    res = ldpred2_auto_annot(R, bhat, N, const, learn="eb", burn_in=60,
+    res = ldpred3_auto_annot(R, bhat, N, const, learn="eb", burn_in=60,
                              num_iter=150, seed=1)
     assert np.all(np.isfinite(res.beta_est))
     assert res.theta.shape == (2,)               # intercept + the constant col
@@ -135,9 +135,9 @@ def test_intercept_only_runs_like_uniform():
 # --------------------------------------------------------------------------- #
 def test_deterministic_with_seed():
     R, bhat, N, A, _, _ = _data(1)
-    a = ldpred2_auto_annot(R, bhat, N, A, learn="probit", burn_in=40,
+    a = ldpred3_auto_annot(R, bhat, N, A, learn="probit", burn_in=40,
                            num_iter=80, seed=7)
-    b = ldpred2_auto_annot(R, bhat, N, A, learn="probit", burn_in=40,
+    b = ldpred3_auto_annot(R, bhat, N, A, learn="probit", burn_in=40,
                            num_iter=80, seed=7)
     np.testing.assert_array_equal(a.beta_est, b.beta_est)
     np.testing.assert_array_equal(a.theta, b.theta)
@@ -146,7 +146,7 @@ def test_deterministic_with_seed():
 def test_1d_annotation_and_names_and_repr():
     R, bhat, N, A, _, _ = _data(0)
     a1 = A[:, 0]                                   # 1-D annotation
-    res = ldpred2_auto_annot(R, bhat, N, a1, learn="eb", burn_in=40,
+    res = ldpred3_auto_annot(R, bhat, N, a1, learn="eb", burn_in=40,
                              num_iter=80, seed=1, annotation_names=["coding"])
     assert res.annotation_names == ["intercept", "coding"]
     assert set(res.enrichment) == {"coding"}
@@ -156,7 +156,7 @@ def test_1d_annotation_and_names_and_repr():
 def test_supplied_intercept_not_duplicated():
     R, bhat, N, A, _, _ = _data(0)
     A_ic = np.column_stack([np.ones(bhat.shape[0]), A])   # already has intercept
-    res = ldpred2_auto_annot(R, bhat, N, A_ic, learn="eb", burn_in=40,
+    res = ldpred3_auto_annot(R, bhat, N, A_ic, learn="eb", burn_in=40,
                              num_iter=80, seed=1)
     assert res.theta.shape == (3,)               # intercept + 2 annotations
 
@@ -168,18 +168,18 @@ def test_validation_errors():
     R, bhat, N, A, _, _ = _data(0)
     m = bhat.shape[0]
     with pytest.raises(ValueError, match="learn"):
-        ldpred2_auto_annot(R, bhat, N, A, learn="nope")
+        ldpred3_auto_annot(R, bhat, N, A, learn="nope")
     with pytest.raises(ValueError, match="annotation_names"):
-        ldpred2_auto_annot(R, bhat, N, A, annotation_names=["only_one"])
+        ldpred3_auto_annot(R, bhat, N, A, annotation_names=["only_one"])
     with pytest.raises(ValueError, match="one row per variant"):
-        ldpred2_auto_annot(R, bhat, N, A[:m - 1])
+        ldpred3_auto_annot(R, bhat, N, A[:m - 1])
     with pytest.raises(ValueError, match="finite"):
         bad = A.copy(); bad[0, 0] = np.nan
-        ldpred2_auto_annot(R, bhat, N, bad)
+        ldpred3_auto_annot(R, bhat, N, bad)
     with pytest.raises(ValueError, match="theta_every"):
-        ldpred2_auto_annot(R, bhat, N, A, theta_every=0)
+        ldpred3_auto_annot(R, bhat, N, A, theta_every=0)
     with pytest.raises(ValueError, match="p_init"):
-        ldpred2_auto_annot(R, bhat, N, A, p_init=1.5)
+        ldpred3_auto_annot(R, bhat, N, A, p_init=1.5)
 
 
 def test_streaming_matches_dense_on_block_diagonal():
@@ -205,9 +205,9 @@ def test_streaming_matches_dense_on_block_diagonal():
     y = Z @ beta + rng.normal(0, np.sqrt(0.5), N)
     bhat = (Z.T @ y) / N
     A = func[:, None]
-    d = ldpred2_auto_annot(Rfull, bhat, N, A, learn="eb", burn_in=60,
+    d = ldpred3_auto_annot(Rfull, bhat, N, A, learn="eb", burn_in=60,
                            num_iter=150, seed=1, annotation_names=["func"])
-    s = ldpred2_auto_annot_blocks(blocks, bhat, N, A, learn="eb", burn_in=60,
+    s = ldpred3_auto_annot_blocks(blocks, bhat, N, A, learn="eb", burn_in=60,
                                   num_iter=150, seed=1, annotation_names=["func"])
     assert np.corrcoef(d.beta_est, s.beta_est)[0, 1] > 0.99
     assert abs(d.enrichment["func"] - s.enrichment["func"]) < 0.3
@@ -218,11 +218,11 @@ def test_streaming_rejects_bad_blocks():
     R = (0.5 ** np.abs(np.subtract.outer(np.arange(50), np.arange(50)))).astype(np.float32)
     blocks = [(R, np.arange(50))]
     with pytest.raises(ValueError, match="tile"):           # only covers 0..49
-        ldpred2_auto_annot_blocks(blocks, np.zeros(60), 5000, np.ones((60, 1)))
+        ldpred3_auto_annot_blocks(blocks, np.zeros(60), 5000, np.ones((60, 1)))
 
 
 def test_read_annotations_aligns_by_id(tmp_path):
-    from pyldpred2.annot import read_annotations
+    from ldpred3.annot import read_annotations
     p = tmp_path / "annot.tsv"
     p.write_text("SNP\tcoding\tconserved\n"
                  "rs1\t1\t0.5\n"
@@ -234,11 +234,11 @@ def test_read_annotations_aligns_by_id(tmp_path):
 
 
 def test_sparse_ld_rejected():
-    from pyldpred2 import sparsify_ld
+    from ldpred3 import sparsify_ld
     R = 0.5 ** np.abs(np.subtract.outer(np.arange(40), np.arange(40)))
     ld = sparsify_ld(R)
     with pytest.raises(NotImplementedError):
-        ldpred2_auto_annot(ld, np.zeros(40), 5000, np.ones((40, 1)))
+        ldpred3_auto_annot(ld, np.zeros(40), 5000, np.ones((40, 1)))
 
 
 # --------------------------------------------------------------------------- #

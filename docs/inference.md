@@ -1,8 +1,8 @@
-# Inferring h², polygenicity and predictive r² (LDpred2-auto)
+# Inferring h², polygenicity and predictive r² (LDpred3-auto)
 
-`ldpred2_auto_infer` implements the inference machinery of
+`ldpred3_auto_infer` implements the inference machinery of
 [Privé et al. (*AJHG* 2023)](https://doi.org/10.1016/j.ajhg.2023.10.010): it
-runs many LDpred2-auto chains from log-spaced `p_init`, drops chains that failed
+runs many LDpred3-auto chains from log-spaced `p_init`, drops chains that failed
 to converge (keeping those whose fitted effects `R·β̂` vary enough), and pools
 the post-burn-in samples to estimate — with credible intervals and **no
 validation set** —
@@ -15,8 +15,8 @@ validation set** —
   uncorrelated and `r² ≈ 0`.
 
 ```python
-from pyldpred2 import ldpred2_auto_infer
-res = ldpred2_auto_infer(corr, beta_hat, n_eff, n_chains=10)
+from ldpred3 import ldpred3_auto_infer
+res = ldpred3_auto_infer(corr, beta_hat, n_eff, n_chains=10)
 res.h2_est, res.h2_ci      # heritability + 95% CI
 res.p_est,  res.p_ci       # polygenicity + 95% CI
 res.r2_est, res.r2_ci      # predicted out-of-sample r² + 95% CI
@@ -34,12 +34,12 @@ The end-to-end pipeline can run inference directly on the fitted LD with
 `infer=True` (CLI `--infer`), reporting h²/p/r² alongside the scores:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink chr1 --infer --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --plink chr1 --infer --out prs.txt
 # ... inferred h2=0.41 (0.39, 0.43)  p=0.012 (...)  predictive r2=0.18 (...)
 ```
 
 ```python
-res = run_ldpred2_prs("gwas.txt.gz", "chr1", method="auto", infer=True)
+res = run_ldpred3_prs("gwas.txt.gz", "chr1", method="auto", infer=True)
 res.inference   # {"h2_est", "h2_ci", "p_est", "p_ci", "r2_est", "r2_ci", ...}
 ```
 
@@ -76,13 +76,13 @@ remain well-estimated there.
 ## Cross-check: LD Score regression
 
 The h² estimate has an independent external check — **LD Score regression**
-(LDSC; Bulik-Sullivan et al. 2015), implemented here in `pyldpred2.ldsc`. LDSC
+(LDSC; Bulik-Sullivan et al. 2015), implemented here in `ldpred3.ldsc`. LDSC
 fits `E[χ²_j] = intercept + (N·h²/M)·ℓ_j` where `ℓ_j = Σ_k r²_jk` is the variant's
 LD score, recovering h² from the slope (the intercept measures confounding and
 should be ~1):
 
 ```python
-from pyldpred2 import ld_scores, ldsc_h2
+from ldpred3 import ld_scores, ldsc_h2
 ell = ld_scores(blocks)                       # per-block LD matrices -> LD scores
 res = ldsc_h2(n_eff * beta_hat**2, ell, n_eff)   # chi2 = (beta_hat/se)^2
 res.h2, res.h2_se, res.intercept              # h2 (+jackknife SE) and confounding
@@ -94,7 +94,7 @@ are fitted with an LD matrix/scores estimated from a finite **reference panel**
 (`Nref=2000`) — the mismatch that dominates real-world error. On coalescent LD
 (m=6000, N=50000, 5 reps), against the known true h²:
 
-| architecture | h²_true | LDSC | LDpred2-auto |
+| architecture | h²_true | LDSC | LDpred3-auto |
 |--------------|--------:|-----:|-------------:|
 | infinitesimal | 0.20 | 0.215 ± 0.020 | 0.218 ± 0.002 |
 | infinitesimal | 0.50 | 0.541 ± 0.047 | 0.554 ± 0.001 |
@@ -108,7 +108,7 @@ are fitted with an LD matrix/scores estimated from a finite **reference panel**
   are essentially unbiased, so the bias is an LD-quality effect, not a flaw in
   either estimator. (LDSC is *more* biased under sparsity, 0.61 at sparse h²=0.5,
   where its infinitesimal `E[χ²]` assumption is most stressed.)
-- **LDpred2-auto is much more precise** (often ~10× smaller SD): it uses the full
+- **LDpred3-auto is much more precise** (often ~10× smaller SD): it uses the full
   LD likelihood, whereas LDSC is a two-parameter moment regression that discards
   most of the information. The trade-off is that its tiny SD makes the LD-mismatch
   bias the dominant error — so treat the point estimate as having a systematic
@@ -116,15 +116,15 @@ are fitted with an LD matrix/scores estimated from a finite **reference panel**
   across-method agreement help diagnose.
 
 LDSC's value is its **robustness and speed** (a moment regression, no sampling)
-and its intercept as a confounding diagnostic; LDpred2-auto's is **efficiency**.
+and its intercept as a confounding diagnostic; LDpred3-auto's is **efficiency**.
 Regenerate with `benchmarks/compare_ldsc_infer.py`.
 
 The same holds for the **genetic correlation** between two traits: `ldsc_rg`
 (cross-trait LD Score regression, `E[z₁z₂] = intercept + (√(N₁N₂)·ρ_g/M)·ℓ`)
-cross-checks the `r_g` from `ldpred2_auto_bivariate`. Under the same realistic
+cross-checks the `r_g` from `ldpred3_auto_bivariate`. Under the same realistic
 reference-panel LD both are roughly unbiased and the bivariate sampler is ~2×
-more precise (at true r_g=0.9, LDSC 0.86 ± 0.07 vs bivariate LDpred2 0.90 ± 0.04).
-See [algorithm.md](algorithm.md#bivariate-two-trait-ldpred2) and
+more precise (at true r_g=0.9, LDSC 0.86 ± 0.07 vs bivariate LDpred3 0.90 ± 0.04).
+See [algorithm.md](algorithm.md#bivariate-two-trait-ldpred3) and
 `benchmarks/compare_bivariate_rg.py`.
 
 ## Accuracy vs running time
@@ -136,10 +136,10 @@ N₁=50000, N₂=20000, 5 reps; Numba warmed up). `benchmarks/inference_benchmar
 |----------|--------|-----------------:|-----------:|
 | h² = 0.50 | marginal — no LD | 9.60 ± 1.01 | **0.0001 s** |
 | h² = 0.50 | LDSC (`ldsc_h2`) | 0.65 ± 0.16 | 0.03 s |
-| h² = 0.50 | LDpred2-auto (`ldpred2_auto_infer`) | 0.54 ± 0.01 | 4.8 s |
+| h² = 0.50 | LDpred3-auto (`ldpred3_auto_infer`) | 0.54 ± 0.01 | 4.8 s |
 | r_g = 0.60 | marginal — no LD | 0.62 ± 0.10 | **0.0001 s** |
 | r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.57 ± 0.17 | 0.07 s |
-| r_g = 0.60 | bivariate LDpred2 (`ldpred2_auto_bivariate`) | 0.63 ± 0.08 | 0.4 s |
+| r_g = 0.60 | bivariate LDpred3 (`ldpred3_auto_bivariate`) | 0.63 ± 0.08 | 0.4 s |
 
 ("marginal — no LD" is the naive moment estimator that assumes SNPs are
 independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially free.)
@@ -147,25 +147,25 @@ independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially
 - **For h², the LD adjustment is the whole game.** The no-LD estimate is ~19×
   too large (9.6 vs 0.5) because LD makes every causal variant's signal show up
   in its correlated neighbours, which the naive sum double-counts. LDSC (the LD
-  scores) removes this for ~0.03 s; LDpred2-auto refines the point estimate
+  scores) removes this for ~0.03 s; LDpred3-auto refines the point estimate
   further at a real time cost.
 - **For r_g, LD matters far less.** The no-LD estimate (0.62 ± 0.10) is already
   good — even tighter than LDSC — because LD inflates the cross-covariance and
   both heritabilities *proportionally* and largely cancels in the ratio. So a
   fast marginal r_g is a reasonable first pass, where a marginal h² is useless.
-- **The LDpred2 estimators are the most precise** (≈5–15× smaller SD than LDSC)
+- **The LDpred3 estimators are the most precise** (≈5–15× smaller SD than LDSC)
   at a time cost: in this timing both run many MCMC chains, so they are slower
   than the moment regressions. (The h² timing above used the dense path; passing
-  per-block LD makes `ldpred2_auto_infer` **stream** like the bivariate sampler,
+  per-block LD makes `ldpred3_auto_infer` **stream** like the bivariate sampler,
   removing the dense `O(m²)` cost at genome scale.)
 
 Use a marginal pass for a quick `r_g` sanity check, LDSC for a fast LD-correct h²
-and the confounding intercept, and the LDpred2 estimators when precision matters
+and the confounding intercept, and the LDpred3 estimators when precision matters
 (reading their point estimates with the LD-mismatch bias in mind).
 
 ### Dense vs streaming inference
 
-`ldpred2_auto_infer` accepts either a dense LD matrix or per-block `(R, idx)`.
+`ldpred3_auto_infer` accepts either a dense LD matrix or per-block `(R, idx)`.
 The dense path is `O(m²)` per sweep; the streaming (blocks) path is
 `O(m · block_size)`, so the gap widens with `m`. Same data, 6 chains, single core
 (`benchmarks/infer_scaling.py`):
@@ -191,28 +191,28 @@ over 40 replicates, under clean LD and under reference-panel LD
 
 | 95% interval (truth) | clean LD | reference-panel LD |
 |----------------------|---------:|-------------------:|
-| LDpred2-auto h² (0.50) | 0.97 | **0.00** |
-| LDpred2-auto p (0.01) | 0.82 | **0.00** |
+| LDpred3-auto h² (0.50) | 0.97 | **0.00** |
+| LDpred3-auto p (0.01) | 0.82 | **0.00** |
 | LDSC h² (0.50) | 0.90 | 0.93 |
 | LDSC r_g (0.50) | 0.70 | 0.72 |
 
-The headline is a real caution: **`ldpred2_auto_infer`'s intervals are
+The headline is a real caution: **`ldpred3_auto_infer`'s intervals are
 well-calibrated only when the LD matches.** Under a realistic reference panel its
 coverage collapses to 0 — the LD-mismatch *bias* (≈0.04 for h²) dwarfs the
 posterior SE (≈0.01), so the tight interval never reaches the truth. Treat the
-LDpred2-auto interval as **precision, not accuracy**: it captures Monte-Carlo /
+LDpred3-auto interval as **precision, not accuracy**: it captures Monte-Carlo /
 sampling uncertainty but not the systematic error set by the LD reference.
 **LDSC's wider intervals stay honest** for h² (~0.9 in both conditions) because
 they absorb that bias; its `r_g` interval under-covers somewhat (~0.7), so widen
 it in practice. The robust uncertainty signal is **cross-method agreement** (and
-the LDSC intercept), not the LDpred2 interval width.
+the LDSC intercept), not the LDpred3 interval width.
 
 ## Sample overlap
 
 Overlapping GWAS samples correlate the two traits' sampling noise, which inflates
 a naive genetic correlation even when the traits are genetically independent.
 Both estimators have a correction — LDSC a free cross-trait *intercept*,
-`ldpred2_auto_bivariate` a `cross_corr` parameter — and both work
+`ldpred3_auto_bivariate` a `cross_corr` parameter — and both work
 (`benchmarks/sample_overlap.py`, noise correlation ρ_e=0.5, N=10000, h²=0.3):
 
 | true r_g | LDSC, intercept=0 | LDSC, free intercept | bivariate, cross_corr=0 | bivariate, cross_corr=ρ_e |

@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 
-from pyldpred2.genotype_io import VariantTable, SampleTable, write_plink, read_plink  # noqa: E402
-from pyldpred2.bgen_io import read_bgen, write_bgen                                    # noqa: E402
+from ldpred3.genotype_io import VariantTable, SampleTable, write_plink, read_plink  # noqa: E402
+from ldpred3.bgen_io import read_bgen, write_bgen                                    # noqa: E402
 
 
 def _tables(n_samples, n_variants):

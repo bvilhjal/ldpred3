@@ -1,8 +1,8 @@
 """
-LDpred2-auto inference of heritability, polygenicity and predictive r²
+LDpred3-auto inference of heritability, polygenicity and predictive r²
 (Privé, Albiñana, Pasaniuc & Vilhjálmsson, *AJHG* 2023).
 
-LDpred2-auto estimates ``h2`` and ``p`` within its Gibbs sampler. Running many
+LDpred3-auto estimates ``h2`` and ``p`` within its Gibbs sampler. Running many
 chains from different ``p_init`` values, discarding chains that failed to
 converge, and pooling the post-burn-in samples gives robust point estimates
 with credible intervals — and, remarkably, an estimate of the PRS's
@@ -34,15 +34,15 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ldpred2 import (_gibbs_kernel_sample_jit, _gibbs_blocks_stream_sample,
+from .ldpred3 import (_gibbs_kernel_sample_jit, _gibbs_blocks_stream_sample,
                       _as_n_vector, _check_h2_p, SparseLD)
 
-__all__ = ["InferResult", "ldpred2_auto_infer"]
+__all__ = ["InferResult", "ldpred3_auto_infer"]
 
 
 @dataclass
 class InferResult:
-    """Output of :func:`ldpred2_auto_infer`.
+    """Output of :func:`ldpred3_auto_infer`.
 
     Each estimate has a 95% credible interval (the ``*_ci`` tuples).
     ``print(result)`` shows a compact summary.
@@ -74,7 +74,7 @@ def _is_blocks(corr):
 
 def _prep_corr(corr, shrink_corr):
     if isinstance(corr, SparseLD):
-        raise NotImplementedError("ldpred2_auto_infer needs a dense or blocks LD")
+        raise NotImplementedError("ldpred3_auto_infer needs a dense or blocks LD")
     corr = np.ascontiguousarray(corr, dtype=np.float32)
     if shrink_corr != 1.0:
         corr = corr * np.float32(shrink_corr)
@@ -132,13 +132,13 @@ def _chain_run(p_init_and_seed):
     return avg, h2p, pp, samp
 
 
-def ldpred2_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
+def ldpred3_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
                        p_init_range=(1e-4, 0.2), h2_init=0.1,
                        burn_in=200, num_iter=200, sample_every=5, ncores=1,
                        allow_jump_sign=True,
                        shrink_corr=1.0, h2_bounds=(1e-4, 1.0),
                        qc=True, qc_frac=0.95, qc_quantile=0.95, seed=None):
-    """Multi-chain LDpred2-auto with h²/p/r² inference.
+    """Multi-chain LDpred3-auto with h²/p/r² inference.
 
     Parameters
     ----------

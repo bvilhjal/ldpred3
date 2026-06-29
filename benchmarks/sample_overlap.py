@@ -7,7 +7,7 @@ corrections handle it:
 
   - bivariate LDSC: a free cross-trait *intercept* should absorb the overlap;
     constraining it to 0 should leave the bias.
-  - bivariate LDpred2: passing ``cross_corr=rho_e`` should remove the bias;
+  - bivariate LDpred3: passing ``cross_corr=rho_e`` should remove the bias;
     leaving ``cross_corr=0`` should not.
 
 Needs ``ld_library.npz`` in the cwd.
@@ -15,7 +15,7 @@ Needs ``ld_library.npz`` in the cwd.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ld_scores, ldsc_rg, ldpred2_auto_bivariate_blocks
+from ldpred3 import ld_scores, ldsc_rg, ldpred3_auto_bivariate_blocks
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K, NB = 500, 16
@@ -78,9 +78,9 @@ for rg in (0.0, 0.5):
         a.append(ldsc_rg(bh1, bh2, ell, N1, N2, n_blocks=80,
                          constrain_intercept=0.0).rg)
         b.append(ldsc_rg(bh1, bh2, ell, N1, N2, n_blocks=80).rg)
-        c.append(ldpred2_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=120,
+        c.append(ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=120,
                                                num_iter=150, cross_corr=0.0, seed=rep).rg)
-        d.append(ldpred2_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=120,
+        d.append(ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=120,
                                                num_iter=150, cross_corr=RHO_E, seed=rep).rg)
     print(f"{rg:>7.1f} | {np.mean(a):>14.3f} | {np.mean(b):>16.3f} | "
           f"{np.mean(c):>11.3f} | {np.mean(d):>12.3f}")

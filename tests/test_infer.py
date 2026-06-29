@@ -1,4 +1,4 @@
-"""Tests for LDpred2-auto inference of h2, polygenicity and predictive r2.
+"""Tests for LDpred3-auto inference of h2, polygenicity and predictive r2.
 
 The headline check simulates *independent* training and test cohorts and
 confirms that the r2 inferred from the training summary statistics alone
@@ -12,7 +12,7 @@ import sys
 import numpy as np
 
 
-from pyldpred2.infer import ldpred2_auto_infer       # noqa: E402
+from ldpred3.infer import ldpred3_auto_infer       # noqa: E402
 
 
 def _block_R(m, nblk, rng):
@@ -55,7 +55,7 @@ def _simulate_cohorts(m=600, nblk=6, h2=0.5, p=0.05, n_train=8000,
 def test_inferred_r2_matches_held_out_R2():
     R, beta_hat, n_train, Gte, yte = _simulate_cohorts(
         h2=0.5, p=0.05, n_train=8000, n_test=4000, seed=1)
-    res = ldpred2_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=150,
+    res = ldpred3_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=150,
                              num_iter=200, sample_every=5, seed=3)
 
     prs = Gte @ res.beta_est
@@ -73,7 +73,7 @@ def test_low_power_gives_low_r2():
     # r2 should be small and still track the held-out R2.
     R, beta_hat, n_train, Gte, yte = _simulate_cohorts(
         h2=0.2, p=0.2, n_train=1000, n_test=4000, seed=2)
-    res = ldpred2_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=150,
+    res = ldpred3_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=150,
                              num_iter=200, seed=3)
     prs = Gte @ res.beta_est
     held_out_r2 = np.corrcoef(prs, yte)[0, 1] ** 2
@@ -94,7 +94,7 @@ def test_infer_recovers_h2_and_p():
     L = np.linalg.cholesky(R + 1e-4 * np.eye(m))
     beta_hat = R @ beta + (L @ rng.standard_normal(m)) / np.sqrt(N)
 
-    res = ldpred2_auto_infer(R, beta_hat, N, n_chains=8, burn_in=150,
+    res = ldpred3_auto_infer(R, beta_hat, N, n_chains=8, burn_in=150,
                              num_iter=200, seed=4)
     assert abs(res.h2_est - true_h2) < 0.12
     # Polygenicity is recovered to within ~50% and its 95% CI covers the truth.
@@ -115,7 +115,7 @@ def test_polygenicity_tracks_truth_across_scales():
         beta[causal] = rng.normal(0, np.sqrt(h2 / causal.sum()), causal.sum())
         L = np.linalg.cholesky(R + 1e-4 * np.eye(m))
         beta_hat = R @ beta + (L @ rng.standard_normal(m)) / np.sqrt(N)
-        res = ldpred2_auto_infer(R, beta_hat, N, n_chains=10, burn_in=200,
+        res = ldpred3_auto_infer(R, beta_hat, N, n_chains=10, burn_in=200,
                                  num_iter=250, seed=7)
         assert 0.6 * true_p < res.p_est < 1.6 * true_p, (true_p, res.p_est)
 
@@ -129,9 +129,9 @@ def test_parallel_chains_match_serial(tmp_path):
     beta[c] = rng.normal(0, np.sqrt(0.5 / c.sum()), c.sum())
     L = np.linalg.cholesky(R + 1e-4 * np.eye(400))
     bhat = R @ beta + (L @ rng.standard_normal(400)) / np.sqrt(20000)
-    a = ldpred2_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
+    a = ldpred3_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
                            num_iter=100, seed=1, ncores=1)
-    b = ldpred2_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
+    b = ldpred3_auto_infer(R, bhat, 20000, n_chains=6, burn_in=80,
                            num_iter=100, seed=1, ncores=2)
     assert abs(a.h2_est - b.h2_est) < 1e-9
     assert abs(a.r2_est - b.r2_est) < 1e-9
@@ -140,7 +140,7 @@ def test_parallel_chains_match_serial(tmp_path):
 def test_allow_jump_sign_stabilises():
     # On near-singular LD with a fixed (over-large) h2, the sampler can diverge;
     # forbidding within-step sign flips keeps the effects bounded.
-    from pyldpred2 import ldpred2_grid
+    from ldpred3 import ldpred3_grid
     rng = np.random.default_rng(0)
     m = 150
     # Strong, near-collinear LD block (poorly conditioned).
@@ -148,9 +148,9 @@ def test_allow_jump_sign_stabilises():
     beta = np.zeros(m); beta[::25] = 0.4
     bhat = R @ beta + rng.standard_normal(m) / np.sqrt(2000)
 
-    free = ldpred2_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50, num_iter=150,
+    free = ldpred3_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50, num_iter=150,
                         seed=1, allow_jump_sign=True)
-    guarded = ldpred2_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50,
+    guarded = ldpred3_grid(R, bhat, 2000, h2=0.9, p=0.05, burn_in=50,
                            num_iter=150, seed=1, allow_jump_sign=False)
     # The guarded run stays finite and no larger than the unguarded one.
     assert np.all(np.isfinite(guarded))
@@ -161,7 +161,7 @@ def test_needs_two_chains():
     rng = np.random.default_rng(0)
     R = _block_R(200, 2, rng)
     try:
-        ldpred2_auto_infer(R, np.zeros(200), 20000, n_chains=1)
+        ldpred3_auto_infer(R, np.zeros(200), 20000, n_chains=1)
     except ValueError as e:
         assert "chain" in str(e)
     else:
@@ -181,9 +181,9 @@ def test_streaming_blocks_matches_dense():
     R, beta_hat, n_train, Gte, yte = _simulate_cohorts(
         h2=0.5, p=0.05, n_train=8000, seed=2)
     blocks = _split_blocks(R, 6)
-    dense = ldpred2_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=120,
+    dense = ldpred3_auto_infer(R, beta_hat, n_train, n_chains=8, burn_in=120,
                                num_iter=160, seed=5)
-    strm = ldpred2_auto_infer(blocks, beta_hat, n_train, n_chains=8, burn_in=120,
+    strm = ldpred3_auto_infer(blocks, beta_hat, n_train, n_chains=8, burn_in=120,
                               num_iter=160, seed=5)
     assert abs(dense.h2_est - strm.h2_est) < 0.07
     assert abs(dense.p_est - strm.p_est) < 0.05

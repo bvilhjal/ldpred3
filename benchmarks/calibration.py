@@ -13,7 +13,7 @@ intervals *under-cover* in the ``ref`` condition. Needs ``ld_library.npz``.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ld_scores, ldsc_h2, ldsc_rg, ldpred2_auto_infer
+from ldpred3 import ld_scores, ldsc_h2, ldsc_rg, ldpred3_auto_infer
 
 LIB = np.load("ld_library.npz"); libR = LIB["R"].astype(np.float64)
 K, NB = 500, 6
@@ -70,7 +70,7 @@ conds = {"clean": (pop, dense_of(pop), ld_scores(pop)),
          "ref": (ref, dense_of(ref), ld_scores(ref, n_ref=NREF))}
 
 # warm up the infer kernel
-_ = ldpred2_auto_infer(dense_of(ref), sumstats(make_beta(np.random.default_rng(9)), N1,
+_ = ldpred3_auto_infer(dense_of(ref), sumstats(make_beta(np.random.default_rng(9)), N1,
                        np.random.default_rng(9)), N1, n_chains=4, burn_in=30,
                        num_iter=30, seed=0)
 
@@ -81,7 +81,7 @@ for rep in range(REPS):
     beta = make_beta(rng); bh = sumstats(beta, N1, rng)
     b1, b2 = sim_pair(rng); bh1 = sumstats(b1, N1, rng); bh2 = sumstats(b2, N2, rng)
     for cname, (blocks, dense, ell) in conds.items():
-        ir = ldpred2_auto_infer(dense, bh, N1, n_chains=8, burn_in=100,
+        ir = ldpred3_auto_infer(dense, bh, N1, n_chains=8, burn_in=100,
                                 num_iter=120, seed=rep)
         cover[cname]["infer_h2"] += ir.h2_ci[0] <= H2 <= ir.h2_ci[1]
         cover[cname]["infer_p"] += ir.p_ci[0] <= P <= ir.p_ci[1]
@@ -93,7 +93,7 @@ for rep in range(REPS):
 print(f"95% interval coverage over {REPS} reps (m={M}); target 0.95\n")
 print(f"{'method (truth)':>22} | {'clean LD':>9} | {'ref-panel LD':>12}")
 print("-" * 50)
-labels = {"infer_h2": "LDpred2 h2 (0.50)", "infer_p": "LDpred2 p (0.01)",
+labels = {"infer_h2": "LDpred3 h2 (0.50)", "infer_p": "LDpred3 p (0.01)",
           "ldsc_h2": "LDSC h2 (0.50)", "ldsc_rg": "LDSC rg (0.50)"}
 for k, lab in labels.items():
     print(f"{lab:>22} | {cover['clean'][k] / REPS:>9.2f} | "

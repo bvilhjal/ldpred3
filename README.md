@@ -1,6 +1,4 @@
-# iprs — iPSYCH PRS
-
-## pyLDpred2
+# LDpred3
 
 A dependency-light (NumPy-only, optional Numba) Python implementation of
 [LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029) with a complete
@@ -16,7 +14,7 @@ core, and needs **no validation cohort**.
 ### Install
 
 ```bash
-pip install .            # installs pyldpred2 and the `pyldpred2-prs` CLI (needs numpy)
+pip install .            # installs ldpred3 and the `ldpred3` CLI (needs numpy)
 pip install numba        # optional, strongly recommended — large sampler speed-up
 pip install msprime      # optional, only for realistic-LD simulation
 ```
@@ -27,13 +25,13 @@ One command turns summary statistics + a genotype target into a polygenic score
 (QC and allele harmonisation run automatically):
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --out prs.txt
-pyldpred2-prs --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --plink target --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --bgen  target.bgen --out prs.txt
 ```
 
 ```python
-from pyldpred2 import run_ldpred2_prs
-res = run_ldpred2_prs("gwas.txt.gz", "target")   # method="auto" by default
+from ldpred3 import run_ldpred3_prs
+res = run_ldpred3_prs("gwas.txt.gz", "target")   # method="auto" by default
 res.scores          # one PRS per individual
 res.harmonize_log   # matched / flipped / ambiguous / mismatched counts
 res.qc_log          # per-filter QC counts
@@ -55,10 +53,10 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 
 | Function | Model | When to use |
 |----------|-------|-------------|
-| `ldpred2_auto` | point-normal, self-tuning `h²` & `p` | **the default** — robust, no tuning |
-| `ldpred2_inf` | infinitesimal (all variants causal) | a truly infinitesimal trait, or a cheap baseline |
-| `ldpred2_grid` | point-normal at fixed `h²`, `p` | you already know the hyper-parameters |
-| `ldpred2_auto_annot` | `auto` + a learned annotation prior | you have per-SNP functional annotations |
+| `ldpred3_auto` | point-normal, self-tuning `h²` & `p` | **the default** — robust, no tuning |
+| `ldpred3_inf` | infinitesimal (all variants causal) | a truly infinitesimal trait, or a cheap baseline |
+| `ldpred3_grid` | point-normal at fixed `h²`, `p` | you already know the hyper-parameters |
+| `ldpred3_auto_annot` | `auto` + a learned annotation prior | you have per-SNP functional annotations |
 
 `auto` is the right choice for most traits; the
 [guide's decision tree](docs/guide.md#4-choosing-a-model) covers the rest.
@@ -66,9 +64,9 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 ### What else it does
 
 - **Heritability, polygenicity & out-of-sample r² — no validation set**
-  (`ldpred2_auto_infer`, Privé et al. 2023), with an
+  (`ldpred3_auto_infer`, Privé et al. 2023), with an
   **[LD Score regression](docs/inference.md)** cross-check (`ldsc_h2`).
-- **Genetic correlation & joint two-trait PRS** — `ldpred2_auto_bivariate` boosts
+- **Genetic correlation & joint two-trait PRS** — `ldpred3_auto_bivariate` boosts
   a weak trait using a correlated well-powered one; `ldsc_rg` cross-checks the rg.
 - **Annotation-informed priors** (SBayesRC-style, supplied or learned), **sparse
   / banded LD**, **optimal LD-block splitting**, and weight save/reuse + LD
@@ -92,15 +90,15 @@ back-transform:
 
 ```python
 import numpy as np
-from pyldpred2 import standardize_betas, ldpred2_auto
+from ldpred3 import standardize_betas, ldpred3_auto
 
 beta_hat, scale = standardize_betas(beta, beta_se, n_eff)   # one LD block
-res = ldpred2_auto(corr, beta_hat, n_eff)                   # corr: (m, m) LD
+res = ldpred3_auto(corr, beta_hat, n_eff)                   # corr: (m, m) LD
 adjusted_beta = res.beta_est * scale                        # back to input scale
 print(res.h2_est, res.p_est)
 ```
 
-Use `ldpred2_by_blocks(...)` to run genome-wide, one LD block at a time.
+Use `ldpred3_by_blocks(...)` to run genome-wide, one LD block at a time.
 
 ### Tests
 

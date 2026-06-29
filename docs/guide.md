@@ -16,7 +16,7 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 [scaling](#9-scaling--performance) · [troubleshooting](#10-troubleshooting)
 
 > **In one line:** `pip install . numba` then
-> `pyldpred2-prs --sumstats gwas.txt.gz --plink target --out prs.txt`
+> `ldpred3 --sumstats gwas.txt.gz --plink target --out prs.txt`
 > (`auto` is the default model). Everything below is detail on the inputs, the
 > model choice, and reading the output.
 
@@ -29,10 +29,10 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 | **LD reference** | correlation between variants | by default computed **in-sample** from the target; or pass an external panel |
 
 You do **not** need a validation/tuning cohort: `auto` self-tunes its
-hyper-parameters, and `ldpred2_auto_infer` even estimates predictive r² without
+hyper-parameters, and `ldpred3_auto_infer` even estimates predictive r² without
 one.
 
-**LD reference & ancestry — the gotcha that quietly breaks PRS.** LDpred2's whole
+**LD reference & ancestry — the gotcha that quietly breaks PRS.** LDpred3's whole
 job is to undo LD, so the LD reference must match the GWAS *and* the target
 **ancestry**. Practical guidance:
 
@@ -43,22 +43,22 @@ job is to undo LD, so the LD reference must match the GWAS *and* the target
   reference (e.g. the relevant 1000 Genomes superpopulation) when the target is
   small, so the LD isn't estimated from a handful of people.
 - **Cross-ancestry** (GWAS and target differ in ancestry) is *out of scope* for a
-  single-population LDpred2 and will under-perform — that needs a cross-ancestry
+  single-population LDpred3 and will under-perform — that needs a cross-ancestry
   method. Keep GWAS, LD reference and target ancestry aligned.
 
 ## 2. The one-command path (recommended)
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
+ldpred3 --sumstats gwas.txt.gz --plink target --method auto --out prs.txt
 ```
 
-This runs the whole pipeline: QC → harmonise alleles → per-block LD → LDpred2 →
+This runs the whole pipeline: QC → harmonise alleles → per-block LD → LDpred3 →
 one score per individual. The equivalent in Python, with the logs you should
 check:
 
 ```python
-from pyldpred2 import run_ldpred2_prs
-res = run_ldpred2_prs("gwas.txt.gz", "target", method="auto")
+from ldpred3 import run_ldpred3_prs
+res = run_ldpred3_prs("gwas.txt.gz", "target", method="auto")
 
 res.scores          # np.ndarray, one PRS per individual (res.sample_iid for IDs)
 res.qc_log          # how many variants each QC filter dropped
@@ -75,7 +75,7 @@ preflight it — this detects the column mapping, matches IDs and previews
 harmonisation in seconds, without computing LD or fitting:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --dry-run
+ldpred3 --sumstats gwas.txt.gz --plink target --dry-run
 # detected columns: id=SNP, ea=A1, oa=A2, beta=BETA, se=SE, n_eff=N
 # matched 31204 / 31875 to the target (12 flipped, 41 ambiguous, ...)
 ```
@@ -84,7 +84,7 @@ If a required column is mis-detected, pass it explicitly — by column name or
 index — and re-check:
 
 ```python
-run_ldpred2_prs("gwas.txt.gz", "target",
+run_ldpred3_prs("gwas.txt.gz", "target",
                 sumstats_cols={"beta": "EFFECT", "ea": "ALT", "n_eff": 8})
 ```
 
@@ -112,7 +112,7 @@ A PRS is only useful if it predicts. Two ways to judge it:
   trait in the target or a held-out set. The squared Pearson correlation
   `cor(PRS, phenotype)²` is the realised prediction R² (for a binary trait, use
   the AUC or Nagelkerke R²). Always assess in individuals **not** in the GWAS.
-- **Without a phenotype:** `--infer` / `ldpred2_auto_infer` estimates the PRS's
+- **Without a phenotype:** `--infer` / `ldpred3_auto_infer` estimates the PRS's
   expected out-of-sample r² from the summary statistics alone, with a credible
   interval ([§7](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set)).
   It tracks the realised R² closely and falls toward 0 as GWAS power drops, so
@@ -158,27 +158,27 @@ effects to it and gives you the back-transform:
 
 ```python
 import numpy as np
-from pyldpred2 import standardize_betas, ldpred2_auto, ldpred2_by_blocks
+from ldpred3 import standardize_betas, ldpred3_auto, ldpred3_by_blocks
 
 # one block: beta/beta_se/n_eff are GWAS stats, corr is the (m x m) LD matrix
 beta_hat, scale = standardize_betas(beta, beta_se, n_eff)
-res = ldpred2_auto(corr, beta_hat, n_eff)
+res = ldpred3_auto(corr, beta_hat, n_eff)
 adjusted_beta = res.beta_est * scale          # back to the input (per-allele) scale
 print(res)                                    # AutoResult(h2_est=…, p_est=…)
 
 # genome-wide: blocks is a list of (corr_block, index_array) tiling 0..m-1
-beta_est = ldpred2_by_blocks(blocks, beta_hat, n_eff, method="auto")
+beta_est = ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto")
 ```
 
-`ldpred2_by_blocks(method="auto")` streams blocks one at a time and pools `h²`/`p`
+`ldpred3_by_blocks(method="auto")` streams blocks one at a time and pools `h²`/`p`
 globally, so the genome-wide LD is never materialised (this is the path that
 scales to millions of SNPs). Build blocks with `block_diagonal_ld` or, better,
 `optimal_ld_blocks` (cuts in recombination valleys — see [algorithm.md](algorithm.md)).
 
-**Two correlated traits?** `ldpred2_auto_bivariate(corr, beta_hat1, beta_hat2,
+**Two correlated traits?** `ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2,
 n1, n2)` fits both jointly, learning their genetic correlation so a well-powered
 trait sharpens a weaker correlated one (and reporting `res.rg`, `res.h2`). See
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred2).
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3).
 
 ## 6. Annotation-informed PRS (`annot`)
 
@@ -187,13 +187,13 @@ functional prior `p_j = sigmoid(a_jᵀθ)` genome-wide, returning the learned
 enrichment:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method annot \
+ldpred3 --sumstats gwas.txt.gz --plink target --method annot \
     --annotations annot.tsv --out prs.txt
 # ... annotation enrichment: coding=+1.20, conserved=+0.80, ...
 ```
 
 ```python
-res = run_ldpred2_prs("gwas.txt.gz", "target", method="annot",
+res = run_ldpred3_prs("gwas.txt.gz", "target", method="annot",
                       annotations="annot.tsv")
 res.enrichment            # {"coding": 1.20, "conserved": 0.80, ...}
 ```
@@ -217,8 +217,8 @@ To get heritability, polygenicity and the PRS's expected out-of-sample r² —
 each with a credible interval and **without** a held-out cohort:
 
 ```python
-from pyldpred2 import ldpred2_auto_infer
-res = ldpred2_auto_infer(corr, beta_hat, n_eff, n_chains=10)
+from ldpred3 import ldpred3_auto_infer
+res = ldpred3_auto_infer(corr, beta_hat, n_eff, n_chains=10)
 res.h2_est, res.h2_ci     # heritability + 95% CI
 res.p_est,  res.p_ci      # polygenicity + 95% CI
 res.r2_est, res.r2_ci     # predicted out-of-sample r² + 95% CI
@@ -227,7 +227,7 @@ res.r2_est, res.r2_ci     # predicted out-of-sample r² + 95% CI
 or from the pipeline with `infer=True` / `--infer`. Inference **streams the LD
 blocks**, so it runs genome-wide (no dense matrix is assembled). For an
 independent h² check, `ldsc_h2` runs **LD Score regression** on the same summary
-statistics (it agrees with the LDpred2-auto h² but is less precise — see
+statistics (it agrees with the LDpred3-auto h² but is less precise — see
 [inference.md](inference.md)). Full method and validation in
 [inference.md](inference.md).
 
@@ -238,11 +238,11 @@ re-run with different settings.
 
 **Save the fitted weights, then score new cohorts for free.** The weights (one
 standardized effect per variant, with its allele) are the reusable product —
-scoring another cohort from them skips LD construction and the whole LDpred2 fit:
+scoring another cohort from them skips LD construction and the whole LDpred3 fit:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink discovery --save-weights prs.weights.txt --out d.txt
-pyldpred2-prs --plink new_cohort --weights prs.weights.txt --out new.txt   # no sumstats / LD / refit
+ldpred3 --sumstats gwas.txt.gz --plink discovery --save-weights prs.weights.txt --out d.txt
+ldpred3 --plink new_cohort --weights prs.weights.txt --out new.txt   # no sumstats / LD / refit
 ```
 
 ```python
@@ -257,8 +257,8 @@ are swapped), so a cohort with the opposite A1/A2 coding still scores correctly.
 don't recompute LD:
 
 ```bash
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method auto --ld-out ld.npz   --out auto.txt
-pyldpred2-prs --sumstats gwas.txt.gz --plink target --method grid --ld-cache ld.npz --out grid.txt
+ldpred3 --sumstats gwas.txt.gz --plink target --method auto --ld-out ld.npz   --out auto.txt
+ldpred3 --sumstats gwas.txt.gz --plink target --method grid --ld-cache ld.npz --out grid.txt
 ```
 
 The cache records the variant set it was built for; if your inputs/QC change so
@@ -272,9 +272,9 @@ silently using stale LD — rebuild it with `--ld-out`.
   loop — fine for CI, not for genome-wide runs.
 - **Memory** is dominated by the LD. `auto`'s streaming sampler keeps only one
   block resident (float32), so peak memory is the LD plus `O(m)` state — ~4 GB at
-  2M SNPs. Prefer `ldpred2_by_blocks(method="auto")` (global hyper) at genome
+  2M SNPs. Prefer `ldpred3_by_blocks(method="auto")` (global hyper) at genome
   scale.
-- **Sparse / banded LD** (`sparsify_ld`, or `ldpred2_by_blocks(..., sparsify=True)`)
+- **Sparse / banded LD** (`sparsify_ld`, or `ldpred3_by_blocks(..., sparsify=True)`)
   makes `inf` a cheap CG solve and trims the samplers; band by **distance**
   (`max_dist=`) since in-sample LD has a ~1/√N noise floor. See
   [algorithm.md](algorithm.md).

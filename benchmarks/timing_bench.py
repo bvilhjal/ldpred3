@@ -7,7 +7,7 @@ Part B: annot fit time vs #annotations K and theta_every (validates the
 import sys, time, os
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ldpred2_by_blocks, ldpred2_auto_annot_blocks
+from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)
@@ -38,12 +38,12 @@ print(f"single core (BLAS threads={os.environ.get('OPENBLAS_NUM_THREADS')}), "
 print("=== Part A: per-method fit time ===")
 A1 = (rng.random((M, 1)) < 0.2).astype(float)
 methods = {
-    "inf":   lambda: ldpred2_by_blocks(blocks, bhat, n, method="inf", h2=0.5),
-    "grid":  lambda: ldpred2_by_blocks(blocks, bhat, n, method="grid", h2=0.5,
+    "inf":   lambda: ldpred3_by_blocks(blocks, bhat, n, method="inf", h2=0.5),
+    "grid":  lambda: ldpred3_by_blocks(blocks, bhat, n, method="grid", h2=0.5,
                                        p=0.01, burn_in=BURN, num_iter=ITER),
-    "auto":  lambda: ldpred2_by_blocks(blocks, bhat, n, method="auto",
+    "auto":  lambda: ldpred3_by_blocks(blocks, bhat, n, method="auto",
                                        burn_in=BURN, num_iter=ITER, seed=1),
-    "annot (K=1)": lambda: ldpred2_auto_annot_blocks(blocks, bhat, n, A1,
+    "annot (K=1)": lambda: ldpred3_auto_annot_blocks(blocks, bhat, n, A1,
                                        burn_in=BURN, num_iter=ITER, seed=1),
 }
 print(f"{'method':>14} | {'time (s)':>9}")
@@ -56,8 +56,8 @@ print(f"{'K':>4} | {'theta_every=1':>14} | {'theta_every=10':>15}")
 print("-" * 40)
 for Kann in [1, 5, 20, 50, 100]:
     Ak = (rng.random((M, Kann)) < 0.2).astype(float)
-    t1 = timeit(lambda: ldpred2_auto_annot_blocks(blocks, bhat, n, Ak,
+    t1 = timeit(lambda: ldpred3_auto_annot_blocks(blocks, bhat, n, Ak,
                 burn_in=BURN, num_iter=ITER, theta_every=1, seed=1), reps=1)
-    t10 = timeit(lambda: ldpred2_auto_annot_blocks(blocks, bhat, n, Ak,
+    t10 = timeit(lambda: ldpred3_auto_annot_blocks(blocks, bhat, n, Ak,
                 burn_in=BURN, num_iter=ITER, theta_every=10, seed=1), reps=1)
     print(f"{Kann:>4} | {t1:>14.2f} | {t10:>15.2f}")

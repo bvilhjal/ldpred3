@@ -19,10 +19,10 @@ Run single-core for stable numbers:
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2.simulate import simulate_genotypes
-from pyldpred2.ld import compute_ld_blocks
-from pyldpred2.qc import dentist_outlier_mask
-from pyldpred2 import ldpred2_by_blocks
+from ldpred3.simulate import simulate_genotypes
+from ldpred3.ld import compute_ld_blocks
+from ldpred3.qc import dentist_outlier_mask
+from ldpred3 import ldpred3_by_blocks
 
 NB, K = 20, 200            # 20 LD blocks of 200 SNPs -> m = 4000
 M = NB * K
@@ -80,11 +80,11 @@ def fit_r2(blocks, beta_hat, keep, gv, beta):
     """Fit auto on the kept variants; score genetic R2 over ALL variants."""
     n = np.full(M, float(N_GWAS))
     if keep is None:
-        be = ldpred2_by_blocks(blocks, beta_hat, n, method="auto",
+        be = ldpred3_by_blocks(blocks, beta_hat, n, method="auto",
                                burn_in=80, num_iter=150, seed=0)
     else:
         sub, kept_idx = subset_blocks(blocks, keep)
-        be_sub = ldpred2_by_blocks(sub, beta_hat[kept_idx], n[kept_idx],
+        be_sub = ldpred3_by_blocks(sub, beta_hat[kept_idx], n[kept_idx],
                                    method="auto", burn_in=80, num_iter=150, seed=0)
         be = np.zeros(M)                                  # dropped variants -> 0
         be[kept_idx] = be_sub

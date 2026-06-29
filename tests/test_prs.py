@@ -6,7 +6,7 @@ import sys
 import numpy as np
 
 
-from pyldpred2.prs import allele_frequency, standardize_dosage, prs_score   # noqa: E402
+from ldpred3.prs import allele_frequency, standardize_dosage, prs_score   # noqa: E402
 
 
 def test_allele_frequency_ignores_missing():

@@ -6,7 +6,7 @@ coalescent LD. This is the dominant real-world error source that the earlier
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2 import ld_scores, ldsc_rg, ldpred2_auto_bivariate_blocks, ldpred2_by_blocks
+from ldpred3 import ld_scores, ldsc_rg, ldpred3_auto_bivariate_blocks, ldpred3_by_blocks
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)
@@ -59,7 +59,7 @@ def sumstats(beta, n, rng):                # GWAS from the TRUE population LD
 t0 = time.time()
 print(f"REALISTIC rg: ref-panel LD (Nref={NREF}), coalescent LD, m={M}, "
       f"N1={N1}, N2={N2}, p={P}, {REPS} reps\n")
-print(f"{'rg_true':>7} | {'bivariate LDSC':>18} | {'bivariate LDpred2':>18}")
+print(f"{'rg_true':>7} | {'bivariate LDSC':>18} | {'bivariate LDpred3':>18}")
 print("-" * 52)
 for rg in (0.0, 0.3, 0.6, 0.9):
     ld, bp = [], []
@@ -68,7 +68,7 @@ for rg in (0.0, 0.3, 0.6, 0.9):
         b1, b2 = sim(rg, rng)
         bh1 = sumstats(b1, N1, rng); bh2 = sumstats(b2, N2, rng)
         ld.append(ldsc_rg(bh1, bh2, ell, N1, N2, n_blocks=80).rg)
-        bp.append(ldpred2_auto_bivariate_blocks(ref, bh1, bh2, N1, N2,
+        bp.append(ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2,
                                                 burn_in=120, num_iter=150, seed=rep).rg)
     print(f"{rg:>7.1f} | {np.mean(ld):>7.3f} ± {np.std(ld):>5.3f}    | "
           f"{np.mean(bp):>7.3f} ± {np.std(bp):>5.3f}")

@@ -17,9 +17,9 @@ per-block storage (sum of k^2), and the genetic R2 of a block-diagonal auto PRS.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from pyldpred2.simulate import simulate_genotypes
-from pyldpred2.ld import compute_ld_blocks
-from pyldpred2 import ldpred2_by_blocks, optimal_ld_blocks
+from ldpred3.simulate import simulate_genotypes
+from ldpred3.ld import compute_ld_blocks
+from ldpred3 import ldpred3_by_blocks, optimal_ld_blocks
 
 TRUE_SIZES = [137, 211, 89, 256, 170, 137]    # unequal true LD blocks, sum = 1000
 M = sum(TRUE_SIZES)
@@ -62,7 +62,7 @@ def fixed_bounds(m, size):
 
 def fit_r2(R, bounds, beta_hat, beta, n):
     blocks = [(R[s:e, s:e].astype(np.float32), np.arange(s, e)) for s, e in bounds]
-    be = ldpred2_by_blocks(blocks, beta_hat, n, method="auto",
+    be = ldpred3_by_blocks(blocks, beta_hat, n, method="auto",
                            global_hyper=False, burn_in=60, num_iter=120, seed=0)
     num = be @ (R @ beta); den = (be @ (R @ be)) * (beta @ (R @ beta))
     return float(num * num / den) if den > 0 else 0.0
@@ -70,7 +70,7 @@ def fit_r2(R, bounds, beta_hat, beta, n):
 
 n = np.full(M, float(N_GWAS))
 _R, _b, _bh = build(0)                          # warm up the JIT
-ldpred2_by_blocks([(_R.astype(np.float32), np.arange(M))], _bh, n, method="auto",
+ldpred3_by_blocks([(_R.astype(np.float32), np.arange(M))], _bh, n, method="auto",
                   global_hyper=False, burn_in=10, num_iter=10, seed=0)
 
 t0 = time.time()

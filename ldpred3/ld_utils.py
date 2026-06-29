@@ -1,5 +1,5 @@
 """
-LD representations and construction utilities for LDpred2.
+LD representations and construction utilities for LDpred3.
 
 Holds the sparse-LD container and the routines that build / reshape LD matrices
 independently of the samplers:
@@ -53,7 +53,7 @@ def sparsify_ld(corr, threshold=1e-3, max_dist=None, shrink=1.0):
 
     Entries are kept when ``|r| >= threshold`` and (if ``max_dist`` is given)
     within ``max_dist`` SNPs of the diagonal; the diagonal is always kept. This
-    mirrors how LDpred2 windows/thresholds LD in practice.
+    mirrors how LDpred3 windows/thresholds LD in practice.
 
     Dropping off-diagonal entries (especially by hard distance banding) can make
     the matrix lose positive-definiteness, which **destabilises the Gibbs
@@ -110,7 +110,7 @@ def block_diagonal_ld(blocks):
     ``blocks`` is a sequence of ``(corr_block, idx)`` with ``corr_block`` a dense
     ``(k, k)`` LD matrix and ``idx`` the variants' global positions (the blocks
     must tile ``0 .. m-1``). Running a *single* model on the result gives
-    genome-wide behaviour -- in particular LDpred2-auto then estimates ``h2`` and
+    genome-wide behaviour -- in particular LDpred3-auto then estimates ``h2`` and
     ``p`` jointly across all variants (global hyper-parameters), rather than
     independently per block. It is also one compiled call instead of one per
     block. Each block keeps all its entries (exact block-diagonal, so positive-

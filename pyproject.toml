@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyldpred2"
+name = "ldpred3"
 version = "0.1.0"
-description = "A NumPy-only implementation of LDpred2 with a full polygenic-score pipeline"
+description = "A NumPy-only implementation of LDpred3 with a full polygenic-score pipeline"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -18,10 +18,10 @@ sim = ["msprime>=1.3"]          # realistic-LD (coalescent) simulation
 test = ["pytest>=7"]
 
 [project.scripts]
-pyldpred2-prs = "pyldpred2.pipeline:_main"
+ldpred3 = "ldpred3.pipeline:_main"
 
 [tool.setuptools]
-packages = ["pyldpred2"]
+packages = ["ldpred3"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

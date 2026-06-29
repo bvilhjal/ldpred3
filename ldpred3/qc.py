@@ -1,5 +1,5 @@
 """
-Quality control for GWAS summary statistics, before LDpred2.
+Quality control for GWAS summary statistics, before LDpred3.
 
 Two stages, matching the bigsnpr / LDpred2 tutorial workflow:
 
@@ -12,7 +12,7 @@ Two stages, matching the bigsnpr / LDpred2 tutorial workflow:
    * **INFO** / imputation-quality filter (when present),
    * **chi-square outlier** filter (drop implausibly large ``z = β/se``).
 
-2. :func:`sd_consistency_mask` — the key LDpred2 diagnostic, which needs a
+2. :func:`sd_consistency_mask` — the key LDpred3 diagnostic, which needs a
    reference panel. It compares the standard deviation implied by the sumstats,
    ``sd_ss ≈ 1/√(N·se² + β²)``, against the genotype SD from the reference
    panel, ``sd_ref = √(2·f·(1−f))``. Variants where the two disagree signal a
@@ -207,7 +207,7 @@ def qc_sumstats(ss, *, min_n_ratio=0.7, min_maf=0.01, min_info=0.7,
 
 def sd_consistency_mask(beta, se, n_eff, af_ref, *,
                         sd_ratio_bounds=(0.5, 2.0), min_sd_ref=0.05):
-    """LDpred2 SD-consistency check against reference allele frequencies.
+    """LDpred3 SD-consistency check against reference allele frequencies.
 
     Parameters
     ----------
