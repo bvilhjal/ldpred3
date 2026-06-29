@@ -76,6 +76,7 @@ panel internally, so they run anywhere.
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures | ✓ |
 | `calibration.py` | 95% interval coverage for the inference methods (clean vs reference-panel LD) | ✓ |
 | `sample_overlap.py` | Validates the overlap corrections (LDSC intercept, bivariate `cross_corr`) | ✓ |
+| `infer_scaling.py` | Running time of LDpred3-auto inference, dense vs streaming, as m grows (and h² agreement) | ✓ |
 
 All inference/robustness scripts fit with an LD matrix estimated from a finite
 **reference panel** (not the true population LD that generates the GWAS) — the

@@ -9,7 +9,8 @@ One command -> ``benchmarks/figures.pdf`` with:
   p5  Bivariate analysis: genetic-correlation recovery; weak-trait prediction gain
   p6  DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
   p7  LD representation: sparse/banded storage-vs-accuracy; optimal block splitting
-  p8  Performance: Numba JIT speed-up; multi-core scaling
+  p8  LD at scale (realistic LD): dense vs banded vs low-rank — memory, time, accuracy
+  p9  Performance: Numba JIT speed-up; multi-core scaling
 
 Pages 4-5 need realistic (coalescent) LD and are skipped with a note unless
 msprime is installed.
@@ -45,7 +46,8 @@ from ldpred3.ld import compute_ld_blocks
 from ldpred3.qc import dentist_outlier_mask
 from ldpred3.infer import ldpred3_auto_infer
 from ldpred3 import (ldpred3_by_blocks, sparsify_ld, optimal_ld_blocks,
-                     ld_scores, ldsc_h2, ldsc_rg, ldpred3_auto_bivariate_blocks)
+                     ld_scores, ldsc_h2, ldsc_rg, ldpred3_auto_bivariate_blocks,
+                     SparseLD, LowRankLD)
 from ldpred3._numba import HAVE_NUMBA
 
 try:  # realistic LD (coalescent) is needed for the LDSC comparisons
@@ -274,6 +276,63 @@ def data_bivariate():
             uni.append(geneticr2(be2u, gv, b2)); bi.append(geneticr2(res.beta2_est, gv, b2))
         rows.append({"kind": "gain", "x": rg, "m1": np.mean(uni), "s1": np.std(uni),
                      "m2": np.mean(bi), "s2": np.std(bi)})
+    return rows
+
+
+def data_ld_scale():
+    """Memory, fit time and accuracy by LD representation on realistic LD.
+
+    Dense vs banded vs low-rank on coalescent LD with large blocks -- the
+    genome-scale regime. Low-rank matches dense accuracy at a fraction of the
+    memory (banding loses accuracy); the compact reps trade fit time for memory.
+    """
+    M, K, N, H2, P, REPS = 6000, 1000, 50000, 0.5, 0.01, 3
+    G, _ = simulate_genotypes_coalescent(4000, M, K, seed=1)
+    m = G.shape[1]
+    dense = compute_ld_blocks(G, block_size=K)
+    Rf = [(R.astype(float), idx) for R, idx in dense]
+    chol = [np.linalg.cholesky(R + 1e-4 * np.eye(len(ix))) for R, ix in Rf]
+
+    def gv(a, b):
+        return sum(a[ix] @ (R @ b[ix]) for R, ix in Rf)
+
+    def r2(be, beta):
+        num = gv(be, beta); den = gv(be, be) * gv(beta, beta)
+        return float(num * num / den) if den > 0 else 0.0
+
+    def mem(blocks):
+        t = 0
+        for R, _ in blocks:
+            t += (R.U.nbytes if isinstance(R, LowRankLD) else
+                  (R.data.nbytes + R.indices.nbytes + R.indptr.nbytes)
+                  if isinstance(R, SparseLD) else R.nbytes)
+        return t
+    db = sum(R.nbytes for R, _ in dense)
+
+    rng = np.random.default_rng(5)
+    beta = np.zeros(m); c = rng.random(m) < P
+    beta[c] = rng.standard_normal(int(c.sum())); beta *= np.sqrt(H2 / gv(beta, beta))
+    bhs = []
+    for rep in range(REPS):
+        r = np.random.default_rng(10 + rep); bh = np.empty(m)
+        for (R, ix), ch in zip(Rf, chol):
+            bh[ix] = R @ beta[ix] + (ch @ r.standard_normal(len(ix))) / np.sqrt(N)
+        bhs.append(bh)
+    nv = np.full(m, float(N))
+    reps = {"dense": dense,
+            "banded": compute_ld_blocks(G, block_size=K, sparse=True, max_dist=200),
+            "low-rank": compute_ld_blocks(G, block_size=K, lowrank=True, lowrank_variance=0.995)}
+    for bl in reps.values():
+        ldpred3_by_blocks(bl, bhs[0], nv, method="auto", burn_in=3, num_iter=3, seed=0)
+    rows = []
+    for name, bl in reps.items():
+        fits, accs = [], []
+        for bh in bhs:
+            t = time.time()
+            be = ldpred3_by_blocks(bl, bh, nv, method="auto", burn_in=100, num_iter=150, seed=0)
+            fits.append(time.time() - t); accs.append(r2(be, beta))
+        rows.append({"rep": name, "mem_pct": 100 * mem(bl) / db,
+                     "fit_s": float(np.mean(fits)), "r2": float(np.mean(accs))})
     return rows
 
 
@@ -563,6 +622,40 @@ def page_dentist(pdf):
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
 
+def page_ld_scale(pdf):
+    if not HAVE_MSPRIME:
+        return note_page(pdf, "LD representations at scale",
+                         "Needs realistic (coalescent) LD — install msprime\n"
+                         "(pip install msprime) to generate this page.")
+    rows = [{k: (r[k] if k == "rep" else float(r[k])) for k in r}
+            for r in data_ld_scale_rows]
+    labels = [r["rep"] for r in rows]
+    x = np.arange(len(labels))
+    cols = ["#7f7f7f", "#ff7f0e", "#2ca02c"]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.8))
+
+    a1.bar(x, [r["mem_pct"] for r in rows], color="#9ecae1", label="memory (% of dense)")
+    a1.set(title="Memory vs accuracy", ylabel="LD memory (% of dense)", xticks=x)
+    a1.set_xticklabels(labels)
+    a1b = a1.twinx()
+    r2 = [r["r2"] for r in rows]
+    a1b.plot(x, r2, "-o", color="#d62728", label="genetic R²")
+    a1b.set_ylabel("genetic R²", color="#d62728")
+    a1b.set_ylim(min(r2) - 0.02, max(r2) + 0.01); a1b.grid(False)
+    a1b.tick_params(axis="y", colors="#d62728")
+
+    fits = [r["fit_s"] for r in rows]
+    a2.bar(x, fits, color=cols)
+    for i, v in enumerate(fits):
+        a2.text(i, v, f"{v:.2f}s", ha="center", va="bottom", fontsize=9)
+    a2.set(title="Fit time (memory↓ costs time↑)", ylabel="fit time (s)", xticks=x)
+    a2.set_xticklabels(labels)
+    fig.suptitle("LD representations at scale — realistic coalescent LD "
+                 "(low-rank matches dense at ~1/4 memory; banding loses accuracy)",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
+
+
 def page_ld_repr(pdf):
     sp = [{k: r[k] for k in r} for r in data_sparse_rows]
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.8))
@@ -628,6 +721,7 @@ if __name__ == "__main__":
             ["true_h2", "ldsc", "ldsc_sd", "auto", "auto_sd", "r2_est", "r2_lo", "r2_hi", "r2_real"],
             data_infer_ldsc)
         data_bivariate_rows = cached("bivariate", ["kind", "x", "m1", "s1", "m2", "s2"], data_bivariate)
+        data_ld_scale_rows = cached("ld_scale", ["rep", "mem_pct", "fit_s", "r2"], data_ld_scale)
     data_dentist_rows = cached("dentist", ["clean", "no_filter", "dentist", "caught_frac", "falsedrop_frac"], data_dentist)
     data_sparse_rows = cached("sparse", ["config", "density", "fit_s", "r2"], data_sparse)
     data_split_rows = cached("splitting", ["split", "nblocks", "discarded", "storage", "r2"], data_splitting)
@@ -644,6 +738,7 @@ if __name__ == "__main__":
         page_bivariate(pdf)
         page_dentist(pdf)
         page_ld_repr(pdf)
+        page_ld_scale(pdf)
         page_perf(pdf)
         meta = pdf.infodict()
         meta["Title"] = "LDpred3 benchmark figures"
