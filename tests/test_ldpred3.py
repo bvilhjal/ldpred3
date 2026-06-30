@@ -430,11 +430,14 @@ def test_global_auto_rejects_bad_blocks():
                           sparsify=True, burn_in=5, num_iter=5)
     # kwargs only honoured per-block (global_hyper=False) must not be silently
     # swallowed in the global-hyper path.
-    for bad_kw in ({"allow_jump_sign": False}, {"prior_weights": np.ones(bhat.size)},
-                   {"shrink_corr": 0.9}):
+    for bad_kw in ({"prior_weights": np.ones(bhat.size)}, {"shrink_corr": 0.9}):
         with pytest.raises(TypeError, match="unsupported keyword"):
             ldpred3_by_blocks(blocks, bhat, n, method="auto", global_hyper=True,
                               burn_in=5, num_iter=5, **bad_kw)
+    # allow_jump_sign IS honoured in the global-hyper (streaming) path now.
+    out = ldpred3_by_blocks(blocks, bhat, n, method="auto", global_hyper=True,
+                            burn_in=5, num_iter=5, allow_jump_sign=False)
+    assert out.shape == bhat.shape and np.all(np.isfinite(out))
 
 
 def test_inf_zero_beta_is_finite():

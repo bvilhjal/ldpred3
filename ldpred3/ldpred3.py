@@ -283,11 +283,6 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
         # Per-SNP prior log-odds of null vs causal: p_j = p * prior_w[j].
         pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
         log_prior_odds_v = np.log1p(-pj) - np.log(pj)
-        # Per-SNP posterior quantities are vectors of length m.
-        post_var = c1 / (n * c1 + 1.0)               # = 1 / (n + 1/c1)
-        post_sd = np.sqrt(post_var)
-        half_log_term = 0.5 * np.log1p(n * c1)
-        n_post_var = n * post_var                    # post_mean = this * residual
         nb_causal = 0
 
         # Resync Rb from scratch at it == 0 (initialises it from the warm-start
@@ -312,36 +307,15 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             # contribution. Rb[j] includes this SNP (corr[j, j] == 1), so add
             # back its own term.
             res_beta_j = beta_hat[j] - Rb[j] + old
-
-            pv = post_var[j]
-            post_mean = n_post_var[j] * res_beta_j
-
-            # Posterior inclusion probability via the log-odds of null vs causal.
-            log_odds = (log_prior_odds_v[j] + half_log_term[j]
-                        - 0.5 * post_mean * post_mean / pv)
-            postp = _stable_postp(log_odds)
-
-            # Rao-Blackwellized estimate: accumulate the conditional posterior
-            # mean E[beta_j | rest] = postp * post_mean rather than the sampled
-            # value. Same expectation, lower Monte-Carlo variance (as in the
-            # original LDpred). The *sampled* value below still drives the chain.
-            post_means[j] = postp * post_mean
-
-            if sparse and postp < 0.5:
-                new = 0.0
-            elif unif[j] < postp:
-                new = post_mean + gauss[j] * post_sd[j]
-                nb_causal += 1
-            else:
-                new = 0.0
-
-            # Robustness guard (Privé et al.): forbid an effect flipping sign in
-            # one step -- a major source of divergence on noisy / ill-conditioned
-            # LD. The proposal is set to zero instead.
-            if (not allow_jump_sign and old != 0.0 and new != 0.0
-                    and (new > 0.0) != (old > 0.0)):
-                new = 0.0
-                nb_causal -= 1
+            # Shared per-SNP point-normal update; the Rao-Blackwellised post_means
+            # (accumulated below) drive the dense estimate, the sampled value the
+            # chain. Per-variant N here -> n_const=False; the prior weights enter
+            # through the per-SNP log prior-odds.
+            new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, False,
+                                   0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
+                                   unif[j], gauss[j], sparse, allow_jump_sign)
+            post_means[j] = pm
+            nb_causal += dc
 
             delta = new - old
             if delta != 0.0:
@@ -431,10 +405,6 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
         log_prior_odds = np.log1p(-p) - np.log(p)
-        post_var = c1 / (n * c1 + 1.0)
-        post_sd = np.sqrt(post_var)
-        half_log_term = 0.5 * np.log1p(n * c1)
-        n_post_var = n * post_var
         nb_causal = 0
 
         if it % 100 == 0:
@@ -452,21 +422,11 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
-            pv = post_var[j]
-            post_mean = n_post_var[j] * res_beta_j
-            log_odds = (log_prior_odds + half_log_term[j]
-                        - 0.5 * post_mean * post_mean / pv)
-            postp = _stable_postp(log_odds)
-            post_means[j] = postp * post_mean
-            if unif[j] < postp:
-                new = post_mean + gauss[j] * post_sd[j]
-                nb_causal += 1
-            else:
-                new = 0.0
-            if (not allow_jump_sign and old != 0.0 and new != 0.0
-                    and (new > 0.0) != (old > 0.0)):
-                new = 0.0
-                nb_causal -= 1
+            new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, False,
+                                   0.0, 0.0, 0.0, 0.0, log_prior_odds,
+                                   unif[j], gauss[j], False, allow_jump_sign)
+            post_means[j] = pm
+            nb_causal += dc
             delta = new - old
             if delta != 0.0:
                 cj = corr[j]
@@ -531,10 +491,6 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
         c1 = h2 / (m * p)
         pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
         log_prior_odds_v = np.log1p(-pj) - np.log(pj)
-        post_var = c1 / (n * c1 + 1.0)
-        post_sd = np.sqrt(post_var)
-        half_log_term = 0.5 * np.log1p(n * c1)
-        n_post_var = n * post_var
         nb_causal = 0
 
         # Resync Rb at it == 0 (from warm start) and periodically (non-zeros only).
@@ -552,26 +508,11 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
-
-            pv = post_var[j]
-            post_mean = n_post_var[j] * res_beta_j
-            log_odds = (log_prior_odds_v[j] + half_log_term[j]
-                        - 0.5 * post_mean * post_mean / pv)
-            postp = _stable_postp(log_odds)
-            post_means[j] = postp * post_mean
-
-            if sparse and postp < 0.5:
-                new = 0.0
-            elif unif[j] < postp:
-                new = post_mean + gauss[j] * post_sd[j]
-                nb_causal += 1
-            else:
-                new = 0.0
-
-            if (not allow_jump_sign and old != 0.0 and new != 0.0
-                    and (new > 0.0) != (old > 0.0)):
-                new = 0.0
-                nb_causal -= 1
+            new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, False,
+                                   0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
+                                   unif[j], gauss[j], sparse, allow_jump_sign)
+            post_means[j] = pm
+            nb_causal += dc
 
             delta = new - old
             if delta != 0.0:
@@ -649,29 +590,15 @@ def _gibbs_kernel_batched(block_data, block_offsets, snp_offsets, sizes,
     n_iter_total = burn_in + num_iter
     count = 0
 
-    # When N is constant the per-SNP posterior constants collapse to scalars;
-    # computing them once per sweep avoids m sqrt/log calls and length-m
-    # allocations -- a big saving at genome scale. Vectors are kept for the rare
-    # per-variant-N case.
-    post_var = np.zeros(m)
-    post_sd = np.zeros(m)
-    half_log_term = np.zeros(m)
-    n_post_var = np.zeros(m)
+    # When N is constant the per-SNP posterior constants collapse to scalars
+    # (_pn_const_scalars), computed once per sweep -- a big saving at genome
+    # scale; _pn_step recomputes per SNP only in the rare per-variant-N case.
+    n0 = float(n[0])
 
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
         log_prior_odds = np.log1p(-p) - np.log(p)
-        if n_const:
-            nc1 = n[0] * c1
-            pv0 = c1 / (nc1 + 1.0)
-            psd0 = np.sqrt(pv0)
-            half0 = 0.5 * np.log1p(nc1)
-            npv0 = n[0] * pv0
-        else:
-            post_var = c1 / (n * c1 + 1.0)
-            post_sd = np.sqrt(post_var)
-            half_log_term = 0.5 * np.log1p(n * c1)
-            n_post_var = n * post_var
+        pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
         nb_causal = 0
 
         # Resync Rb at it == 0 (from warm start) and periodically; within-block.
@@ -699,29 +626,11 @@ def _gibbs_kernel_batched(block_data, block_offsets, snp_offsets, sizes,
                 gj = base + lj
                 old = curr_beta[gj]
                 res_beta_j = beta_hat[gj] - Rb[gj] + old
-                if n_const:
-                    pv = pv0
-                    psd = psd0
-                    half = half0
-                    post_mean = npv0 * res_beta_j
-                else:
-                    pv = post_var[gj]
-                    psd = post_sd[gj]
-                    half = half_log_term[gj]
-                    post_mean = n_post_var[gj] * res_beta_j
-                log_odds = (log_prior_odds + half
-                            - 0.5 * post_mean * post_mean / pv)
-                postp = _stable_postp(log_odds)
-                post_means[gj] = postp * post_mean
-
-                if sparse and postp < 0.5:
-                    new = 0.0
-                elif unif[gj] < postp:
-                    new = post_mean + gauss[gj] * psd
-                    nb_causal += 1
-                else:
-                    new = 0.0
-
+                new, pm, dc = _pn_step(res_beta_j, old, n[gj], c1, n_const,
+                                       pv0, psd0, half0, npv0, log_prior_odds,
+                                       unif[gj], gauss[gj], sparse, True)
+                post_means[gj] = pm
+                nb_causal += dc
                 delta = new - old
                 if delta != 0.0:
                     rowoff = boff + lj * k       # contiguous float32 block row
@@ -792,25 +701,12 @@ def _gibbs_kernel_batched_par(block_data, block_offsets, snp_offsets, sizes,
     p_path = np.empty(num_iter)
     n_iter_total = burn_in + num_iter
     count = 0
-    post_var = np.zeros(m)
-    post_sd = np.zeros(m)
-    half_log_term = np.zeros(m)
-    n_post_var = np.zeros(m)
+    n0 = float(n[0])
 
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
         log_prior_odds = np.log1p(-p) - np.log(p)
-        if n_const:
-            nc1 = n[0] * c1
-            pv0 = c1 / (nc1 + 1.0)
-            psd0 = np.sqrt(pv0)
-            half0 = 0.5 * np.log1p(nc1)
-            npv0 = n[0] * pv0
-        else:
-            post_var = c1 / (n * c1 + 1.0)
-            post_sd = np.sqrt(post_var)
-            half_log_term = 0.5 * np.log1p(n * c1)
-            n_post_var = n * post_var
+        pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
 
         if it % 100 == 0:
             Rb[:] = 0.0
@@ -837,29 +733,11 @@ def _gibbs_kernel_batched_par(block_data, block_offsets, snp_offsets, sizes,
                 gj = base + lj
                 old = curr_beta[gj]
                 res_beta_j = beta_hat[gj] - Rb[gj] + old
-                if n_const:
-                    pv = pv0
-                    psd = psd0
-                    half = half0
-                    post_mean = npv0 * res_beta_j
-                else:
-                    pv = post_var[gj]
-                    psd = post_sd[gj]
-                    half = half_log_term[gj]
-                    post_mean = n_post_var[gj] * res_beta_j
-                log_odds = (log_prior_odds + half
-                            - 0.5 * post_mean * post_mean / pv)
-                postp = _stable_postp(log_odds)
-                post_means[gj] = postp * post_mean
-
-                if sparse and postp < 0.5:
-                    new = 0.0
-                elif unif[gj] < postp:
-                    new = post_mean + gauss[gj] * psd
-                    nb_causal += 1
-                else:
-                    new = 0.0
-
+                new, pm, dc = _pn_step(res_beta_j, old, n[gj], c1, n_const,
+                                       pv0, psd0, half0, npv0, log_prior_odds,
+                                       unif[gj], gauss[gj], sparse, True)
+                post_means[gj] = pm
+                nb_causal += dc
                 delta = new - old
                 if delta != 0.0:
                     rowoff = boff + lj * k
@@ -970,8 +848,76 @@ def _gibbs_blocks(blocks, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     return _gibbs_kernel_batched_jit(*args)
 
 
+def _pn_step(res, old, nj, c1, n_const, pv0, psd0, half0, npv0,
+             lpo, u, g, sparse, allow_jump_sign):
+    """The per-SNP point-normal update shared by every Gibbs sweep kernel.
+
+    Given a SNP's residualised marginal estimate ``res`` and its current effect
+    ``old``, returns ``(new, pm_rb, dc)``: the resampled effect, the
+    Rao-Blackwellised contribution ``P(causal)·E[beta|causal]``, and the change in
+    the causal count (0 or 1). Keeping this in one place means the inclusion-
+    probability math and the sign-flip divergence guard (Privé et al.) have a
+    single definition for the dense / banded / low-rank / packed kernels.
+
+    ``n_const`` lets a constant-N caller pass the per-sweep precomputed posterior
+    scalars (``pv0`` etc.) instead of recomputing the ``sqrt``/``log1p`` per SNP;
+    a per-variant-N caller passes ``n_const=False`` and the SNP's ``nj``. ``lpo``
+    is the (possibly per-SNP) log prior-odds of null vs causal. With
+    ``allow_jump_sign=False`` a proposal that would flip the effect's sign in one
+    step is zeroed (it would otherwise diverge on ill-conditioned LD).
+    """
+    if n_const:
+        pv = pv0
+        psd = psd0
+        half = half0
+        post_mean = npv0 * res
+    else:
+        nc1 = nj * c1
+        pv = c1 / (nc1 + 1.0)
+        psd = np.sqrt(pv)
+        half = 0.5 * np.log1p(nc1)
+        post_mean = nj * pv * res
+    log_odds = lpo + half - 0.5 * post_mean * post_mean / pv
+    postp = _stable_postp(log_odds)
+    pm_rb = postp * post_mean
+
+    if sparse and postp < 0.5:
+        new = 0.0
+        dc = 0
+    elif u < postp:
+        new = post_mean + g * psd
+        dc = 1
+    else:
+        new = 0.0
+        dc = 0
+
+    # Forbid a within-step sign flip (a major source of divergence on noisy /
+    # ill-conditioned LD); a flipped proposal is zeroed (and uncounted).
+    if (not allow_jump_sign and old != 0.0 and new != 0.0
+            and (new > 0.0) != (old > 0.0)):
+        new = 0.0
+        dc = 0
+    return new, pm_rb, dc
+
+
+_pn_step = _jit(_pn_step)
+
+
+def _pn_const_scalars(n_const, n0, c1):
+    """Precompute the constant-N posterior scalars (pv, sd, half-log, n·pv)."""
+    if n_const:
+        nc1 = n0 * c1
+        pv0 = c1 / (nc1 + 1.0)
+        return pv0, np.sqrt(pv0), 0.5 * np.log1p(nc1), n0 * pv0
+    return 0.0, 0.0, 0.0, 0.0
+
+
+_pn_const_scalars = _jit(_pn_const_scalars)
+
+
 def _gibbs_one_sweep(corr, beta_hat, n, curr_beta, Rb, post_means, unif, gauss,
-                     c1, log_prior_odds, sparse, n_const, n0, resync):
+                     c1, log_prior_odds, sparse, allow_jump_sign,
+                     n_const, n0, resync):
     """One point-normal Gibbs sweep over a single dense block (in place).
 
     Operates on length-k slices of the global state, so the caller can stream
@@ -989,41 +935,16 @@ def _gibbs_one_sweep(corr, beta_hat, n, curr_beta, Rb, post_means, unif, gauss,
                 for li in range(k):
                     Rb[li] += cj[li] * bj
 
-    if n_const:
-        nc1 = n0 * c1
-        pv0 = c1 / (nc1 + 1.0)
-        psd0 = np.sqrt(pv0)
-        half0 = 0.5 * np.log1p(nc1)
-        npv0 = n0 * pv0
-
+    pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
     nb_causal = 0
     for lj in range(k):
         old = curr_beta[lj]
         res_beta_j = beta_hat[lj] - Rb[lj] + old
-        if n_const:
-            pv = pv0
-            psd = psd0
-            half = half0
-            post_mean = npv0 * res_beta_j
-        else:
-            nj = n[lj]
-            nc1 = nj * c1
-            pv = c1 / (nc1 + 1.0)
-            psd = np.sqrt(pv)
-            half = 0.5 * np.log1p(nc1)
-            post_mean = nj * pv * res_beta_j
-        log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
-        postp = _stable_postp(log_odds)
-        post_means[lj] = postp * post_mean
-
-        if sparse and postp < 0.5:
-            new = 0.0
-        elif unif[lj] < postp:
-            new = post_mean + gauss[lj] * psd
-            nb_causal += 1
-        else:
-            new = 0.0
-
+        new, pm, dc = _pn_step(res_beta_j, old, n[lj], c1, n_const,
+                               pv0, psd0, half0, npv0, log_prior_odds,
+                               unif[lj], gauss[lj], sparse, allow_jump_sign)
+        post_means[lj] = pm
+        nb_causal += dc
         delta = new - old
         if delta != 0.0:
             cj = corr[lj]
@@ -1042,7 +963,7 @@ _gibbs_one_sweep_jit = _jit(_gibbs_one_sweep)
 
 def _gibbs_one_sweep_sparse(indptr, indices, data, beta_hat, n, curr_beta, Rb,
                             post_means, unif, gauss, c1, log_prior_odds, sparse,
-                            n_const, n0, resync):
+                            allow_jump_sign, n_const, n0, resync):
     """CSR counterpart of :func:`_gibbs_one_sweep`: one sweep over a banded block.
 
     ``indptr``/``indices``/``data`` are the block's local CSR (indices in
@@ -1061,41 +982,16 @@ def _gibbs_one_sweep_sparse(indptr, indices, data, beta_hat, n, curr_beta, Rb,
                 for idx in range(indptr[lj], indptr[lj + 1]):
                     Rb[indices[idx]] += data[idx] * bj
 
-    if n_const:
-        nc1 = n0 * c1
-        pv0 = c1 / (nc1 + 1.0)
-        psd0 = np.sqrt(pv0)
-        half0 = 0.5 * np.log1p(nc1)
-        npv0 = n0 * pv0
-
+    pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
     nb_causal = 0
     for lj in range(k):
         old = curr_beta[lj]
         res_beta_j = beta_hat[lj] - Rb[lj] + old
-        if n_const:
-            pv = pv0
-            psd = psd0
-            half = half0
-            post_mean = npv0 * res_beta_j
-        else:
-            nj = n[lj]
-            nc1 = nj * c1
-            pv = c1 / (nc1 + 1.0)
-            psd = np.sqrt(pv)
-            half = 0.5 * np.log1p(nc1)
-            post_mean = nj * pv * res_beta_j
-        log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
-        postp = _stable_postp(log_odds)
-        post_means[lj] = postp * post_mean
-
-        if sparse and postp < 0.5:
-            new = 0.0
-        elif unif[lj] < postp:
-            new = post_mean + gauss[lj] * psd
-            nb_causal += 1
-        else:
-            new = 0.0
-
+        new, pm, dc = _pn_step(res_beta_j, old, n[lj], c1, n_const,
+                               pv0, psd0, half0, npv0, log_prior_odds,
+                               unif[lj], gauss[lj], sparse, allow_jump_sign)
+        post_means[lj] = pm
+        nb_causal += dc
         delta = new - old
         if delta != 0.0:
             for idx in range(indptr[lj], indptr[lj + 1]):
@@ -1112,8 +1008,8 @@ _gibbs_one_sweep_sparse_jit = _jit(_gibbs_one_sweep_sparse)
 
 
 def _gibbs_one_sweep_lowrank(U, beta_hat, n, curr_beta, s, post_means, unif,
-                             gauss, c1, log_prior_odds, sparse, n_const, n0,
-                             resync):
+                             gauss, c1, log_prior_odds, sparse, allow_jump_sign,
+                             n_const, n0, resync):
     """Eigenspace counterpart of :func:`_gibbs_one_sweep` for a low-rank block.
 
     ``R ~= U U^T`` (unit diagonal). The block's residual is carried in the
@@ -1132,13 +1028,7 @@ def _gibbs_one_sweep_lowrank(U, beta_hat, n, curr_beta, s, post_means, unif,
                 for c in range(r):
                     s[c] += U[j, c] * bj
 
-    if n_const:
-        nc1 = n0 * c1
-        pv0 = c1 / (nc1 + 1.0)
-        psd0 = np.sqrt(pv0)
-        half0 = 0.5 * np.log1p(nc1)
-        npv0 = n0 * pv0
-
+    pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
     nb_causal = 0
     for j in range(k):
         old = curr_beta[j]
@@ -1146,30 +1036,11 @@ def _gibbs_one_sweep_lowrank(U, beta_hat, n, curr_beta, s, post_means, unif,
         for c in range(r):
             rbj += U[j, c] * s[c]
         res_beta_j = beta_hat[j] - rbj + old        # (U U^T)_jj = 1
-        if n_const:
-            pv = pv0
-            psd = psd0
-            half = half0
-            post_mean = npv0 * res_beta_j
-        else:
-            nj = n[j]
-            nc1 = nj * c1
-            pv = c1 / (nc1 + 1.0)
-            psd = np.sqrt(pv)
-            half = 0.5 * np.log1p(nc1)
-            post_mean = nj * pv * res_beta_j
-        log_odds = log_prior_odds + half - 0.5 * post_mean * post_mean / pv
-        postp = _stable_postp(log_odds)
-        post_means[j] = postp * post_mean
-
-        if sparse and postp < 0.5:
-            new = 0.0
-        elif unif[j] < postp:
-            new = post_mean + gauss[j] * psd
-            nb_causal += 1
-        else:
-            new = 0.0
-
+        new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, n_const,
+                               pv0, psd0, half0, npv0, log_prior_odds,
+                               unif[j], gauss[j], sparse, allow_jump_sign)
+        post_means[j] = pm
+        nb_causal += dc
         delta = new - old
         if delta != 0.0:
             for c in range(r):
@@ -1187,7 +1058,8 @@ _gibbs_one_sweep_lowrank_jit = _jit(_gibbs_one_sweep_lowrank)
 
 def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
                          sparse, seed, estimate_hyper, h2_bounds,
-                         warm_start=False, tol=0.0, check_every=50):
+                         warm_start=False, tol=0.0, check_every=50,
+                         allow_jump_sign=True):
     """Streaming global-hyper sampler: process blocks one at a time.
 
     Keeps the LD blocks in place (a float32 copy per distinct block; shared
@@ -1252,17 +1124,18 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
                 nbc, gvb = _gibbs_one_sweep_sparse_jit(
                     obj.indptr, obj.indices, obj.data, beta_hat[sl], n[sl],
                     curr_beta[sl], Rb[sl], post_means[sl], unif[sl], gauss[sl],
-                    c1, log_prior_odds, bool(sparse), n_const, n0, resync)
+                    c1, log_prior_odds, bool(sparse), bool(allow_jump_sign),
+                    n_const, n0, resync)
             elif kind == 2:
                 nbc, gvb = _gibbs_one_sweep_lowrank_jit(
                     obj.U, beta_hat[sl], n[sl], curr_beta[sl], s, post_means[sl],
                     unif[sl], gauss[sl], c1, log_prior_odds, bool(sparse),
-                    n_const, n0, resync)
+                    bool(allow_jump_sign), n_const, n0, resync)
             else:
                 nbc, gvb = _gibbs_one_sweep_jit(
                     obj, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
                     unif[sl], gauss[sl], c1, log_prior_odds, bool(sparse),
-                    n_const, n0, resync)
+                    bool(allow_jump_sign), n_const, n0, resync)
             nb_causal += nbc
             gv += gvb
 
@@ -1293,7 +1166,8 @@ def _gibbs_blocks_stream(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
 
 
 def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter,
-                                seed, h2_bounds, sample_every):
+                                seed, h2_bounds, sample_every,
+                                allow_jump_sign=True):
     """Streaming auto sampler that also retains thinned *sampled* effect vectors.
 
     The block-diagonal counterpart of :func:`_gibbs_kernel_sample`: it estimates
@@ -1357,17 +1231,18 @@ def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter
                 nbc, gvb = _gibbs_one_sweep_sparse_jit(
                     obj.indptr, obj.indices, obj.data, beta_hat[sl], n[sl],
                     curr_beta[sl], Rb[sl], post_means[sl], unif[sl], gauss[sl],
-                    c1, log_prior_odds, False, n_const, n0, resync)
+                    c1, log_prior_odds, False, bool(allow_jump_sign),
+                    n_const, n0, resync)
             elif kind == 2:
                 nbc, gvb = _gibbs_one_sweep_lowrank_jit(
                     obj.U, beta_hat[sl], n[sl], curr_beta[sl], s, post_means[sl],
                     unif[sl], gauss[sl], c1, log_prior_odds, False,
-                    n_const, n0, resync)
+                    bool(allow_jump_sign), n_const, n0, resync)
             else:
                 nbc, gvb = _gibbs_one_sweep_jit(
                     obj, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl],
                     post_means[sl], unif[sl], gauss[sl], c1, log_prior_odds,
-                    False, n_const, n0, resync)
+                    False, bool(allow_jump_sign), n_const, n0, resync)
             nb_causal += nbc
             gv += gvb
 
@@ -1676,22 +1551,26 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
             tol=kwargs.pop("tol", 0.0), check_every=kwargs.pop("check_every", 50))
         h2_init = kwargs.pop("h2_init", 0.1)
         p_init = kwargs.pop("p_init", 0.1)
+        allow_jump_sign = kwargs.pop("allow_jump_sign", True)
         if kwargs:
             raise TypeError(
                 f"unsupported keyword(s) for global_hyper auto: {sorted(kwargs)}. "
-                "allow_jump_sign / prior_weights / shrink_corr are only honoured "
-                "with global_hyper=False (per-block); they would otherwise be "
+                "prior_weights / shrink_corr are only honoured with "
+                "global_hyper=False (per-block); they would otherwise be "
                 "silently ignored here.")
         has_special = any(isinstance(cb, (SparseLD, LowRankLD)) for cb, _ in blk)
-        if ncores and ncores > 1 and not has_special:
+        # The packed multicore kernel does not implement the sign-flip guard, so a
+        # non-default allow_jump_sign uses the (single-core) streaming sampler.
+        if ncores and ncores > 1 and not has_special and allow_jump_sign:
             # Multicore: packed blocks + prange (more memory, parallel sweeps).
             avg_beta, _, _, _ = _gibbs_blocks(blk, beta_hat, n, h2_init, p_init,
                                               ncores=ncores, **common)
         else:
             # Single core, or banded/low-rank blocks (the packed multicore kernel
             # is dense-only): streaming sampler -- O(k·bandwidth)/O(k·rank) memory.
-            avg_beta, _, _, _ = _gibbs_blocks_stream(blk, beta_hat, n, h2_init,
-                                                     p_init, **common)
+            avg_beta, _, _, _ = _gibbs_blocks_stream(
+                blk, beta_hat, n, h2_init, p_init,
+                allow_jump_sign=allow_jump_sign, **common)
         return avg_beta
 
     # Total h2 (if given) is split across blocks proportionally to block size.

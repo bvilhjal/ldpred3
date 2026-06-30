@@ -158,6 +158,25 @@ def test_allow_jump_sign_stabilises():
     assert np.abs(guarded).max() <= np.abs(free).max() + 1e-6
 
 
+def test_allow_jump_sign_on_streaming_path():
+    # The guard is now honoured on the streaming (global-hyper blocks) auto path
+    # too, not just the dense kernels: it changes the trajectory and keeps the
+    # effects no larger than the unguarded run.
+    from ldpred3 import ldpred3_by_blocks
+    rng = np.random.default_rng(0)
+    m = 120
+    R = (0.9 ** np.abs(np.subtract.outer(np.arange(m), np.arange(m)))).astype(float)
+    beta = np.zeros(m); beta[::20] = 0.4
+    bhat = R @ beta + rng.standard_normal(m) / np.sqrt(2000)
+    blocks = [(R.astype(np.float32), np.arange(m))]
+    kw = dict(method="auto", global_hyper=True, burn_in=40, num_iter=120, seed=1)
+    free = ldpred3_by_blocks(blocks, bhat, 2000, allow_jump_sign=True, **kw)
+    guarded = ldpred3_by_blocks(blocks, bhat, 2000, allow_jump_sign=False, **kw)
+    assert np.all(np.isfinite(guarded))
+    assert not np.allclose(free, guarded)                 # actually wired through
+    assert np.abs(guarded).max() <= np.abs(free).max() + 1e-6
+
+
 def test_needs_two_chains():
     rng = np.random.default_rng(0)
     R = _block_R(200, 2, rng)

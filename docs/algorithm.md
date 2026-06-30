@@ -344,6 +344,11 @@ the LDpred2-auto inference workflow (Privé et al.) — keeps the chain bounded.
 It is exact for well-behaved problems (no flips occur) and only bites when the
 sampler would otherwise oscillate.
 
+The guard is honoured on every model path, including the **streaming** genome-wide
+auto (`ldpred3_by_blocks(global_hyper=True)` and `--infer` on per-block / banded /
+low-rank LD), so it is available at genome scale where ill-conditioned reference
+LD makes it most useful — not just on a single dense block.
+
 ## Performance & Numba
 
 The Gibbs sampler maintains a running `R @ beta` vector (per-SNP residual is an
