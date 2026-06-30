@@ -48,7 +48,7 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 | `--method annot --annotations a.tsv` | use functional-annotation priors |
 | `--dentist` | drop LD-inconsistent variants (allele/strand errors, LD mismatch); off by default |
 | `--ld-lowrank` | low-rank (eigen) LD — fit huge blocks in ~¼ the memory at matched accuracy ([scaling](docs/pipeline.md#scaling-to-millions-of-snps)) |
-| `--save-weights w.txt` / `--weights w.txt` | save fitted weights / score a new cohort from them |
+| `--save-weights w.txt` / `--weights w.txt` | save fitted weights / score a new cohort from them (add `--scaling frozen` for cross-cohort-comparable scores) |
 | `--ld-out f.npz` / `--ld-cache f.npz` / `--ld-stream` | cache the LD to skip recomputing it; `--ld-stream` streams it from disk (LD > RAM) |
 
 ### Choosing a model

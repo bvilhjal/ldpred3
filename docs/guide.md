@@ -20,6 +20,20 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 > (`auto` is the default model). Everything below is detail on the inputs, the
 > model choice, and reading the output.
 
+**Common recipes** — find your task, copy the command, read the linked section for
+detail. All build on the base command `ldpred3 --sumstats gwas.txt.gz --plink target`:
+
+| You want to… | Add / change | More |
+|--------------|--------------|------|
+| Score a cohort (the default) | *(nothing — `auto` runs)* | [§2](#2-the-one-command-path-recommended) |
+| Sanity-check inputs before a long run | `--dry-run` | [§2](#2-the-one-command-path-recommended) |
+| Also estimate h² / polygenicity / r² | `--infer` | [§7](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set) |
+| Use functional annotations | `--method annot --annotations annot.tsv` | [§6](#6-annotation-informed-prs-annot) |
+| Fit once, then score more cohorts cheaply | `--save-weights w.txt`, then `--weights w.txt` | [§8](#8-re-using-work-saved-weights--cached-ld) |
+| Make scores comparable **across** cohorts | `--weights w.txt --scaling frozen` | [§8](#8-re-using-work-saved-weights--cached-ld) |
+| Cache LD to speed up re-runs | `--ld-out ld.npz` once, then `--ld-cache ld.npz` | [§8](#8-re-using-work-saved-weights--cached-ld) |
+| Scale to millions of SNPs (sequencing) | `--ld-lowrank --ld-lowrank-min-size 1000 --ld-stream` | [§9](#9-scaling--performance) |
+
 ## 1. What you need
 
 | Input | What it is | Notes |
@@ -120,17 +134,16 @@ mismatch, wrong `N`, or LD that doesn't match the target) rather than the model.
 
 ## 4. Choosing a model
 
+**Use `auto` unless you have a specific reason not to** — it self-tunes `h²` and
+`p` and matches the oracle `grid` across architectures, with no tuning cohort.
+Branch off it only for the cases below:
+
 ```
-                trait is ~infinitesimal (highly polygenic, no big loci)?
-                          │ yes                    │ no
-                     ┌────┴─────┐            sparse / has major loci
-                     │   inf    │                  │
-                     └──────────┘         do you have trustworthy
-                                          per-SNP functional annotations?
-                                            │ yes              │ no
-                                       ┌────┴────┐        ┌────┴────┐
-                                       │  annot  │        │  auto   │
-                                       └─────────┘        └─────────┘
+start →  auto   (self-tuning; the right answer for most traits)
+           │
+           ├─ trait is truly infinitesimal, or you want a cheap baseline   →  inf
+           ├─ you already know h² and p (e.g. from a previous fit)         →  grid
+           └─ you have trustworthy per-SNP functional annotations          →  annot
 ```
 
 | Model | When to use | Hyper-parameters |
@@ -249,6 +262,24 @@ score_from_weights("prs.weights.txt", "new_cohort")  # -> ScoreResult
 
 Weights are harmonised to each new target's alleles (sign-flipped where alleles
 are swapped), so a cohort with the opposite A1/A2 coding still scores correctly.
+
+**Comparing scores across cohorts? Freeze the scale.** A standardized PRS is
+z-scored by each cohort's own allele frequencies, so the *same* weights give
+scores on slightly different scales in two cohorts — fine for ranking people
+*within* one cohort, but not for comparing a value between cohorts. Save the
+weights (they then carry the fit cohort's `AF_REF`/`SD_REF`) and score with
+`--scaling frozen` to reuse that one fixed scale everywhere:
+
+```bash
+ldpred3 --plink cohortB --weights prs.weights.txt --scaling frozen --out b.txt
+```
+
+```python
+score_from_weights("prs.weights.txt", "cohortB", scaling="frozen")
+```
+
+Default is `scaling="target"` (each cohort's own) — switch to `frozen` only when
+absolute, cross-cohort-comparable scores matter.
 
 **Cache the LD blocks** so re-runs (e.g. trying `grid` vs `auto`, or sweeping QC)
 don't recompute LD:
