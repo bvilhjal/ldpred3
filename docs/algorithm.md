@@ -373,3 +373,17 @@ inner sampler is JIT-compiled (and cached) for a large speed-up. Without it the
 code still runs and gives identical results, but the sampler falls back to plain
 Python loops and is much slower — fine for small problems / CI, not for
 genome-wide runs.
+
+### Reproducibility
+
+The Gibbs samplers are seeded and deterministic, but the **LD construction and
+the inference post-processing use BLAS** (`Z.T @ Z`, the dense matmuls, `eigh`),
+whose results can differ in the last bits across BLAS thread counts. For
+bit-reproducible LD / r² across machines, pin the threads before running:
+
+```bash
+export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+```
+
+(the test suite sets these for exactly this reason). The Gibbs effect estimates
+themselves are reproducible from the seed regardless.
