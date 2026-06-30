@@ -84,6 +84,7 @@ they run anywhere `msprime` is installed (`pip install msprime`).
 |--------|------------------|:---:|
 | `compare_ldsc_infer.py` | Heritability: LDSC vs LDpred3-auto-infer vs truth (reference-panel LD) | ✓ |
 | `infer_architectures.py` | h² (LDSC & LDpred3-auto) and polygenicity (LDpred3-auto) recovery **across four architectures** (infinitesimal / sparse / polygenic / major-locus), reference-panel LD | ✓ |
+| `rg_architectures.py` | Genetic correlation (bivariate LDSC vs bivariate LDpred3) vs truth, swept over r_g **× the four architectures**, reference-panel LD | ✓ |
 | `compare_bivariate_rg.py` | Genetic correlation: bivariate LDSC vs bivariate LDpred3 vs truth | ✓ |
 | `inference_benchmark.py` | Accuracy **and** running time for all inference estimators (incl. a marginal no-LD baseline) | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures | ✓ |

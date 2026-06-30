@@ -157,6 +157,29 @@ more precise (at true r_g=0.9, LDSC 0.86 ± 0.07 vs bivariate LDpred3 0.90 ± 0.
 See [algorithm.md](algorithm.md#bivariate-two-trait-ldpred3) and
 `benchmarks/compare_bivariate_rg.py`.
 
+**Across architectures.** Sweeping true r_g over four architectures (shared
+causal variants with bivariate-normal effects; ref-panel LD, m=6000, N₁=50k/N₂=20k,
+4 reps; `benchmarks/rg_architectures.py`) — both estimators **track r_g across
+every architecture**, with bivariate LDpred3 the more precise:
+
+| architecture | r_g | bivariate LDSC | bivariate LDpred3 |
+|--------------|----:|---------------:|------------------:|
+| infinitesimal | 0.0 / 0.6 | 0.044 ± 0.090 / 0.625 ± 0.056 | 0.028 ± 0.043 / 0.623 ± 0.030 |
+| sparse (p=0.01) | 0.0 / 0.6 | 0.042 ± 0.146 / 0.650 ± 0.106 | 0.006 ± 0.140 / 0.574 ± 0.129 |
+| polygenic (p=0.2) | 0.0 / 0.6 | −0.055 ± 0.119 / 0.534 ± 0.081 | −0.026 ± 0.070 / 0.584 ± 0.043 |
+| major locus | 0.0 / 0.6 | 0.081 ± 0.177 / 0.652 ± 0.044 | 0.080 ± 0.143 / 0.648 ± 0.057 |
+
+- **r_g is architecture-robust** and **unbiased at r_g=0** (no spurious
+  correlation) for both methods — unlike `h²` and `p`, the genetic *correlation*
+  largely cancels the LD-mismatch and architecture effects (they hit numerator and
+  denominator alike).
+- **Bivariate LDpred3 is consistently more precise** (full-likelihood vs the
+  moment regression) — e.g. at r_g=0.6, SD ~0.03–0.06 vs LDSC ~0.05–0.11.
+- **Sparse traits are the hardest** for both (SD ~0.10–0.15: fewer shared causal
+  variants carry the cross-trait signal); the **major-locus** and infinitesimal
+  architectures are the most precise (a few large shared effects, or many, anchor
+  the estimate).
+
 ## Accuracy vs running time
 
 Both axes together, on the realistic reference-panel setup (single core, m=6000,
