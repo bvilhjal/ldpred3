@@ -40,6 +40,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_ld_library.py
 | Script | What it measures | Needs LD lib |
 |--------|------------------|:---:|
 | `bench_methods.py` | Genetic R² of marginal/inf/grid/auto/annot across genetic architectures (→ `methods_arch_benchmark.{csv,png}`) | ✓ |
+| `maf_alpha_prior.py` | MAF-dependent prior (`--alpha`): does matching `alpha` to a true effect–frequency coupling help? (→ `maf_alpha_prior.csv`; self-contained, needs msprime) | — |
 | `sweep_p_h2_n.py` | PRS accuracy swept over polygenicity, heritability and sample size | ✓ |
 | `robustness_ld_and_n.py` | Sensitivity to LD-reference-panel size and to a misspecified GWAS `N` | ✓ |
 | `diagnose_annot.py` | Why `annot` under-converges at low power (the `theta_every` finding) | ✓ |
