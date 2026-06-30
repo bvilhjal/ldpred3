@@ -169,7 +169,8 @@ def _chain_run(p_init_and_seed):
             w["blocks"], w["beta_hat"], w["n"], float(w["h2_init"]),
             float(p_init), burn_in=int(w["burn_in"]), num_iter=int(w["num_iter"]),
             seed=int(seed), h2_bounds=(float(w["lo"]), float(w["hi"])),
-            sample_every=int(w["sample_every"]))
+            sample_every=int(w["sample_every"]),
+            allow_jump_sign=bool(w["allow_jump_sign"]))
         return avg, h2p, pp, samp
     avg, h2p, pp, samp, _ = _gibbs_kernel_sample_jit(   # dense path
         w["corr"], w["beta_hat"], w["n"], float(w["h2_init"]), float(p_init),
