@@ -96,6 +96,23 @@ def test_single_signal_abf_baseline():
     res = single_signal_finemap(R, bh, N)
     assert int(np.argmax(res.pip)) == 30
     assert res.pip.sum() == pytest.approx(1.0)     # ABF PIPs are a proper distribution
+    # The ABF must actually *concentrate* on the signal, not return a near-uniform
+    # PIP (it previously dropped the z² factor, flattening every PIP to ~1/m).
+    assert res.pip[30] > 0.5
+    # and a clean single signal localises to a small credible set.
+    assert len(res.credible_sets) == 1
+    assert res.credible_sets[0].variants.size < 20
+
+
+def test_abf_concentrates_on_genome_wide_hit():
+    # Even a moderate genome-wide-significant signal (z ~ 11) must give a sharp
+    # PIP, not a flat one — a direct regression guard for the z²-factor bug.
+    R = ar1(40, 0.6)
+    bh = sumstats(R, [12], [0.06], N, 0)
+    res = single_signal_finemap(R, bh, N)
+    assert int(np.argmax(res.pip)) == 12
+    assert res.pip[12] > 0.5
+    assert res.pip.max() > 5.0 / R.shape[0]        # far above the uniform 1/m
 
 
 def test_compact_ld_densified():
