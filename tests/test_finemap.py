@@ -1,9 +1,11 @@
 """Tests for LDpred3-PIP fine-mapping (ldpred3/finemap.py)."""
+import os
+
 import numpy as np
 import pytest
 
 from ldpred3 import (ldpred3_pip, single_signal_finemap, finemap_by_blocks,
-                     FineMapResult, CredibleSet)
+                     FineMapResult)
 
 
 def ar1(m, rho):
@@ -104,6 +106,7 @@ def test_compact_ld_densified():
     base = ldpred3_pip(R, bh, N, seed=3)
     lr = ldpred3_pip(lowrank_ld(R, variance=0.999), bh, N, seed=3)
     sp = ldpred3_pip(sparsify_ld(R, threshold=1e-4), bh, N, seed=3)
+    assert int(np.argmax(base.pip)) == 30
     assert int(np.argmax(lr.pip)) == 30
     assert int(np.argmax(sp.pip)) == 30
 
@@ -144,3 +147,71 @@ def test_credible_set_variants_mapped_to_genome():
     # block 2 spans [100,150); the credible set indices must be global, not local.
     assert gw.credible_sets[0].variants.min() >= 100
     assert truth[0] in gw.credible_sets[0].variants
+
+
+# --------------------------------------------------------------------------- #
+# File-based pipeline (run_finemap + CLI)
+# --------------------------------------------------------------------------- #
+def _write_locus(tmp_path, K=120, n=2000, causal=60, seed=0):
+    """A PLINK target with one AR(1) LD block + a GWAS file with one causal."""
+    from ldpred3.genotype_io import VariantTable, SampleTable, write_plink
+    from ldpred3.simulate import simulate_genotypes
+    rng = np.random.default_rng(seed)
+    maf = rng.uniform(0.1, 0.5, K)
+    G, _ = simulate_genotypes(n, [K], maf, 0.6, rng)
+    Z = G.astype(float); Z -= Z.mean(0); Z /= Z.std(0)
+    beta = np.zeros(K); beta[causal] = 0.3
+    g = Z @ beta
+    y = g + rng.normal(0, np.sqrt(max(1 - g.var(), 1e-6)), n)
+    bhat = (Z.T @ y) / n
+    se = np.full(K, 1 / np.sqrt(n))
+    variants = VariantTable(
+        chrom=np.array(["1"] * K, dtype=object),
+        id=np.array([f"rs{i}" for i in range(K)], dtype=object),
+        cm=np.zeros(K), pos=np.arange(1, K + 1, dtype=np.int64) * 1000,
+        a1=np.array(["A"] * K, dtype=object), a2=np.array(["G"] * K, dtype=object))
+    smp = SampleTable(
+        fid=np.array([f"s{i}" for i in range(n)], dtype=object),
+        iid=np.array([f"s{i}" for i in range(n)], dtype=object),
+        sex=np.ones(n, dtype=np.int64), pheno=np.full(n, np.nan))
+    prefix = str(tmp_path / "tgt")
+    write_plink(prefix, G, variants, smp)
+    ss_path = str(tmp_path / "gwas.txt")
+    with open(ss_path, "w") as fh:
+        fh.write("SNP\tA1\tA2\tBETA\tSE\tN\n")
+        for i in range(K):
+            fh.write(f"rs{i}\tA\tG\t{bhat[i]:.6g}\t{se[i]:.6g}\t{n}\n")
+    return prefix, ss_path, f"rs{causal}"
+
+
+def _top_pip_variant(pip_tsv):
+    best_id, best = None, -1.0
+    with open(pip_tsv) as fh:
+        next(fh)
+        for line in fh:
+            f = line.split("\t")
+            if float(f[3]) > best:
+                best, best_id = float(f[3]), f[0]
+    return best_id
+
+
+def test_run_finemap_end_to_end(tmp_path):
+    from ldpred3 import run_finemap
+    prefix, ss_path, causal_id = _write_locus(tmp_path, seed=1)
+    out = str(tmp_path / "fm")
+    res = run_finemap(ss_path, prefix, out=out, block_size=200, seed=1)
+    assert len(res.credible_sets) >= 1
+    assert os.path.exists(out + ".pip.tsv") and os.path.exists(out + ".cs.tsv")
+    assert _top_pip_variant(out + ".pip.tsv") == causal_id      # causal has top PIP
+    cs_text = open(out + ".cs.tsv").read()
+    assert causal_id in cs_text                                  # and is in a CS
+
+
+def test_run_finemap_cli(tmp_path):
+    from ldpred3.pipeline import _main
+    prefix, ss_path, causal_id = _write_locus(tmp_path, seed=2)
+    out = str(tmp_path / "cli")
+    _main(["--sumstats", ss_path, "--plink", prefix, "--finemap",
+           "--block-size", "200", "--out", out])
+    assert os.path.exists(out + ".pip.tsv") and os.path.exists(out + ".cs.tsv")
+    assert _top_pip_variant(out + ".pip.tsv") == causal_id

@@ -107,6 +107,41 @@ variant — the usual workflow, and much faster. `only_significant=None` fine-ma
 every block; with the fixed sparse prior, null blocks correctly contribute no
 credible sets.
 
+## File-based pipeline
+
+`run_finemap` takes a GWAS file + target genotypes and reuses the **same**
+read / QC / harmonise / external-LD machinery as the PRS pipeline (identical
+allele orientation and `2 - dosage` recoding, shared via
+`_external_ld_dosage`), then fine-maps and writes two tables:
+
+```python
+from ldpred3 import run_finemap
+
+res = run_finemap("gwas.txt.gz", "target",        # PLINK/BGEN prefix
+                  regions="loci.bed",             # optional; else whole genome
+                  only_significant=5e-8,           # optional locus filter
+                  out="fm")                        # writes fm.pip.tsv, fm.cs.tsv
+```
+
+CLI (a flag on the main entry point, not a subcommand):
+
+```bash
+ldpred3 --finemap --sumstats gwas.txt.gz --plink target --out fm
+ldpred3 --finemap --sumstats gwas.txt.gz --plink target --regions loci.bed \
+        --finemap-only-significant 5e-8 --out fm
+```
+
+Outputs:
+
+```text
+fm.pip.tsv   variant_id chrom pos pip posterior_mean posterior_sd z beta_std n_eff
+fm.cs.tsv    cs_id signal coverage n_variants lead_variant lead_pip
+             purity_min_abs_r purity_mean_abs_r variants
+```
+
+`regions` is a BED-like file (`chrom start end [name]`) or a list of
+`(chrom, start, end)` tuples; omit it to fine-map every LD block genome-wide.
+
 ## Baseline
 
 `single_signal_finemap(R, beta_std, n_eff)` is a fast single-causal-variant

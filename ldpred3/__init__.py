@@ -23,6 +23,7 @@ from .ldpred3 import (
 from .pipeline import (
     run_ldpred3_prs,
     PRSResult,
+    run_finemap,
     preflight_prs,
     score_from_weights,
     ScoreResult,
@@ -51,6 +52,7 @@ __all__ = [
     "LowRankLD",
     "lowrank_ld",
     "run_ldpred3_prs",
+    "run_finemap",
     "PRSResult",
     "preflight_prs",
     "score_from_weights",

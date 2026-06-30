@@ -48,8 +48,8 @@ from .ldpred3 import standardize_betas, ldpred3_by_blocks, shrink_ld_blocks
 from .infer import ldpred3_auto_infer
 from .annot import ldpred3_auto_annot_blocks, read_annotations
 
-__all__ = ["PRSResult", "ScoreResult", "run_ldpred3_prs", "preflight_prs",
-           "score_from_weights", "load_genotypes"]
+__all__ = ["PRSResult", "ScoreResult", "run_ldpred3_prs", "run_finemap",
+           "preflight_prs", "score_from_weights", "load_genotypes"]
 
 
 def load_genotypes(path, *, sample_path=None, variant_ids=None):
@@ -248,42 +248,10 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         raise ValueError("no GWAS variants matched the genotypes after "
                          "harmonisation; check IDs/alleles/build")
 
-    target_dos = geno.dosage[:, h.var_index]
-    chrom = geno.variants.chrom[h.var_index]
-
-    # LD reference: external panel (matched to the same variants) or in-sample.
-    if ld_prefix is not None:
-        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path,
-                             variant_ids=vids)
-        if subset_to_sumstats and ref.n_variants == 0:
-            ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
-        href = harmonize(ss, ref.variants)
-        # Restrict to variants present in both target-matched and ref-matched.
-        common = np.intersect1d(geno.variants.id[h.var_index],
-                                ref.variants.id[href.var_index])
-        if len(common) == 0:
-            raise ValueError("LD reference shares no variants with the target")
-        tmask = np.isin(geno.variants.id[h.var_index], common)
-        h = _subset_harmonized(h, tmask)
-        target_dos = geno.dosage[:, h.var_index]
-        chrom = geno.variants.chrom[h.var_index]
-        ref_order = {vid: i for i, vid in enumerate(ref.variants.id[href.var_index])}
-        ref_pos = [ref_order[v] for v in geno.variants.id[h.var_index]]
-        ref_cols = href.var_index[ref_pos]
-        # Recode reference dosages to count the SAME allele as the target/beta.
-        # Both panels were harmonised against the same sumstats, so a variant is
-        # in opposite orientation iff its flip flag differs; recode (2 - dosage)
-        # there. Using the flip flags (not a raw A1 string compare) keeps this
-        # correct for strand-flipped variants too. Without this, an LD-reference
-        # SNP counting the other allele would feed the sampler the wrong-sign
-        # correlations against a beta that is in target-A1 orientation.
-        ld_dos = ref.dosage[:, ref_cols].astype(float, copy=True)
-        recode = h.flipped != href.flipped[ref_pos]
-        if np.any(recode):
-            x = ld_dos[:, recode]
-            ld_dos[:, recode] = np.where(np.isfinite(x), 2.0 - x, x)
-    else:
-        ld_dos = target_dos
+    # LD reference: external panel (matched + allele-recoded) or in-sample.
+    h, target_dos, ld_dos, chrom = _external_ld_dosage(
+        ss, geno, h, vids=vids, ld_prefix=ld_prefix,
+        ld_sample_path=ld_sample_path, subset_to_sumstats=subset_to_sumstats)
 
     if ld_cache is not None:
         # Cached LD is authoritative: align the harmonised variants to its column
@@ -437,6 +405,195 @@ def _subset_harmonized(h, mask):
     return Harmonized(
         var_index=h.var_index[mask], beta=h.beta[mask], se=h.se[mask],
         n_eff=h.n_eff[mask], flipped=h.flipped[mask], log=h.log)
+
+
+def _external_ld_dosage(ss, geno, h, *, vids, ld_prefix, ld_sample_path,
+                        subset_to_sumstats):
+    """LD dosages aligned and allele-recoded to the harmonised target variants.
+
+    With no external panel, in-sample LD == the target dosages. With an
+    ``ld_prefix`` panel: load it, restrict both panels to their shared variants,
+    and recode reference dosages to ``2 - dosage`` wherever the panel counts the
+    opposite allele to the target/beta (detected via the harmonisation flip
+    flags, so strand flips are handled too). Returns
+    ``(h, target_dos, ld_dos, chrom)`` -- ``h`` / ``target_dos`` may be re-subset
+    to the shared variants. Shared by the PRS and fine-mapping pipelines so both
+    use exactly the same orientation logic.
+    """
+    target_dos = geno.dosage[:, h.var_index]
+    chrom = geno.variants.chrom[h.var_index]
+    if ld_prefix is None:
+        return h, target_dos, target_dos, chrom
+
+    ref = load_genotypes(ld_prefix, sample_path=ld_sample_path, variant_ids=vids)
+    if subset_to_sumstats and ref.n_variants == 0:
+        ref = load_genotypes(ld_prefix, sample_path=ld_sample_path)
+    href = harmonize(ss, ref.variants)
+    common = np.intersect1d(geno.variants.id[h.var_index],
+                            ref.variants.id[href.var_index])
+    if len(common) == 0:
+        raise ValueError("LD reference shares no variants with the target")
+    tmask = np.isin(geno.variants.id[h.var_index], common)
+    h = _subset_harmonized(h, tmask)
+    target_dos = geno.dosage[:, h.var_index]
+    chrom = geno.variants.chrom[h.var_index]
+    ref_order = {vid: i for i, vid in enumerate(ref.variants.id[href.var_index])}
+    ref_pos = [ref_order[v] for v in geno.variants.id[h.var_index]]
+    ref_cols = href.var_index[ref_pos]
+    ld_dos = ref.dosage[:, ref_cols].astype(float, copy=True)
+    recode = h.flipped != href.flipped[ref_pos]
+    if np.any(recode):
+        x = ld_dos[:, recode]
+        ld_dos[:, recode] = np.where(np.isfinite(x), 2.0 - x, x)
+    return h, target_dos, ld_dos, chrom
+
+
+def _read_regions(regions):
+    """Normalise ``regions`` to a list of ``(chrom, start, end, name)``.
+
+    Accepts a BED-like file path (``chrom start end [name]``, tab/space
+    separated, ``#`` comments) or an in-memory list of ``(chrom, start, end[,
+    name])`` tuples.
+    """
+    if not isinstance(regions, str):
+        out = []
+        for r in regions:
+            name = r[3] if len(r) > 3 else f"{r[0]}:{int(r[1])}-{int(r[2])}"
+            out.append((str(r[0]), int(r[1]), int(r[2]), name))
+        return out
+    out = []
+    with open(regions) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            f = line.split()
+            name = f[3] if len(f) > 3 else f"{f[0]}:{int(f[1])}-{int(f[2])}"
+            out.append((str(f[0]), int(f[1]), int(f[2]), name))
+    return out
+
+
+def _write_finemap(out, res, ids, chrom, pos, beta_std, n_eff):
+    """Write ``<out>.pip.tsv`` (per-variant) and ``<out>.cs.tsv`` (credible sets)."""
+    z = beta_std * np.sqrt(n_eff)
+    with open(f"{out}.pip.tsv", "w") as fh:
+        fh.write("variant_id\tchrom\tpos\tpip\tposterior_mean\tposterior_sd\t"
+                 "z\tbeta_std\tn_eff\n")
+        for i in range(len(ids)):
+            fh.write(f"{ids[i]}\t{chrom[i]}\t{int(pos[i])}\t{res.pip[i]:.6g}\t"
+                     f"{res.posterior_mean[i]:.6g}\t{res.posterior_sd[i]:.6g}\t"
+                     f"{z[i]:.6g}\t{beta_std[i]:.6g}\t{n_eff[i]:.6g}\n")
+    with open(f"{out}.cs.tsv", "w") as fh:
+        fh.write("cs_id\tsignal\tcoverage\tn_variants\tlead_variant\tlead_pip\t"
+                 "purity_min_abs_r\tpurity_mean_abs_r\tvariants\n")
+        for k, cs in enumerate(res.credible_sets):
+            members = ";".join(str(ids[v]) for v in cs.variants)
+            lead = cs.lead_variant if cs.lead_variant is not None else \
+                str(ids[cs.variants[int(np.argmax(cs.pip))]])
+            fh.write(f"CS{k + 1}\t{cs.signal}\t{cs.coverage:.4g}\t"
+                     f"{len(cs.variants)}\t{lead}\t{cs.lead_pip:.4g}\t"
+                     f"{cs.purity_min_abs_r:.4g}\t{cs.purity_mean_abs_r:.4g}\t"
+                     f"{members}\n")
+
+
+def run_finemap(sumstats, plink, *, regions=None, out=None, n_eff=None,
+                ld_prefix=None, ld_ridge=0.0, block_size=500, sample_path=None,
+                ld_sample_path=None, subset_to_sumstats=True, qc=True,
+                qc_params=None, sd_check=True, dentist=False, dentist_params=None,
+                only_significant=None, max_signals=10, coverage=0.95,
+                min_abs_corr=0.5, ncores=1, sumstats_cols=None, **pip_kw):
+    """Genome-wide / per-region fine-mapping from a GWAS file + target genotypes.
+
+    Shares the PRS pipeline's read / QC / harmonise / external-LD machinery (so
+    allele orientation, the ``2 - dosage`` recoding and SD/DENTIST QC are
+    identical), then runs LDpred3-PIP fine-mapping (:func:`ldpred3.finemap_by_blocks`)
+    over the LD blocks (or only the loci in ``regions``). Writes ``<out>.pip.tsv``
+    and ``<out>.cs.tsv`` when ``out`` is given. Returns the genome-wide
+    :class:`~ldpred3.FineMapResult`.
+
+    Parameters
+    ----------
+    regions : str or list, optional
+        Restrict fine-mapping to these loci: a BED-like file (``chrom start end
+        [name]``) or a list of ``(chrom, start, end)`` tuples. ``None`` fine-maps
+        the whole genome (every LD block).
+    only_significant : float, optional
+        Skip LD blocks with no variant below this two-sided p-value (e.g.
+        ``5e-8``) -- the usual "fine-map loci around hits" mode. ``None`` (default)
+        fine-maps every block.
+    ld_prefix : str, optional
+        External LD reference-panel prefix; in-sample LD from the target if omitted.
+    """
+    from .finemap import finemap_by_blocks
+
+    ss = read_sumstats(sumstats, n_eff=n_eff, **(sumstats_cols or {}))
+    qc_log = {}
+    if qc:
+        keep, qc_log = qc_sumstats(ss, **(qc_params or {}))
+        ss = ss.subset(keep)
+        if len(ss) == 0:
+            raise ValueError("all GWAS variants were removed by sumstats QC")
+
+    vids = set(ss.id) if subset_to_sumstats else None
+    geno = load_genotypes(plink, sample_path=sample_path, variant_ids=vids)
+    if subset_to_sumstats and geno.n_variants == 0:
+        geno = load_genotypes(plink, sample_path=sample_path)
+    h = harmonize(ss, geno.variants)
+    if len(h) == 0:
+        raise ValueError("no GWAS variants matched the genotypes after "
+                         "harmonisation; check IDs/alleles/build")
+
+    h, target_dos, ld_dos, chrom = _external_ld_dosage(
+        ss, geno, h, vids=vids, ld_prefix=ld_prefix,
+        ld_sample_path=ld_sample_path, subset_to_sumstats=subset_to_sumstats)
+    pos = geno.variants.pos[h.var_index]
+    ids = geno.variants.id[h.var_index]
+
+    if sd_check:
+        af_ref = allele_frequency(ld_dos)
+        keep_sd, sd_log, _ = sd_consistency_mask(h.beta, h.se, h.n_eff, af_ref)
+        qc_log["sd_consistency"] = sd_log
+        if keep_sd.sum() == 0:
+            raise ValueError("all variants failed the SD-consistency check")
+        h = _subset_harmonized(h, keep_sd)
+        ld_dos = ld_dos[:, keep_sd]; chrom = chrom[keep_sd]
+        pos = pos[keep_sd]; ids = ids[keep_sd]
+
+    if regions is not None:
+        inreg = np.zeros(len(ids), dtype=bool)
+        for c, s, e, _name in _read_regions(regions):
+            inreg |= (chrom == c) & (pos >= s) & (pos <= e)
+        if not inreg.any():
+            raise ValueError("no harmonised variants fall in the given regions")
+        h = _subset_harmonized(h, inreg)
+        ld_dos = ld_dos[:, inreg]; chrom = chrom[inreg]
+        pos = pos[inreg]; ids = ids[inreg]
+
+    blocks = compute_ld_blocks(ld_dos, chrom=chrom, block_size=block_size,
+                               ridge=ld_ridge)
+    if dentist:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            z = h.beta / h.se
+        keep_dt, dt_log = dentist_outlier_mask(blocks, z, **(dentist_params or {}))
+        qc_log["dentist"] = dt_log
+        if keep_dt.sum() == 0:
+            raise ValueError("all variants failed the DENTIST check")
+        if not keep_dt.all():
+            h = _subset_harmonized(h, keep_dt)
+            ld_dos = ld_dos[:, keep_dt]; chrom = chrom[keep_dt]
+            pos = pos[keep_dt]; ids = ids[keep_dt]
+            blocks = compute_ld_blocks(ld_dos, chrom=chrom, block_size=block_size,
+                                       ridge=ld_ridge)
+
+    beta_std, _ = standardize_betas(h.beta, h.se, h.n_eff)
+    res = finemap_by_blocks(blocks, beta_std, h.n_eff,
+                            only_significant=only_significant, variant_ids=ids,
+                            max_signals=max_signals, coverage=coverage,
+                            min_abs_corr=min_abs_corr, ncores=ncores, **pip_kw)
+    res.diagnostics.update(variant_ids=ids, chrom=chrom, pos=pos, qc_log=qc_log)
+    if out is not None:
+        _write_finemap(out, res, ids, chrom, pos, beta_std, h.n_eff)
+    return res
 
 
 def preflight_prs(sumstats, plink, *, n_eff=None, sample_path=None,
@@ -645,7 +802,22 @@ def _main(argv=None):
                     help="with --weights: 'target' standardizes by this cohort "
                          "(default); 'frozen' reuses the fit cohort's AF_REF/"
                          "SD_REF for a portable scale (needs those columns)")
-    ap.add_argument("--out", help="output scores file")
+    ap.add_argument("--out", help="output scores file (or fine-map output prefix)")
+    ap.add_argument("--finemap", action="store_true",
+                    help="fine-map instead of computing a PRS: write per-variant "
+                         "PIPs (<out>.pip.tsv) and credible sets (<out>.cs.tsv)")
+    ap.add_argument("--regions", default=None,
+                    help="with --finemap: BED-like file (chrom start end [name]) "
+                         "restricting fine-mapping to these loci")
+    ap.add_argument("--finemap-coverage", type=float, default=0.95,
+                    help="credible-set coverage target (default: 0.95)")
+    ap.add_argument("--finemap-max-signals", type=int, default=10,
+                    help="max signals per locus to fine-map (default: 10)")
+    ap.add_argument("--finemap-min-purity", type=float, default=0.5,
+                    help="min |r| purity for a credible set (default: 0.5)")
+    ap.add_argument("--finemap-only-significant", type=float, default=None,
+                    help="only fine-map LD blocks with a variant below this "
+                         "p-value (e.g. 5e-8); default: all blocks")
     args = ap.parse_args(argv)
     target = args.plink or args.bgen
 
@@ -689,6 +861,23 @@ def _main(argv=None):
 
     if not args.out:
         ap.error("--out is required")
+
+    # Mode 2.5: fine-mapping (PIPs + credible sets) instead of a PRS.
+    if args.finemap:
+        fm = run_finemap(
+            args.sumstats, target, regions=args.regions, out=args.out,
+            block_size=args.block_size, n_eff=args.n_eff, sample_path=args.sample,
+            ld_prefix=args.ld_prefix, ld_ridge=args.ld_ridge, ncores=args.ncores,
+            qc=not args.no_qc, sd_check=not args.no_sd_check, dentist=args.dentist,
+            only_significant=args.finemap_only_significant,
+            coverage=args.finemap_coverage, max_signals=args.finemap_max_signals,
+            min_abs_corr=args.finemap_min_purity)
+        d = fm.diagnostics
+        print(f"fine-mapped {d.get('n_blocks_finemapped', '?')}/"
+              f"{d.get('n_blocks', '?')} blocks; {len(fm.credible_sets)} credible "
+              f"sets (sum PIP {fm.n_signals_est:.1f}); "
+              f"wrote {args.out}.pip.tsv and {args.out}.cs.tsv")
+        return
 
     # Mode 3: full run. Default to method=annot when annotations are supplied.
     method = args.method
