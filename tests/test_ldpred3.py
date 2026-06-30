@@ -230,7 +230,8 @@ def test_numba_and_python_paths_agree():
     kwargs = dict(burn_in=40, num_iter=120, sparse=False, estimate_hyper=False,
                   h2_min=1e-6, h2_max=1.0, seed=11, init_beta=init, tol=0.0,
                   check_every=50, allow_jump_sign=True,
-                  prior_w=np.ones(corr.shape[0]))
+                  prior_w=np.ones(corr.shape[0]),
+                  slab_w=np.ones(corr.shape[0]))
     corr_c = np.ascontiguousarray(corr)
     py = ld_core._gibbs_kernel(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
     jit = ld_core._gibbs_kernel_jit(corr_c, beta_hat, n_vec, 0.5, 0.05, **kwargs)
@@ -475,3 +476,37 @@ if __name__ == "__main__":
     print(f"  LDpred3-grid      : {grid:.3f}")
     print(f"  LDpred3-auto      : {auto:.3f}")
     print(f"LDpred3-auto estimates: h2={res.h2_est:.3f}, p={res.p_est:.4f}")
+
+
+def test_maf_slab_weights_math():
+    from ldpred3 import maf_slab_weights
+    af = np.array([0.01, 0.1, 0.5])
+    assert np.allclose(maf_slab_weights(af, -1.0), 1.0)        # alpha=-1 -> uniform
+    w = maf_slab_weights(af, -2.0)                             # exponent -1
+    assert abs(w.mean() - 1.0) < 1e-9                          # normalised to mean 1
+    assert w[0] > w[1] > w[2]                                  # rarer -> larger slab
+    # monomorphic entries fall back to 1, don't blow up
+    w2 = maf_slab_weights(np.array([0.0, 0.3, 1.0]), -0.5)
+    assert np.all(np.isfinite(w2)) and w2[0] == 1.0 and w2[2] == 1.0
+
+
+def test_alpha_minus1_reproduces_uniform():
+    # af + alpha=-1 must be bit-identical to the no-MAF call (golden-preserving).
+    from ldpred3 import ldpred3_auto
+    corr, bh, _, n = simulate(m=150, seed=3)
+    rng = np.random.default_rng(0)
+    af = rng.uniform(0.05, 0.95, 150)
+    a = ldpred3_auto(corr, bh, n, seed=1, burn_in=30, num_iter=60)
+    b = ldpred3_auto(corr, bh, n, seed=1, burn_in=30, num_iter=60, af=af, alpha=-1.0)
+    np.testing.assert_allclose(a.beta_est, b.beta_est, rtol=1e-12, atol=1e-15)
+
+
+def test_alpha_changes_fit_and_stays_finite():
+    from ldpred3 import ldpred3_auto
+    corr, bh, _, n = simulate(m=150, seed=4)
+    rng = np.random.default_rng(1)
+    af = rng.uniform(0.05, 0.95, 150)
+    a = ldpred3_auto(corr, bh, n, seed=1, burn_in=30, num_iter=60)
+    c = ldpred3_auto(corr, bh, n, seed=1, burn_in=30, num_iter=60, af=af, alpha=-0.5)
+    assert np.all(np.isfinite(c.beta_est))
+    assert not np.allclose(a.beta_est, c.beta_est)            # alpha actually bites

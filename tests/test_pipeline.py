@@ -223,6 +223,44 @@ def test_pipeline_ldsc_init_seeds_h2(tmp_path):
     assert r2 > 0.20
 
 
+def test_pipeline_alpha_maf_prior(tmp_path):
+    # --alpha turns on the MAF-dependent slab prior: it runs end-to-end, logs the
+    # exponent, changes the weights vs the flat prior, and stays predictive.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=8)
+    base = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200)
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                          alpha=-0.5)
+    assert res.qc_log.get("maf_prior_alpha") == -0.5
+    # a non-default alpha must actually move the weights
+    assert not np.allclose(res.beta_adjusted, base.beta_adjusted)
+    assert np.all(np.isfinite(res.beta_adjusted))
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"alpha-prior PRS R^2 too low: {r2:.3f}"
+
+
+def test_pipeline_alpha_default_unchanged(tmp_path):
+    # alpha=-1 (the default) is the flat prior: identical weights to not passing it.
+    prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=3)
+    a = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=150, seed=1)
+    b = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=150, alpha=-1.0,
+                        seed=1)
+    np.testing.assert_array_equal(a.beta_adjusted, b.beta_adjusted)
+    assert "maf_prior_alpha" not in b.qc_log
+
+
+def test_pipeline_alpha_rejects_unsupported(tmp_path):
+    # alpha is rejected for methods that don't route through the dense by-blocks
+    # path (lassosum2 here) and for the multi-chain auto estimator.
+    import pytest
+    prefix, ss_path, _ = _simulate(tmp_path, m=200, seed=1)
+    with pytest.raises(ValueError, match="auto.*grid|grid.*only"):
+        run_ldpred3_prs(ss_path, prefix, method="lassosum2", block_size=150,
+                        alpha=-0.5)
+    with pytest.raises(ValueError, match="multi-chain"):
+        run_ldpred3_prs(ss_path, prefix, method="auto", block_size=150,
+                        alpha=-0.5, auto_chains=4)
+
+
 def test_pipeline_impute_n_runs_and_keeps_signal(tmp_path):
     # --impute-n runs end-to-end, logs its diagnostics, and (when the reported N
     # is already correct) leaves the PRS predictive — no harm.

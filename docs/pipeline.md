@@ -77,6 +77,7 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--out FILE` | — | Output scores file (required for a run; see [Outputs](#outputs)). |
 | `--method {auto,grid,inf,annot}` | `auto` | LDpred3 model; see [Choosing a model](../README.md#choosing-a-model). |
 | `--annotations FILE` | none | Per-SNP annotation table; switches `--method` to `annot`. |
+| `--alpha FLOAT` | `-1.0` | MAF-dependent slab-variance prior exponent (Privé 2023): slab variance scales as `[2f(1-f)]^(1+alpha)`. `-1` = flat (unchanged); `auto`/`grid` only (see [algorithm.md](algorithm.md#maf-dependent-slab-variance-alpha)). |
 | `--block-size N` | `500` | Maximum variants per LD block. |
 | `--n-eff FLOAT` | none | Effective sample size, used when the sumstats have no `N` column. |
 | `--ld-prefix PREFIX` | in-sample | External LD reference panel (PLINK prefix); default is the target itself. |

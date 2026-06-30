@@ -68,6 +68,7 @@ __all__ = [
     "ldpred3_grid",
     "ldpred3_auto",
     "ldpred3_by_blocks",
+    "maf_slab_weights",
     "AutoResult",
     "SparseLD",
     "sparsify_ld",
@@ -120,6 +121,27 @@ def standardize_betas(beta, beta_se, n_eff):
     beta_std = np.divide(beta, scale, out=np.zeros_like(beta, dtype=float),
                          where=scale > 0)
     return beta_std, scale
+
+
+def maf_slab_weights(af, alpha):
+    """Per-SNP slab-variance weights for a MAF-dependent effect architecture.
+
+    Scales the causal-effect variance by ``[2f(1−f)]^(1+α)`` (the MAF-coupling /
+    "S" / α parameter — Speed et al., Zeng et al., and the ``use_MLE`` extension of
+    LDpred2-auto, Privé et al. 2023), normalised to **mean 1** so the total ``h2``
+    budget is preserved. The default LDpred model is ``α = −1`` → ``[2f(1−f)]^0 = 1``
+    → uniform weights (no MAF dependence); ``α < −1`` up-weights rarer variants
+    (per-standardized-effect larger for rare alleles, the signature of negative
+    selection). Pass the result as ``slab_weights`` to scale the prior.
+    """
+    af = np.asarray(af, dtype=float)
+    het = 2.0 * af * (1.0 - af)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        w = np.where(het > 0, het, np.nan) ** (1.0 + alpha)
+    mw = np.nanmean(w)
+    if not np.isfinite(mw) or mw <= 0:
+        return np.ones_like(af)
+    return np.where(np.isfinite(w), w / mw, 1.0)
 
 
 def _as_n_vector(n_eff, m):
@@ -243,7 +265,7 @@ def _cg_solve(ld, ridge, b, tol=1e-6, max_iter=1000):
 
 def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
                   estimate_hyper, h2_min, h2_max, seed, init_beta, tol,
-                  check_every, allow_jump_sign, prior_w):
+                  check_every, allow_jump_sign, prior_w, slab_w):
     """Numeric core of the point-normal Gibbs sampler (JIT-compiled if numba).
 
     Takes only plain numeric / array arguments so it compiles under
@@ -277,8 +299,9 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
     count = 0
 
     for it in range(n_iter_total):
-        # Variance of a causal effect under the slab (uses the global p, so the
-        # per-SNP prior weights re-weight inclusion, not the effect-size scale).
+        # Base causal-effect slab variance (global p). ``slab_w`` scales it per
+        # SNP for a MAF-dependent architecture (slab_w == 1 -> uniform); ``prior_w``
+        # separately re-weights the *inclusion* probability.
         c1 = h2 / (m * p)
         # Per-SNP prior log-odds of null vs causal: p_j = p * prior_w[j].
         pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
@@ -310,8 +333,8 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             # Shared per-SNP point-normal update; the Rao-Blackwellised post_means
             # (accumulated below) drive the dense estimate, the sampled value the
             # chain. Per-variant N here -> n_const=False; the prior weights enter
-            # through the per-SNP log prior-odds.
-            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1, False,
+            # through the per-SNP log prior-odds; slab_w scales the slab variance.
+            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1 * slab_w[j], False,
                                    0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
                                    unif[j], gauss[j], sparse, allow_jump_sign)
             post_means[j] = pm
@@ -1279,7 +1302,7 @@ def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter
 def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
                    seed, estimate_hyper, h2_bounds, shrink_corr,
                    warm_start=False, tol=0.0, check_every=50,
-                   allow_jump_sign=True, prior_w=None):
+                   allow_jump_sign=True, prior_w=None, slab_w=None):
     """Prepare arguments and dispatch to the (optionally JIT-compiled) kernel.
 
     ``corr`` may be a dense ndarray or a :class:`SparseLD`; the matching dense or
@@ -1302,6 +1325,14 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
             raise ValueError("prior_weights must be a length-m vector")
         if np.any(prior_w < 0):
             raise ValueError("prior_weights must be non-negative")
+    if slab_w is None:
+        slab_w = np.ones(m)
+    else:
+        slab_w = np.ascontiguousarray(slab_w, dtype=np.float64)
+        if slab_w.shape != (m,):
+            raise ValueError("slab_weights must be a length-m vector")
+        if np.any(slab_w <= 0):
+            raise ValueError("slab_weights must be positive")
 
     # Warm start from the (cheap) infinitesimal solution, else cold start.
     if warm_start:
@@ -1313,6 +1344,9 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
     if isinstance(corr, SparseLD):
         if shrink_corr != 1.0:
             raise ValueError("shrink_corr is only supported for dense LD")
+        if np.any(slab_w != 1.0):
+            raise ValueError("the MAF-dependent prior (alpha/slab_weights) needs "
+                             "dense LD, not SparseLD")
         return _gibbs_kernel_sparse_jit(
             corr.indptr, corr.indices, corr.data, beta_hat, n, float(h2),
             float(p), int(burn_in), int(num_iter), bool(sparse),
@@ -1339,14 +1373,14 @@ def _gibbs_sampler(corr, beta_hat, n, h2, p, *, burn_in, num_iter, sparse,
         corr, beta_hat, n, float(h2), float(p), int(burn_in), int(num_iter),
         bool(sparse), bool(estimate_hyper), float(h2_min), float(h2_max),
         int(seed), init_beta, float(tol), int(check_every),
-        bool(allow_jump_sign), prior_w,
+        bool(allow_jump_sign), prior_w, slab_w,
     )
 
 
 def ldpred3_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
                  sparse=False, shrink_corr=1.0, warm_start=False, tol=0.0,
                  check_every=50, allow_jump_sign=True, prior_weights=None,
-                 seed=None):
+                 af=None, alpha=-1.0, seed=None):
     """LDpred3 grid model: point-normal prior, fixed hyper-parameters.
 
     The prior is spike-and-slab: with probability ``p`` a variant is causal
@@ -1397,12 +1431,13 @@ def ldpred3_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
+    slab_w = maf_slab_weights(af, alpha) if af is not None and alpha != -1.0 else None
     avg_beta, _, _, _ = _gibbs_sampler(
         corr, beta_hat, n, h2, p,
         burn_in=burn_in, num_iter=num_iter, sparse=sparse, seed=seed,
         estimate_hyper=False, h2_bounds=(1e-6, 1.0), shrink_corr=shrink_corr,
         warm_start=warm_start, tol=tol, check_every=check_every,
-        allow_jump_sign=allow_jump_sign, prior_w=prior_weights,
+        allow_jump_sign=allow_jump_sign, prior_w=prior_weights, slab_w=slab_w,
     )
     return avg_beta
 
@@ -1431,7 +1466,7 @@ def ldpred3_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
                  burn_in=200, num_iter=200, shrink_corr=1.0,
                  h2_bounds=(1e-4, 1.0), warm_start=False, tol=0.0,
                  check_every=50, allow_jump_sign=True, prior_weights=None,
-                 seed=None):
+                 af=None, alpha=-1.0, seed=None):
     """LDpred3-auto: fit the point-normal model and estimate ``h2`` and ``p``.
 
     Unlike :func:`ldpred3_grid`, no validation set is needed: the proportion of
@@ -1472,12 +1507,13 @@ def ldpred3_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
+    slab_w = maf_slab_weights(af, alpha) if af is not None and alpha != -1.0 else None
     avg_beta, h2_path, p_path, count = _gibbs_sampler(
         corr, beta_hat, n, h2_init, p_init,
         burn_in=burn_in, num_iter=num_iter, sparse=False, seed=seed,
         estimate_hyper=True, h2_bounds=h2_bounds, shrink_corr=shrink_corr,
         warm_start=warm_start, tol=tol, check_every=check_every,
-        allow_jump_sign=allow_jump_sign, prior_w=prior_weights,
+        allow_jump_sign=allow_jump_sign, prior_w=prior_weights, slab_w=slab_w,
     )
     return AutoResult(
         beta_est=avg_beta,
@@ -1533,6 +1569,17 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
     funcs = {"inf": ldpred3_inf, "grid": ldpred3_grid, "auto": ldpred3_auto}
     if method not in funcs:
         raise ValueError(f"method must be one of {sorted(funcs)}")
+
+    # The MAF-dependent prior (af + alpha != -1) is per-block dense only; it needs
+    # the per-block path (the streaming global-hyper kernel has no slab weights).
+    af = kwargs.pop("af", None)
+    alpha = kwargs.pop("alpha", -1.0)
+    if af is not None:
+        af = np.asarray(af, dtype=float)
+        if alpha != -1.0 and method == "auto" and global_hyper:
+            raise ValueError("the MAF-dependent prior (alpha != -1) requires "
+                             "global_hyper=False (per-block) — the streaming "
+                             "global-hyper sampler has no slab weights")
 
     # LDpred3-auto with GLOBAL hyper-parameters: assemble one block-diagonal
     # matrix and run a single auto fit, so h2 and p are estimated jointly across
@@ -1597,6 +1644,9 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
         block_kwargs = dict(kwargs)
         if method in ("inf", "grid"):
             block_kwargs["h2"] = (total_h2 * k / m) if total_h2 is not None else 0.1
+        if af is not None and method in ("auto", "grid"):
+            block_kwargs["af"] = af[idx]            # MAF-dependent slab, per block
+            block_kwargs["alpha"] = alpha
         res = funcs[method](corr_block, beta_hat[idx], n[idx], **block_kwargs)
         out[idx] = res.beta_est if isinstance(res, AutoResult) else res
     return out

@@ -209,6 +209,32 @@ global. Scaling the effect-size variance by annotation is a further knob, but it
 must match a real annotation–effect-size relationship or it over-shrinks (it
 hurt in simulations where effect size was annotation-independent).
 
+### MAF-dependent slab variance (`alpha`)
+
+A second, *allele-frequency*-based knob scales each variant's slab **variance**
+(not its inclusion probability) by `[2f(1-f)]^(1+alpha)`, where `f` is the allele
+frequency. This is the LDpred2-auto `alpha`/`use_MLE` prior of
+[Privé et al. (2023)](https://doi.org/10.1016/j.ajhg.2022.10.010): it relaxes the
+standard-genotype assumption that per-allele effect variance is exactly
+proportional to `1/[2f(1-f)]` (i.e. `alpha = -1`, the default and the original
+point-normal model). Real traits often prefer `alpha` somewhere in `[-1, -0.5]`,
+putting relatively more variance on common variants.
+
+```python
+ldpred3_grid(corr, beta_hat, n_eff, h2, p, af=freq, alpha=-0.5)   # auto / grid
+run_ldpred3_prs(sumstats, plink, method="auto", alpha=-0.5)        # or --alpha
+```
+
+- `alpha = -1` (default) leaves the sampler bit-for-bit unchanged — the weights
+  are mean-normalised so the total `h²` budget is preserved.
+- It is a change of slab *shape* only, so — unlike annotation priors — it injects
+  no new information; it helps only when the true effect–MAF coupling departs from
+  `alpha = -1`. Privé et al. select it by maximising the model's own likelihood
+  across a small `alpha` grid; here it is a user-set knob.
+- Runs through the dense per-block `auto` / `grid` path only (it forces
+  `global_hyper=False` for `auto`); not supported with the multi-chain auto
+  estimator, `lassosum2`, `annot`, or compact (sparse / low-rank) LD.
+
 ### Learning the annotation map (SBayesRC)
 
 `ldpred3_auto_annot` learns the annotation→prior map *inside* the sampler, so
