@@ -152,12 +152,33 @@ fine-mapped genome-wide in `only_significant` mode (`benchmarks/finemap_genomewi
 
 `only_significant` fine-maps just the signal-bearing loci, so genome-wide
 fine-mapping of 500k SNPs takes **~4 s single-core** while recovering ~93% of
-causals at ~0.95 coverage and median set size 2. Fine-mapping **every** block
-(`only_significant=None`) costs more and emits a few spurious sets from null
-blocks — but the fixed sparse prior keeps that rate low (m=100k: 4 false sets out
-of 24, coverage 0.83 in 8.2 s, vs **0 false / coverage 1.00 in 0.9 s** for
-`only_significant`). Use `only_significant` for whole-genome runs; `ncores>1`
-parallelises the independent blocks further.
+strong causals at ~0.95 coverage and median set size 2. `ncores>1` parallelises
+the independent blocks further.
+
+**Weak causals are the hard, realistic case** — most true effects are not
+genome-wide-significant. Sweeping the per-causal strength (m=100k, ~20 causals)
+exposes *two distinct limits*:
+
+| z | p (2-sided) | only-sig power | all-blocks power | all-blocks coverage | all-blocks false sets |
+|--:|------------:|---------------:|-----------------:|--------------------:|----------------------:|
+| 4 | 6e-5 | **0.00** | 0.22 | 0.75 | 2 |
+| 5 | 6e-7 | 0.32 | 0.53 | 0.71 | 4 |
+| 6 | 2e-9 | 0.73 | 0.82 | 0.60 | 6 |
+| 8 | 1e-15 | 1.00 | 1.00 | 0.87 | 3 |
+
+- **Detection limit (the gate).** A weak causal's locus never reaches 5e-8
+  (`|z| > 5.45`), so `only_significant` *never fine-maps it* — power is 0 at z=4
+  and 0.32 at z=5. The gap to all-blocks power (0→0.22, 0.32→0.53) is signal lost
+  purely to locus selection. **Improvement target:** fine-map sub-threshold loci
+  (a looser locus-selection p, or clumping at e.g. 1e-5).
+- **Fine-mapper limit (low power).** Even fine-mapping *every* block, a z=4 signal
+  is recovered only 22% of the time, with larger, less calibrated sets — the PIP
+  cannot localize at low power. And scanning every null block raises the false-set
+  count (2→6) and dilutes coverage. **Improvement targets:** PIP calibration and
+  credible-set construction at low power, and a per-locus quality gate that
+  suppresses false sets without discarding sub-threshold true signals.
+
+Regenerate (both parts) with `benchmarks/finemap_genomewide.py`.
 
 ## File-based pipeline
 
