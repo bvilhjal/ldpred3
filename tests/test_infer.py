@@ -199,17 +199,44 @@ def test_streaming_blocks_matches_dense():
     assert abs(strm.r2_est - r2_test) < 0.12
 
 
-def test_infer_rejects_lowrank_and_sparse_blocks():
-    # Inference needs dense LD; compact representations must fail loudly, not
-    # crash inside np.ascontiguousarray with a cryptic error.
+def test_infer_lowrank_matches_dense():
+    # h2/p/r2 inference on low-rank (eigenspace) blocks should track the dense
+    # streaming fit: realistic LD is near-low-rank, so truncation barely moves it.
+    R, beta_hat, n_train, Gte, yte = _simulate_cohorts(
+        h2=0.5, p=0.05, n_train=8000, seed=2)
+    dense = _split_blocks(R, 6)
+    lr = [(lowrank_ld(np.asarray(Rb, float), variance=0.999), idx)
+          for Rb, idx in dense]
+    kw = dict(n_chains=8, burn_in=120, num_iter=160, seed=5)
+    d = ldpred3_auto_infer(dense, beta_hat, n_train, **kw)
+    low = ldpred3_auto_infer(lr, beta_hat, n_train, **kw)
+    assert abs(d.h2_est - low.h2_est) < 0.07
+    assert abs(d.r2_est - low.r2_est) < 0.07
+    # and the low-rank run still recovers the true h2
+    assert abs(low.h2_est - 0.5) < 0.12
+
+
+def test_infer_sparse_runs_and_recovers_h2():
+    # Inference on banded SparseLD blocks runs through the streaming sampler and
+    # recovers a sensible h2 (banding is lossy, so a looser tolerance than dense).
+    R, beta_hat, n_train, Gte, yte = _simulate_cohorts(
+        h2=0.5, p=0.05, n_train=8000, seed=2)
+    sp = [(sparsify_ld(np.asarray(Rb, float), threshold=1e-3), idx)
+          for Rb, idx in _split_blocks(R, 6)]
+    res = ldpred3_auto_infer(sp, beta_hat, n_train, n_chains=8, burn_in=120,
+                             num_iter=160, seed=5)
+    assert 0.0 < res.h2_est < 1.0
+    assert abs(res.h2_est - 0.5) < 0.15
+    assert res.r2_ci[0] <= res.r2_est <= res.r2_ci[1]
+
+
+def test_infer_rejects_shrink_with_compact_blocks():
+    # shrink_corr is undefined on compact representations -> fail loudly.
     rng = np.random.default_rng(3)
     R = _block_R(120, 2, rng)
     beta_hat = rng.standard_normal(120) * 0.02
     lr = [(lowrank_ld(R[:60, :60]), np.arange(60)),
           (lowrank_ld(R[60:, 60:]), np.arange(60, 120))]
-    with pytest.raises(ValueError, match="dense LD"):
-        ldpred3_auto_infer(lr, beta_hat, 10000, n_chains=2, burn_in=10, num_iter=10)
-    sp = [(sparsify_ld(R[:60, :60]), np.arange(60)),
-          (sparsify_ld(R[60:, 60:]), np.arange(60, 120))]
-    with pytest.raises(ValueError, match="dense LD"):
-        ldpred3_auto_infer(sp, beta_hat, 10000, n_chains=2, burn_in=10, num_iter=10)
+    with pytest.raises(ValueError, match="shrink_corr"):
+        ldpred3_auto_infer(lr, beta_hat, 10000, n_chains=2, burn_in=10,
+                           num_iter=10, shrink_corr=0.9)

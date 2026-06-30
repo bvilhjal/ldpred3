@@ -183,6 +183,15 @@ already 22 s and a dense genome-wide matrix is infeasible (memory and time),
 whereas streaming stays linear — so prefer the blocks form (which the pipeline's
 `--infer` now uses by default) at any non-trivial size.
 
+The blocks may also be **compact**: banded `SparseLD` (`O(k·bandwidth)`) or
+low-rank `LowRankLD` (`O(k·rank)` eigenspace). `ldpred3_auto_infer` fits these in
+their native representation — the sampler and the cross-chain r² products use the
+banded CSR / eigenvectors directly, never densifying to `k × k` — so **h²/p/r²
+inference scales the same way scoring does**. With `--infer`, `--ld-lowrank` (or
+`--ld-sparse`) therefore caps memory at the per-block representation while still
+returning the heritability, polygenicity and predictive-r² estimates. (`shrink_corr`
+is only defined on dense blocks, so it is rejected with a compact LD.)
+
 ## Interval calibration
 
 Do the nominal 95% intervals actually cover the truth 95% of the time? Coverage

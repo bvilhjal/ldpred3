@@ -25,7 +25,11 @@ across chains, dropping chains that collapsed to ~0.
 It accepts either a single **dense** LD matrix or a **list of per-block**
 ``(R, idx)`` matrices. The blocks form is *streamed* — chains run one block at a
 time and the genome-wide LD is never materialised — so inference scales beyond
-the dense path's ``infer_max_variants`` ceiling.
+the dense path's ``infer_max_variants`` ceiling. Blocks may be dense, banded
+:class:`~ldpred3.SparseLD` (O(k·bandwidth)) or low-rank
+:class:`~ldpred3.LowRankLD` (O(k·rank) eigenspace), so h²/p/r² inference scales
+the same way scoring does — the compact representation is used end to end (the
+sampler and the r² cross-products), never densified to ``k × k``.
 """
 
 from __future__ import annotations
@@ -83,15 +87,23 @@ def _prep_corr(corr, shrink_corr):
 
 
 def _prep_blocks(blocks, shrink_corr):
-    """float32 ``(R, idx)`` blocks, off-diagonal optionally shrunk."""
+    """Prepare ``(R, idx)`` blocks for the streaming sampler.
+
+    Dense blocks become float32 with the off-diagonal optionally shrunk; banded
+    :class:`SparseLD` and low-rank :class:`LowRankLD` blocks are passed through
+    unchanged (they scale the inference the same way they scale scoring).
+    ``shrink_corr`` only applies to dense blocks — it is not defined on the
+    compact representations, so a non-unit value with any such block is rejected.
+    """
+    has_compact = any(isinstance(R, (SparseLD, LowRankLD)) for R, _ in blocks)
+    if has_compact and shrink_corr != 1.0:
+        raise ValueError("shrink_corr != 1 is only supported for dense LD "
+                         "blocks, not SparseLD / LowRankLD")
     out = []
     for R, idx in blocks:
         if isinstance(R, (SparseLD, LowRankLD)):
-            raise ValueError(
-                "inference (ldpred3_auto_infer / infer=True) currently requires "
-                "dense LD blocks; got a "
-                f"{type(R).__name__}. Re-run without ld_sparse / ld_lowrank for "
-                "the inference path.")
+            out.append((R, np.asarray(idx)))
+            continue
         R = np.ascontiguousarray(R, dtype=np.float32)
         if shrink_corr != 1.0:
             R = R * np.float32(shrink_corr)
@@ -100,11 +112,39 @@ def _prep_blocks(blocks, shrink_corr):
     return out
 
 
+def _sparse_block_rmatmul(R, Sb):
+    """``Sb @ R`` for a symmetric banded :class:`SparseLD` block (no densify).
+
+    ``R`` is stored in CSR; column ``j`` of the result gathers ``Sb`` over row
+    ``j``'s non-zero neighbours -- O(nnz · rows), O(k · bandwidth) memory.
+    """
+    out = np.zeros_like(Sb)
+    indptr, indices, data = R.indptr, R.indices, R.data
+    for j in range(R.m):
+        seg = slice(int(indptr[j]), int(indptr[j + 1]))
+        cols = indices[seg]
+        vals = data[seg].astype(Sb.dtype, copy=False)
+        out[:, j] = Sb[:, cols] @ vals
+    return out
+
+
 def _blocks_matmul(blocks, S):
-    """``S @ R`` for block-diagonal ``R`` (S is ``(rows, m)``)."""
+    """``S @ R`` for block-diagonal ``R`` (S is ``(rows, m)``).
+
+    Each block is multiplied in its native representation, so a compact block is
+    never densified to ``k × k``: dense uses ``Sb @ R``, low-rank uses
+    ``(Sb @ U) @ Uᵀ`` (O(rows·k·rank)), banded uses a sparse gather.
+    """
     out = np.zeros_like(S)
     for R, idx in blocks:
-        out[:, idx] = S[:, idx] @ R.astype(S.dtype, copy=False)
+        Sb = S[:, idx]
+        if isinstance(R, LowRankLD):
+            U = R.U.astype(S.dtype, copy=False)
+            out[:, idx] = (Sb @ U) @ U.T
+        elif isinstance(R, SparseLD):
+            out[:, idx] = _sparse_block_rmatmul(R, Sb)
+        else:
+            out[:, idx] = Sb @ R.astype(S.dtype, copy=False)
     return out
 
 

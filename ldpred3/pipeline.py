@@ -321,9 +321,6 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         if (ld_sparse or ld_lowrank) and dentist:
             raise ValueError("dentist requires dense LD blocks and is not "
                              "compatible with ld_sparse / ld_lowrank")
-        if (ld_sparse or ld_lowrank) and infer:
-            raise ValueError("infer=True currently requires dense LD blocks and "
-                             "is not compatible with ld_sparse / ld_lowrank")
         # Compact LD representations keep persistent memory sub-O(k²) for large
         # blocks (genome / sequencing scale): banded SparseLD (O(k·bandwidth)) or
         # low-rank LowRankLD (O(k·rank), preferred on realistic LD). The dense
