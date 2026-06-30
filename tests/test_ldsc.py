@@ -112,3 +112,18 @@ def test_ldsc_constrained_intercept():
     assert res.intercept == 1.0
     assert res.intercept_se == 0.0
     assert abs(res.h2 - 0.4) < 0.1
+
+
+def test_partition_h2_sums_to_global():
+    import numpy as np
+    from ldpred3 import partition_h2
+    rng = np.random.default_rng(0)
+    R1 = (0.5 ** np.abs(np.subtract.outer(np.arange(20), np.arange(20)))).astype(float)
+    R2 = (0.3 ** np.abs(np.subtract.outer(np.arange(20), np.arange(20)))).astype(float)
+    blocks = [(R1, np.arange(20)), (R2, np.arange(20, 40))]
+    beta = rng.standard_normal(40) * 0.1
+    local = partition_h2(blocks, beta)
+    assert local.shape == (2,)
+    glob = beta[:20] @ (R1 @ beta[:20]) + beta[20:] @ (R2 @ beta[20:])
+    assert abs(local.sum() - glob) < 1e-9
+    assert np.all(local >= 0)

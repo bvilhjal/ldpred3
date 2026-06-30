@@ -200,6 +200,18 @@ def test_pipeline_auto_chains_robust_prs(tmp_path):
     assert res.inference["n_chains_kept"] >= 2
 
 
+def test_pipeline_ldsc_init_seeds_h2(tmp_path):
+    # --ldsc-init seeds the sampler's h2 from LD Score regression; it runs
+    # end-to-end, logs the seed, and stays predictive.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=8)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200,
+                          ldsc_init=True)
+    assert "ldsc_h2_init" in res.qc_log
+    assert 0 < res.qc_log["ldsc_h2_init"] <= 1.0
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20
+
+
 def test_pipeline_impute_n_runs_and_keeps_signal(tmp_path):
     # --impute-n runs end-to-end, logs its diagnostics, and (when the reported N
     # is already correct) leaves the PRS predictive — no harm.
