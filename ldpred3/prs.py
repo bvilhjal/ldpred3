@@ -23,7 +23,7 @@ import warnings
 
 import numpy as np
 
-__all__ = ["allele_frequency", "standardize_dosage", "prs_score"]
+__all__ = ["allele_frequency", "standardize_dosage", "dosage_stats", "prs_score"]
 
 
 def _as_float_with_nan(dosage):
@@ -53,6 +53,20 @@ def allele_frequency(dosage):
     return np.where(np.isnan(af), 0.0, af)
 
 
+def dosage_stats(dosage):
+    """Per-variant ``(mean, sd)`` over non-missing calls (the standardization a
+    PRS uses). All-missing / constant columns get ``sd = 0``. These are the
+    numbers to *freeze* so the same standardization can be reapplied to another
+    cohort (see ``prs_score(..., mean=, sd=)``)."""
+    g = _as_float_with_nan(dosage)
+    mean, all_missing = _column_means(g)
+    inds = np.where(np.isnan(g))
+    g[inds] = np.take(mean, inds[1])
+    sd = g.std(axis=0)
+    sd[all_missing | ~np.isfinite(sd)] = 0.0
+    return mean, sd
+
+
 def standardize_dosage(dosage, *, eps=1e-12):
     """Mean-impute missing calls and z-score each variant column.
 
@@ -74,7 +88,7 @@ def standardize_dosage(dosage, *, eps=1e-12):
     return Z
 
 
-def prs_score(dosage, beta, *, standardize=True):
+def prs_score(dosage, beta, *, standardize=True, mean=None, sd=None, eps=1e-12):
     """Per-individual polygenic score.
 
     Parameters
@@ -86,6 +100,11 @@ def prs_score(dosage, beta, *, standardize=True):
     standardize : bool, default True
         If True (the LDpred3 convention), z-score genotype columns before
         weighting. If False, weight the raw mean-imputed dosages directly.
+    mean, sd : array_like, optional
+        *Frozen* per-variant standardization ``z = (g - mean) / sd`` instead of
+        this cohort's own. Pass both (e.g. the fit cohort's :func:`dosage_stats`)
+        for scores on a fixed scale across cohorts with different allele
+        frequencies. Overrides ``standardize``.
 
     Returns
     -------
@@ -94,6 +113,19 @@ def prs_score(dosage, beta, *, standardize=True):
     beta = np.asarray(beta, dtype=np.float64)
     if beta.ndim != 1 or beta.shape[0] != np.shape(dosage)[1]:
         raise ValueError("beta must have one weight per variant")
+    if mean is not None or sd is not None:
+        if mean is None or sd is None:
+            raise ValueError("frozen scaling needs both mean and sd")
+        mean = np.asarray(mean, dtype=np.float64)
+        sd = np.asarray(sd, dtype=np.float64)
+        g = _as_float_with_nan(dosage)
+        inds = np.where(np.isnan(g))
+        g[inds] = np.take(mean, inds[1])        # impute to the frozen mean
+        Z = g - mean
+        bad = ~np.isfinite(sd) | (sd <= eps)
+        np.divide(Z, sd, out=Z, where=~bad)
+        Z[:, bad] = 0.0
+        return Z @ beta
     if standardize:
         G = standardize_dosage(dosage)
     else:

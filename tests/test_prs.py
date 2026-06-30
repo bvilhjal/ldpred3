@@ -6,7 +6,10 @@ import sys
 import numpy as np
 
 
-from ldpred3.prs import allele_frequency, standardize_dosage, prs_score   # noqa: E402
+import pytest                                                              # noqa: E402
+
+from ldpred3.prs import (allele_frequency, standardize_dosage,             # noqa: E402
+                         dosage_stats, prs_score)
 
 
 def test_allele_frequency_ignores_missing():
@@ -57,6 +60,29 @@ def test_all_missing_column_does_not_poison_scores():
     for std in (True, False):
         scores = prs_score(dosage, beta, standardize=std)
         assert np.all(np.isfinite(scores)), f"NaN PRS with standardize={std}"
+
+
+def test_prs_score_frozen_uses_supplied_mean_sd():
+    rng = np.random.default_rng(4)
+    dosage = rng.integers(0, 3, size=(40, 3)).astype(np.int8)
+    beta = rng.standard_normal(3)
+    mean = np.array([1.0, 0.5, 1.5]); sd = np.array([0.8, 0.7, 0.9])
+    got = prs_score(dosage, beta, mean=mean, sd=sd)
+    expected = ((dosage.astype(float) - mean) / sd) @ beta
+    np.testing.assert_allclose(got, expected)
+    # frozen differs from the cohort's own standardization
+    assert not np.allclose(got, prs_score(dosage, beta, standardize=True))
+    with pytest.raises(ValueError, match="both mean and sd"):
+        prs_score(dosage, beta, mean=mean)            # sd missing
+
+
+def test_dosage_stats_matches_standardize():
+    rng = np.random.default_rng(5)
+    dosage = rng.integers(0, 3, size=(60, 4)).astype(np.int8)
+    mean, sd = dosage_stats(dosage)
+    # applying the frozen stats to the same cohort == standardize_dosage
+    np.testing.assert_allclose(prs_score(dosage, np.ones(4), mean=mean, sd=sd),
+                               standardize_dosage(dosage) @ np.ones(4), atol=1e-9)
 
 
 def test_prs_score_standardized_default():

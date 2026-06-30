@@ -47,6 +47,19 @@ def test_read_sumstats_se_from_pvalue(tmp_path):
     np.testing.assert_allclose(ss.se, [0.1 / 1.959964], rtol=1e-4)
 
 
+def test_read_sumstats_se_from_tiny_pvalue(tmp_path):
+    # Very small p-values (common in GWAS): 1 - p/2 rounds to 1.0 and the naive
+    # inv_cdf(1.0) raises. The reader must still recover a finite, sane SE.
+    path = _write(tmp_path,
+        "SNP A1 A2 BETA P N\n"
+        "rs1 A G 0.5 1e-300 100000\n"
+        "rs2 A G 0.2 5e-20 100000\n")
+    ss = read_sumstats(path)
+    assert np.all(np.isfinite(ss.se)) and np.all(ss.se > 0)
+    # larger z (smaller p) -> smaller SE for comparable beta scale
+    assert ss.se[0] < ss.se[1]
+
+
 def test_read_sumstats_external_n(tmp_path):
     path = _write(tmp_path, "SNP A1 A2 BETA SE\nrs1 A G 0.1 0.02\n")
     ss = read_sumstats(path, n_eff=2000)
