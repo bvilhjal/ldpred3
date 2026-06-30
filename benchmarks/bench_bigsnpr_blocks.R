@@ -14,6 +14,9 @@ options(bigstatsr.check.parallel.blas = FALSE)
 args <- commandArgs(trailingOnly = TRUE)
 h2 <- as.numeric(args[1]); p <- as.numeric(args[2])
 burn_in <- as.integer(args[3]); num_iter <- as.integer(args[4]); workdir <- args[5]
+# Optional auto initialisation (args 6-7); default = oracle (h2, p).
+h2_init <- if (length(args) >= 6) as.numeric(args[6]) else h2
+p_init  <- if (length(args) >= 7) as.numeric(args[7]) else p
 
 sizes <- scan(file.path(workdir, "sizes.txt"), quiet = TRUE)
 sfbm_file <- file.path(workdir, "corr_sfbm")
@@ -43,7 +46,7 @@ t_grid <- system.time(
                              num_iter = num_iter, ncores = 1))[["elapsed"]]
 b_grid <- as.vector(b_grid[, 1])
 t_auto <- system.time(
-  res <- snp_ldpred2_auto(sfbm, df_beta, h2_init = h2, vec_p_init = p,
+  res <- snp_ldpred2_auto(sfbm, df_beta, h2_init = h2_init, vec_p_init = p_init,
                           burn_in = burn_in, num_iter = num_iter, ncores = 1))[["elapsed"]]
 b_auto <- res[[1]]$beta_est
 
