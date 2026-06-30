@@ -37,7 +37,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .genotype_io import read_plink
+from .genotype_io import read_plink, read_bim, read_fam, read_bed, _strip_ext
 from .bgen_io import read_bgen
 from .sumstats import Sumstats, read_sumstats, detect_columns
 from .harmonize import harmonize, diagnose_match
@@ -697,7 +697,32 @@ class ScoreResult:
                 f"n_matched={self.n_matched}/{self.n_weights})")
 
 
-def score_from_weights(weights, plink, *, sample_path=None, scaling="target"):
+def _score_plink_streamed(prefix, n_samples, n_total, var_index, beta,
+                          *, mean=None, sd=None, chunk=1000):
+    """PRS over variant-chunks from a ``.bed`` without the full dosage matrix.
+
+    Reads each chunk of the matched variant columns (seek-based), standardises it
+    (in-cohort, or with a frozen ``mean``/``sd``) and accumulates
+    ``dosage_chunk @ beta_chunk``. Peak memory is O(n_samples · chunk) instead of
+    O(n_samples · n_variants) — so a biobank-scale target is scored without
+    materialising hundreds of GB.
+    """
+    bed = _strip_ext(prefix) + ".bed"
+    var_index = np.asarray(var_index, dtype=np.int64)
+    scores = np.zeros(n_samples)
+    for s in range(0, var_index.size, chunk):
+        cols = var_index[s:s + chunk]
+        dos = read_bed(bed, n_samples, n_total, variant_idx=cols)
+        if mean is not None:
+            scores += prs_score(dos, beta[s:s + chunk],
+                                mean=mean[s:s + chunk], sd=sd[s:s + chunk])
+        else:
+            scores += prs_score(dos, beta[s:s + chunk], standardize=True)
+    return scores
+
+
+def score_from_weights(weights, plink, *, sample_path=None, scaling="target",
+                       chunk=1000):
     """Score a target cohort from a saved weights file — no LD, no refit.
 
     ``weights`` is a path written by :meth:`PRSResult.write_weights` (columns
@@ -712,6 +737,12 @@ def score_from_weights(weights, plink, *, sample_path=None, scaling="target"):
     * ``"frozen"``: reuse the fit cohort's ``AF_REF``/``SD_REF`` from the file,
       so two cohorts with different allele frequencies are scored on the *same*
       scale (portable / comparable). Requires those columns.
+
+    A **PLINK** target is *streamed*: only the ``.bim``/``.fam`` are read up front
+    and the ``.bed`` is scored in ``chunk``-variant blocks, so peak memory is
+    O(n_samples · chunk) rather than O(n_samples · n_variants) — a biobank-scale
+    cohort is scored without materialising the full dosage matrix. BGEN uses the
+    full-load path.
     """
     if scaling not in ("target", "frozen"):
         raise ValueError("scaling must be 'target' or 'frozen'")
@@ -741,28 +772,50 @@ def score_from_weights(weights, plink, *, sample_path=None, scaling="target"):
         se=np.ones(m), n_eff=np.ones(m),
         eaf=np.full(m, np.nan), info=np.full(m, np.nan))
 
-    geno = load_genotypes(plink, sample_path=sample_path, variant_ids=set(ids))
-    if geno.n_variants == 0:
-        geno = load_genotypes(plink, sample_path=sample_path)
-    h = harmonize(ss, geno.variants)
+    # PLINK is streamed (read the .bim/.fam only, then accumulate the score over
+    # variant-chunks of the .bed); BGEN keeps the full-load path.
+    is_bgen = str(plink).endswith(".bgen")
+    if is_bgen:
+        geno = load_genotypes(plink, sample_path=sample_path, variant_ids=set(ids))
+        if geno.n_variants == 0:
+            geno = load_genotypes(plink, sample_path=sample_path)
+        h = harmonize(ss, geno.variants)
+        variants_id, fid, iid = geno.variants.id, geno.samples.fid, geno.samples.iid
+        n_samples = len(fid)
+    else:
+        pref = _strip_ext(plink)
+        variants = read_bim(pref + ".bim")
+        samples = read_fam(pref + ".fam")
+        h = harmonize(ss, variants)
+        variants_id, fid, iid = variants.id, samples.fid, samples.iid
+        n_samples, n_total = len(fid), len(variants)
     if len(h) == 0:
-        raise ValueError("no weights matched the target genotypes")
-    dos = geno.dosage[:, h.var_index]
+        diag = diagnose_match(ss, read_bim(_strip_ext(plink) + ".bim")
+                              if not is_bgen else geno.variants)
+        raise ValueError("no weights matched the target genotypes. "
+                         f"Diagnosis: {diag['message']}")
+
+    mean = sd = None
     if scaling == "frozen":
         # AF_REF/SD_REF count the weight's A1; where harmonisation flipped the
         # allele the target dosage counts the other allele, so AF -> 1-AF (the
         # SD is unchanged for g vs 2-g). Frozen mean = 2*AF.
         by_id = {i: (a, s) for i, a, s in zip(ids, af_ref, sd_ref)}
-        sel = geno.variants.id[h.var_index]
+        sel = variants_id[h.var_index]
         af = np.array([by_id[i][0] for i in sel])
         sd = np.array([by_id[i][1] for i in sel])
         af = np.where(h.flipped, 1.0 - af, af)
-        scores = prs_score(dos, h.beta, mean=2.0 * af, sd=sd)
+        mean = 2.0 * af
+
+    if is_bgen:
+        dos = geno.dosage[:, h.var_index]
+        scores = (prs_score(dos, h.beta, mean=mean, sd=sd) if mean is not None
+                  else prs_score(dos, h.beta, standardize=True))
     else:
-        scores = prs_score(dos, h.beta, standardize=True)
-    return ScoreResult(scores=scores, sample_fid=geno.samples.fid,
-                       sample_iid=geno.samples.iid, n_weights=m,
-                       n_matched=len(h))
+        scores = _score_plink_streamed(plink, n_samples, n_total, h.var_index,
+                                       h.beta, mean=mean, sd=sd, chunk=chunk)
+    return ScoreResult(scores=scores, sample_fid=fid, sample_iid=iid,
+                       n_weights=m, n_matched=len(h))
 
 
 def _main(argv=None):
@@ -837,6 +890,9 @@ def _main(argv=None):
                     help="with --weights: 'target' standardizes by this cohort "
                          "(default); 'frozen' reuses the fit cohort's AF_REF/"
                          "SD_REF for a portable scale (needs those columns)")
+    ap.add_argument("--score-chunk", type=int, default=1000,
+                    help="with --weights on PLINK: variants per streamed chunk "
+                         "(lower = less memory at biobank scale; default 1000)")
     ap.add_argument("--out", help="output scores file (or fine-map output prefix)")
     ap.add_argument("--finemap", action="store_true",
                     help="fine-map instead of computing a PRS: write per-variant "
@@ -861,7 +917,7 @@ def _main(argv=None):
         if not args.out:
             ap.error("--weights requires --out")
         sr = score_from_weights(args.weights, target, sample_path=args.sample,
-                                scaling=args.scaling)
+                                scaling=args.scaling, chunk=args.score_chunk)
         with open(args.out, "w") as fh:
             fh.write("FID\tIID\tPRS\n")
             for fid, iid, s in zip(sr.sample_fid, sr.sample_iid, sr.scores):
