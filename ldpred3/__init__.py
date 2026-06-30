@@ -39,6 +39,7 @@ from .finemap import (ldpred3_pip, single_signal_finemap, finemap_by_blocks,
                       FineMapResult, CredibleSet)
 from .impute import impute_sumstats_blocks, ImputeResult
 from .scale import n_eff_case_control, h2_liability, standardize_prs
+from .lassosum import lassosum2, Lassosum2Result
 
 __all__ = [
     "standardize_betas",
@@ -85,6 +86,8 @@ __all__ = [
     "n_eff_case_control",
     "h2_liability",
     "standardize_prs",
+    "lassosum2",
+    "Lassosum2Result",
 ]
 
 __version__ = "0.2.0"
