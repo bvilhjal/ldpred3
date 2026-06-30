@@ -4,13 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ldpred3"
-version = "0.1.0"
+version = "0.2.0"
 description = "A NumPy-only implementation of LDpred3 with a full polygenic-score pipeline"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Bjarni Vilhjálmsson" }]
 dependencies = ["numpy>=1.20"]
+
+[project.urls]
+Homepage = "https://github.com/bvilhjal/ldpred3"
+Repository = "https://github.com/bvilhjal/ldpred3"
+Issues = "https://github.com/bvilhjal/ldpred3/issues"
 
 [project.optional-dependencies]
 fast = ["numba>=0.59"]          # JIT-compiled Gibbs sampler (strongly recommended)
