@@ -63,6 +63,48 @@ def test_weights_scoring_handles_allele_flips(tmp_path):
     assert np.allclose(sw.scores, base.scores, atol=1e-6)
 
 
+def test_weights_frozen_scaling_roundtrip(tmp_path):
+    prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=6)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150)
+    wpath = str(tmp_path / "w.txt")
+    res.write_weights(wpath)
+    assert {"AF_REF", "SD_REF"} <= set(open(wpath).readline().split())
+    # On the fit cohort, frozen scaling == that cohort's own standardization.
+    sr = score_from_weights(wpath, prefix, scaling="frozen")
+    assert np.allclose(sr.scores, res.scores, atol=1e-6)
+
+
+def test_frozen_scaling_handles_allele_flips(tmp_path):
+    prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=8)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=150)
+    wpath = str(tmp_path / "w.txt"); res.write_weights(wpath)
+    base = score_from_weights(wpath, prefix, scaling="frozen")
+    from ldpred3.genotype_io import read_plink, write_plink, VariantTable
+    g = read_plink(prefix); V = g.variants
+    swapped = VariantTable(chrom=V.chrom, id=V.id, cm=V.cm, pos=V.pos,
+                           a1=V.a2, a2=V.a1)
+    dos = g.dosage.copy(); dos[dos >= 0] = 2 - dos[dos >= 0]
+    sw_prefix = str(tmp_path / "sw"); write_plink(sw_prefix, dos, swapped, g.samples)
+    # AF must flip with the allele; frozen scores stay the same after the swap.
+    sw = score_from_weights(wpath, sw_prefix, scaling="frozen")
+    assert np.allclose(sw.scores, base.scores, atol=1e-6)
+
+
+def test_frozen_scaling_requires_columns(tmp_path):
+    import pytest
+    prefix, ss_path, _ = _simulate(tmp_path, m=200, seed=7)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200)
+    legacy = str(tmp_path / "legacy.txt")           # old-style, no AF_REF/SD_REF
+    with open(legacy, "w") as fh:
+        fh.write("ID\tCHR\tPOS\tA1\tA2\tWEIGHT\n")
+        for vid, c, p, a1, a2, w in zip(res.variant_id, res.chrom, res.pos,
+                res.effect_allele, res.other_allele, res.beta_adjusted):
+            fh.write(f"{vid}\t{c}\t{p}\t{a1}\t{a2}\t{w:.8g}\n")
+    with pytest.raises(ValueError, match="frozen"):
+        score_from_weights(legacy, prefix, scaling="frozen")
+    assert score_from_weights(legacy, prefix, scaling="target").n_matched > 0
+
+
 def test_ld_cache_reproduces_fresh_run(tmp_path):
     prefix, ss_path, _ = _simulate(tmp_path, m=400, seed=4)
     cache = str(tmp_path / "ld.npz")

@@ -42,7 +42,7 @@ from .bgen_io import read_bgen
 from .sumstats import Sumstats, read_sumstats, detect_columns
 from .harmonize import harmonize
 from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
-from .prs import prs_score, allele_frequency
+from .prs import prs_score, allele_frequency, dosage_stats
 from .qc import qc_sumstats, sd_consistency_mask, dentist_outlier_mask
 from .ldpred3 import standardize_betas, ldpred3_by_blocks, shrink_ld_blocks
 from .infer import ldpred3_auto_infer
@@ -82,21 +82,36 @@ class PRSResult:
     other_allele: np.ndarray = None
     chrom: np.ndarray = None
     pos: np.ndarray = None
+    af: np.ndarray = None       # A1 frequency in the fit cohort (for frozen scaling)
+    sd: np.ndarray = None       # A1 dosage SD in the fit cohort (for frozen scaling)
 
     def write_weights(self, path):
         """Write the fitted weights as a reusable table.
 
         Columns: ``ID CHR POS A1 A2 WEIGHT`` where ``A1`` is the allele the
-        weight counts and ``WEIGHT`` is the standardized LDpred3 effect. Feed the
-        file to :func:`score_from_weights` to score a new cohort without
+        weight counts and ``WEIGHT`` is the standardized LDpred3 effect. When the
+        fit-cohort allele frequency / dosage SD are known, two more columns
+        ``AF_REF SD_REF`` are appended so :func:`score_from_weights` can reapply
+        the *same* standardization to another cohort (``scaling="frozen"``). Feed
+        the file to :func:`score_from_weights` to score a new cohort without
         refitting.
         """
+        have_scale = self.af is not None and self.sd is not None
         with open(path, "w") as fh:
-            fh.write("ID\tCHR\tPOS\tA1\tA2\tWEIGHT\n")
-            for vid, c, p, a1, a2, w in zip(
-                    self.variant_id, self.chrom, self.pos,
-                    self.effect_allele, self.other_allele, self.beta_adjusted):
-                fh.write(f"{vid}\t{c}\t{p}\t{a1}\t{a2}\t{w:.8g}\n")
+            fh.write("ID\tCHR\tPOS\tA1\tA2\tWEIGHT"
+                     + ("\tAF_REF\tSD_REF\n" if have_scale else "\n"))
+            cols = [self.variant_id, self.chrom, self.pos, self.effect_allele,
+                    self.other_allele, self.beta_adjusted]
+            if have_scale:
+                cols += [self.af, self.sd]
+            for row in zip(*cols):
+                if have_scale:
+                    vid, c, p, a1, a2, w, af, sd = row
+                    fh.write(f"{vid}\t{c}\t{p}\t{a1}\t{a2}\t{w:.8g}"
+                             f"\t{af:.8g}\t{sd:.8g}\n")
+                else:
+                    vid, c, p, a1, a2, w = row
+                    fh.write(f"{vid}\t{c}\t{p}\t{a1}\t{a2}\t{w:.8g}\n")
         return path
 
     def __repr__(self):
@@ -379,6 +394,9 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         beta_adj = ldpred3_by_blocks(blocks, beta_std, h.n_eff, method=method,
                                      **ldpred3_kwargs)
     scores = prs_score(target_dos, beta_adj, standardize=True)
+    # Freeze the fit-cohort standardization (per-variant mean/SD) so the same
+    # weights can be reapplied on a fixed scale to other cohorts.
+    fit_mean, fit_sd = dosage_stats(target_dos)
 
     inference = None
     if infer:
@@ -393,13 +411,17 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                      "n_chains_kept": res.n_chains_kept}
 
     gv = geno.variants
+    # n_matched is the initial harmonised count; record how many actually
+    # survived QC / SD-check / DENTIST / LD-cache alignment and were scored.
+    final_log = dict(h.log)
+    final_log["n_final"] = int(len(h))
     return PRSResult(
         scores=scores,
         sample_fid=geno.samples.fid,
         sample_iid=geno.samples.iid,
         beta_adjusted=beta_adj,
         var_index=h.var_index,
-        harmonize_log=h.log,
+        harmonize_log=final_log,
         qc_log=qc_log,
         inference=inference,
         enrichment=enrichment,
@@ -408,6 +430,8 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         other_allele=gv.a2[h.var_index],
         chrom=gv.chrom[h.var_index],
         pos=gv.pos[h.var_index],
+        af=fit_mean / 2.0,
+        sd=fit_sd,
     )
 
 
@@ -487,18 +511,29 @@ class ScoreResult:
                 f"n_matched={self.n_matched}/{self.n_weights})")
 
 
-def score_from_weights(weights, plink, *, sample_path=None):
+def score_from_weights(weights, plink, *, sample_path=None, scaling="target"):
     """Score a target cohort from a saved weights file — no LD, no refit.
 
     ``weights`` is a path written by :meth:`PRSResult.write_weights` (columns
-    ``ID CHR POS A1 A2 WEIGHT``). The weights are harmonised to the target's
-    alleles (sign-flipped where the alleles are swapped) and applied as a
-    standardized polygenic score. This is the cheap path for applying an existing
-    model to a new cohort.
+    ``ID CHR POS A1 A2 WEIGHT``, optionally ``AF_REF SD_REF``). The weights are
+    harmonised to the target's alleles (sign-flipped where the alleles are
+    swapped) and applied as a standardized polygenic score.
+
+    ``scaling`` chooses the genotype standardization:
+
+    * ``"target"`` (default): standardize using *this* cohort's allele
+      frequencies / SD — fine for within-cohort ranking.
+    * ``"frozen"``: reuse the fit cohort's ``AF_REF``/``SD_REF`` from the file,
+      so two cohorts with different allele frequencies are scored on the *same*
+      scale (portable / comparable). Requires those columns.
     """
-    ids, chrom, pos, a1, a2, w = [], [], [], [], [], []
+    if scaling not in ("target", "frozen"):
+        raise ValueError("scaling must be 'target' or 'frozen'")
+    ids, chrom, pos, a1, a2, w, af_ref, sd_ref = [], [], [], [], [], [], [], []
     with open(weights) as fh:
-        header = fh.readline()
+        header = fh.readline().rstrip("\n")
+        cols = header.split("\t") if "\t" in header else header.split()
+        has_scale = "AF_REF" in cols and "SD_REF" in cols
         for line in fh:
             line = line.rstrip("\n")
             if not line:
@@ -506,6 +541,12 @@ def score_from_weights(weights, plink, *, sample_path=None):
             f = line.split("\t") if "\t" in line else line.split()
             ids.append(f[0]); chrom.append(str(f[1])); pos.append(int(f[2]))
             a1.append(f[3].upper()); a2.append(f[4].upper()); w.append(float(f[5]))
+            if has_scale:
+                af_ref.append(float(f[6])); sd_ref.append(float(f[7]))
+    if scaling == "frozen" and not has_scale:
+        raise ValueError("scaling='frozen' needs AF_REF/SD_REF columns; the "
+                         "weights file was written without them (re-fit and "
+                         "write_weights, or use scaling='target')")
     m = len(ids)
     ss = Sumstats(
         id=np.array(ids, dtype=object), chrom=np.array(chrom, dtype=object),
@@ -520,7 +561,19 @@ def score_from_weights(weights, plink, *, sample_path=None):
     h = harmonize(ss, geno.variants)
     if len(h) == 0:
         raise ValueError("no weights matched the target genotypes")
-    scores = prs_score(geno.dosage[:, h.var_index], h.beta, standardize=True)
+    dos = geno.dosage[:, h.var_index]
+    if scaling == "frozen":
+        # AF_REF/SD_REF count the weight's A1; where harmonisation flipped the
+        # allele the target dosage counts the other allele, so AF -> 1-AF (the
+        # SD is unchanged for g vs 2-g). Frozen mean = 2*AF.
+        by_id = {i: (a, s) for i, a, s in zip(ids, af_ref, sd_ref)}
+        sel = geno.variants.id[h.var_index]
+        af = np.array([by_id[i][0] for i in sel])
+        sd = np.array([by_id[i][1] for i in sel])
+        af = np.where(h.flipped, 1.0 - af, af)
+        scores = prs_score(dos, h.beta, mean=2.0 * af, sd=sd)
+    else:
+        scores = prs_score(dos, h.beta, standardize=True)
     return ScoreResult(scores=scores, sample_fid=geno.samples.fid,
                        sample_iid=geno.samples.iid, n_weights=m,
                        n_matched=len(h))
@@ -581,7 +634,8 @@ def _main(argv=None):
                          "later --ld-cache run streams blocks from disk")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
-                         "(dense; for chromosome / curated-SNP scale)")
+                         "(streams block-diagonal LD; needs dense LD blocks — "
+                         "not compatible with --ld-sparse / --ld-lowrank)")
     ap.add_argument("--dry-run", action="store_true",
                     help="preflight only: detect columns, match IDs and preview "
                          "harmonisation, then exit (no LD, no fit, no output)")
@@ -590,6 +644,10 @@ def _main(argv=None):
     ap.add_argument("--weights", default=None,
                     help="score the target from a saved weights file "
                          "(no sumstats / LD / refit needed)")
+    ap.add_argument("--scaling", choices=("target", "frozen"), default="target",
+                    help="with --weights: 'target' standardizes by this cohort "
+                         "(default); 'frozen' reuses the fit cohort's AF_REF/"
+                         "SD_REF for a portable scale (needs those columns)")
     ap.add_argument("--out", help="output scores file")
     args = ap.parse_args(argv)
     target = args.plink or args.bgen
@@ -598,7 +656,8 @@ def _main(argv=None):
     if args.weights:
         if not args.out:
             ap.error("--weights requires --out")
-        sr = score_from_weights(args.weights, target, sample_path=args.sample)
+        sr = score_from_weights(args.weights, target, sample_path=args.sample,
+                                scaling=args.scaling)
         with open(args.out, "w") as fh:
             fh.write("FID\tIID\tPRS\n")
             for fid, iid, s in zip(sr.sample_fid, sr.sample_iid, sr.scores):
@@ -679,6 +738,8 @@ def _main(argv=None):
           f"({log['n_flipped']} flipped, {log['n_dropped_ambiguous']} ambiguous,"
           f" {log['n_dropped_mismatch']} mismatched, "
           f"{log['n_unmatched']} unmatched)")
+    if log.get("n_final") is not None and log["n_final"] != log["n_matched"]:
+        print(f"  {log['n_final']} variants scored after QC / filtering")
     if res.inference is not None:
         i = res.inference
         print(f"inferred h2={i['h2_est']:.3f} {tuple(round(x, 3) for x in i['h2_ci'])}"

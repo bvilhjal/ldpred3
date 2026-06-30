@@ -97,17 +97,27 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--dry-run` | off | Preflight only: detect columns, match IDs, preview harmonisation, then exit. |
 | `--save-weights FILE` | none | Also write the fitted weights for reuse. |
 | `--weights FILE` | none | Score the target from a saved weights file (no sumstats / LD / refit). |
+| `--scaling target\|frozen` | `target` | With `--weights`: `target` standardizes by the scoring cohort; `frozen` reuses the fit cohort's `AF_REF`/`SD_REF` so different cohorts share one scale. |
 
 ## Outputs
 
 | Produced by | File | Columns (tab-separated, with header) |
 |-------------|------|--------------------------------------|
 | `--out` | scores | `FID  IID  PRS` — one row per target individual (`PRS` to 6 significant figures) |
-| `--save-weights` | weights | `ID  CHR  POS  A1  A2  WEIGHT` — one row per scored variant (`WEIGHT` to 8 significant figures) |
+| `--save-weights` | weights | `ID  CHR  POS  A1  A2  WEIGHT` (+ `AF_REF  SD_REF` when the fit-cohort allele frequency / dosage SD are known) — one row per scored variant |
 
 The weights file is what `--weights` / `score_from_weights` reads back, so a
 fit-once-score-many workflow round-trips through it. From Python the same data is
 on the result object: `res.scores` (the PRS array) and `res.write_weights(path)`.
+
+**Scoring scale (`--scaling` / `score_from_weights(scaling=)`).** A standardized
+PRS depends on the per-variant genotype mean/SD used to z-score it. By default
+each cohort uses its *own* (`target`) — fine for ranking within a cohort, but two
+cohorts with different allele frequencies end up on different scales. The saved
+`AF_REF`/`SD_REF` columns capture the fit cohort's standardization, so
+`scaling="frozen"` reapplies that *same* scale everywhere — use it when scores
+must be comparable/calibrated across cohorts. (`frozen` flips `AF_REF` for any
+variant whose allele is swapped during harmonisation, so it is allele-safe.)
 
 ## Scaling to millions of SNPs
 

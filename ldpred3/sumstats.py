@@ -207,9 +207,14 @@ def read_sumstats(path, *, n_eff=None, **col_overrides):
                 p = _to_float(get(f, "pval"))
                 if 0 < p < 1 and beta != 0:
                     from statistics import NormalDist
-                    z = NormalDist().inv_cdf(1 - p / 2.0)
-                    if z > 0:
-                        se = abs(beta) / z
+                    # Two-sided z = Phi^-1(1 - p/2) = -Phi^-1(p/2). Use the second
+                    # form: for tiny p (common in GWAS), 1 - p/2 rounds to exactly
+                    # 1.0 and inv_cdf(1.0) raises, whereas p/2 stays representable.
+                    half = p / 2.0
+                    if half > 0.0:
+                        z = -NormalDist().inv_cdf(half)
+                        if math.isfinite(z) and z > 0:
+                            se = abs(beta) / z
 
             n = _to_float(get(f, "n_eff")) if "n_eff" in colmap else float(n_eff)
 
