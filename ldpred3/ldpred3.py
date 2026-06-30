@@ -311,7 +311,7 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             # (accumulated below) drive the dense estimate, the sampled value the
             # chain. Per-variant N here -> n_const=False; the prior weights enter
             # through the per-SNP log prior-odds.
-            new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, False,
+            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1, False,
                                    0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
                                    unif[j], gauss[j], sparse, allow_jump_sign)
             post_means[j] = pm
@@ -376,7 +376,8 @@ _gibbs_kernel_jit = _jit(_gibbs_kernel)
 
 
 def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
-                         h2_min, h2_max, seed, sample_every, allow_jump_sign):
+                         h2_min, h2_max, seed, sample_every, allow_jump_sign,
+                         estimate_p, estimate_h2):
     """Auto Gibbs kernel that also retains thinned *sampled* effect vectors.
 
     A trimmed copy of :func:`_gibbs_kernel` (dense, ``estimate_hyper`` always on,
@@ -385,13 +386,17 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
     sampled ``curr_beta`` every ``sample_every`` post-burn-in sweeps. Those
     samples drive the LDpred2-auto predictive-r2 estimator (Privé et al. 2023).
 
-    Returns ``(avg_beta, h2_path, p_path, beta_samples, n_saved)``.
+    Returns ``(avg_beta, h2_path, p_path, beta_samples, n_saved, pip)`` where
+    ``pip`` is the per-SNP posterior inclusion probability (the post-burn-in mean
+    of the Rao-Blackwellized inclusion probability ``postp``) -- the quantity
+    fine-mapping needs.
     """
     np.random.seed(seed)
     m = beta_hat.shape[0]
     curr_beta = np.zeros(m)
     avg_beta = np.zeros(m)
     post_means = np.zeros(m)
+    pip = np.zeros(m)
     Rb = np.zeros(m)
 
     h2_path = np.empty(num_iter)
@@ -406,6 +411,7 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
         c1 = h2 / (m * p)
         log_prior_odds = np.log1p(-p) - np.log(p)
         nb_causal = 0
+        acc = it >= burn_in            # accumulate PIPs only post burn-in
 
         if it % 100 == 0:
             Rb[:] = 0.0
@@ -422,11 +428,13 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
-            new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, False,
-                                   0.0, 0.0, 0.0, 0.0, log_prior_odds,
-                                   unif[j], gauss[j], False, allow_jump_sign)
+            new, pm, dc, postp = _pn_step(res_beta_j, old, n[j], c1, False,
+                                          0.0, 0.0, 0.0, 0.0, log_prior_odds,
+                                          unif[j], gauss[j], False, allow_jump_sign)
             post_means[j] = pm
             nb_causal += dc
+            if acc:
+                pip[j] += postp
             delta = new - old
             if delta != 0.0:
                 cj = corr[j]
@@ -434,14 +442,16 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
                     Rb[i] += cj[i] * delta
                 curr_beta[j] = new
 
-        p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
-        h2 = 0.0
-        for i in range(m):
-            h2 += curr_beta[i] * Rb[i]
-        if h2 < h2_min:
-            h2 = h2_min
-        elif h2 > h2_max:
-            h2 = h2_max
+        if estimate_p:
+            p = np.random.beta(1.0 + nb_causal, 1.0 + m - nb_causal)
+        if estimate_h2:
+            h2 = 0.0
+            for i in range(m):
+                h2 += curr_beta[i] * Rb[i]
+            if h2 < h2_min:
+                h2 = h2_min
+            elif h2 > h2_max:
+                h2 = h2_max
 
         if it >= burn_in:
             avg_beta += post_means
@@ -456,7 +466,8 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
     if count == 0:
         count = 1
     avg_beta /= count
-    return avg_beta, h2_path[:count], p_path[:count], beta_samples[:n_saved], n_saved
+    pip /= count
+    return avg_beta, h2_path[:count], p_path[:count], beta_samples[:n_saved], n_saved, pip
 
 
 _gibbs_kernel_sample_jit = _jit(_gibbs_kernel_sample)
@@ -508,7 +519,7 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
-            new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, False,
+            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1, False,
                                    0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
                                    unif[j], gauss[j], sparse, allow_jump_sign)
             post_means[j] = pm
@@ -626,7 +637,7 @@ def _gibbs_kernel_batched(block_data, block_offsets, snp_offsets, sizes,
                 gj = base + lj
                 old = curr_beta[gj]
                 res_beta_j = beta_hat[gj] - Rb[gj] + old
-                new, pm, dc = _pn_step(res_beta_j, old, n[gj], c1, n_const,
+                new, pm, dc, _ = _pn_step(res_beta_j, old, n[gj], c1, n_const,
                                        pv0, psd0, half0, npv0, log_prior_odds,
                                        unif[gj], gauss[gj], sparse, True)
                 post_means[gj] = pm
@@ -733,7 +744,7 @@ def _gibbs_kernel_batched_par(block_data, block_offsets, snp_offsets, sizes,
                 gj = base + lj
                 old = curr_beta[gj]
                 res_beta_j = beta_hat[gj] - Rb[gj] + old
-                new, pm, dc = _pn_step(res_beta_j, old, n[gj], c1, n_const,
+                new, pm, dc, _ = _pn_step(res_beta_j, old, n[gj], c1, n_const,
                                        pv0, psd0, half0, npv0, log_prior_odds,
                                        unif[gj], gauss[gj], sparse, True)
                 post_means[gj] = pm
@@ -853,9 +864,10 @@ def _pn_step(res, old, nj, c1, n_const, pv0, psd0, half0, npv0,
     """The per-SNP point-normal update shared by every Gibbs sweep kernel.
 
     Given a SNP's residualised marginal estimate ``res`` and its current effect
-    ``old``, returns ``(new, pm_rb, dc)``: the resampled effect, the
-    Rao-Blackwellised contribution ``P(causal)·E[beta|causal]``, and the change in
-    the causal count (0 or 1). Keeping this in one place means the inclusion-
+    ``old``, returns ``(new, pm_rb, dc, postp)``: the resampled effect, the
+    Rao-Blackwellised contribution ``P(causal)·E[beta|causal]``, the change in
+    the causal count (0 or 1), and the inclusion probability ``postp`` (the
+    fine-mapping PIP contribution). Keeping this in one place means the inclusion-
     probability math and the sign-flip divergence guard (Privé et al.) have a
     single definition for the dense / banded / low-rank / packed kernels.
 
@@ -897,7 +909,7 @@ def _pn_step(res, old, nj, c1, n_const, pv0, psd0, half0, npv0,
             and (new > 0.0) != (old > 0.0)):
         new = 0.0
         dc = 0
-    return new, pm_rb, dc
+    return new, pm_rb, dc, postp
 
 
 _pn_step = _jit(_pn_step)
@@ -940,7 +952,7 @@ def _gibbs_one_sweep(corr, beta_hat, n, curr_beta, Rb, post_means, unif, gauss,
     for lj in range(k):
         old = curr_beta[lj]
         res_beta_j = beta_hat[lj] - Rb[lj] + old
-        new, pm, dc = _pn_step(res_beta_j, old, n[lj], c1, n_const,
+        new, pm, dc, _ = _pn_step(res_beta_j, old, n[lj], c1, n_const,
                                pv0, psd0, half0, npv0, log_prior_odds,
                                unif[lj], gauss[lj], sparse, allow_jump_sign)
         post_means[lj] = pm
@@ -987,7 +999,7 @@ def _gibbs_one_sweep_sparse(indptr, indices, data, beta_hat, n, curr_beta, Rb,
     for lj in range(k):
         old = curr_beta[lj]
         res_beta_j = beta_hat[lj] - Rb[lj] + old
-        new, pm, dc = _pn_step(res_beta_j, old, n[lj], c1, n_const,
+        new, pm, dc, _ = _pn_step(res_beta_j, old, n[lj], c1, n_const,
                                pv0, psd0, half0, npv0, log_prior_odds,
                                unif[lj], gauss[lj], sparse, allow_jump_sign)
         post_means[lj] = pm
@@ -1036,7 +1048,7 @@ def _gibbs_one_sweep_lowrank(U, beta_hat, n, curr_beta, s, post_means, unif,
         for c in range(r):
             rbj += U[j, c] * s[c]
         res_beta_j = beta_hat[j] - rbj + old        # (U U^T)_jj = 1
-        new, pm, dc = _pn_step(res_beta_j, old, n[j], c1, n_const,
+        new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1, n_const,
                                pv0, psd0, half0, npv0, log_prior_odds,
                                unif[j], gauss[j], sparse, allow_jump_sign)
         post_means[j] = pm

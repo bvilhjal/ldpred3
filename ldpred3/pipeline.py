@@ -631,8 +631,8 @@ def _main(argv=None):
                          "later --ld-cache run streams blocks from disk")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
-                         "(streams block-diagonal LD; needs dense LD blocks — "
-                         "not compatible with --ld-sparse / --ld-lowrank)")
+                         "(streams block-diagonal LD; works with dense, "
+                         "--ld-sparse and --ld-lowrank blocks)")
     ap.add_argument("--dry-run", action="store_true",
                     help="preflight only: detect columns, match IDs and preview "
                          "harmonisation, then exit (no LD, no fit, no output)")

@@ -64,6 +64,7 @@ they run anywhere `msprime` is installed (`pip install msprime`).
 | Script | What it measures |
 |--------|------------------|
 | `infer_recovery.py` | LDpred3-auto-infer: h² and polygenicity recovery vs truth, CI width and empirical 95% coverage (no validation cohort) |
+| `finemap_recovery.py` | LDpred3-PIP fine-mapping: credible-set coverage, power and resolution (set size) vs signal strength / #causal, clean vs reference-panel LD, and vs the ABF baseline |
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
 | `ld_shrink_large_blocks.py` | Size-aware LD shrinkage (`shrink_ld_blocks`): R² and h² on a finite reference panel, no-shrink vs uniform vs size-aware, across Nref |
 | `ld_memory_scaling.py` | Persistent LD storage dense O(k²) vs banded SparseLD O(k·w) across block sizes, with a 10M-SNP extrapolation (realistic coalescent LD) |
