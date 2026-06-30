@@ -27,6 +27,8 @@ K = 500                       # SNPs per LD block
 NB = 20                       # blocks  ->  M = 10,000 SNPs
 M = NB * K
 N_REF = 4000                  # individuals defining the population LD
+MIN_MAF = 0.005               # keep msprime's realistic rare tail (wide 2f(1-f)
+                              # spread is where the MAF prior has leverage)
 H2 = 0.5
 N_GWAS = 5000                 # GWAS sample size (low power: the prior matters)
 P_CAUSAL = 0.1                # polygenic: the variance allocation matters
@@ -37,7 +39,7 @@ FIT_ALPHAS = [-1.0, -0.75, -0.5, -0.25, 0.0]
 # --- one realistic genome: coalescent LD + real allele frequencies -----------
 print(f"simulating {N_REF} individuals x {M} SNPs (coalescent) ...", flush=True)
 t0 = time.time()
-G, _blocks = simulate_genotypes_coalescent(N_REF, M, K, seed=7)
+G, _blocks = simulate_genotypes_coalescent(N_REF, M, K, min_maf=MIN_MAF, seed=7)
 af = G.mean(axis=0) / 2.0                                   # per-SNP frequency
 het = 2.0 * af * (1.0 - af)
 Gs = (G - G.mean(0)) / G.std(0)
@@ -50,7 +52,10 @@ for b in range(NB):
     blocks.append((R.astype(np.float32), ix))
     chols.append(np.linalg.cholesky(R + 1e-4 * np.eye(K)))
     idxs.append(ix)
-print(f"  ({time.time() - t0:.0f}s)  M={M}, mean het={het.mean():.3f}", flush=True)
+maf = np.minimum(af, 1.0 - af)
+print(f"  ({time.time() - t0:.0f}s)  M={M}, median MAF={np.median(maf):.3f}, "
+      f"frac MAF<0.05={np.mean(maf < 0.05):.2f}, "
+      f"2f(1-f) range [{het.min():.3f}, {het.max():.3f}]", flush=True)
 
 
 def make_beta(alpha_true, rng):
