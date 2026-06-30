@@ -139,6 +139,26 @@ variant — the usual workflow, and much faster. `only_significant=None` fine-ma
 every block; with the fixed sparse prior, null blocks correctly contribute no
 credible sets.
 
+### Genome-wide benchmark
+
+A genome of realistic-LD blocks with a strong causal (z=8) in ~10% of blocks,
+fine-mapped genome-wide in `only_significant` mode (`benchmarks/finemap_genomewide.py`):
+
+| #SNPs | #blocks | fine-mapped | causals | coverage | power | median \|CS\| | time |
+|------:|--------:|------------:|--------:|---------:|------:|-------------:|-----:|
+| 100k | 200 | 21 | 21 | 1.00 | 0.95 | 2 | 1.4 s |
+| 250k | 500 | 47 | 47 | 0.91 | 0.91 | 2 | 2.0 s |
+| 500k | 1000 | 100 | 101 | 0.94 | 0.93 | 2 | 4.1 s |
+
+`only_significant` fine-maps just the signal-bearing loci, so genome-wide
+fine-mapping of 500k SNPs takes **~4 s single-core** while recovering ~93% of
+causals at ~0.95 coverage and median set size 2. Fine-mapping **every** block
+(`only_significant=None`) costs more and emits a few spurious sets from null
+blocks — but the fixed sparse prior keeps that rate low (m=100k: 4 false sets out
+of 24, coverage 0.83 in 8.2 s, vs **0 false / coverage 1.00 in 0.9 s** for
+`only_significant`). Use `only_significant` for whole-genome runs; `ncores>1`
+parallelises the independent blocks further.
+
 ## File-based pipeline
 
 `run_finemap` takes a GWAS file + target genotypes and reuses the **same**
