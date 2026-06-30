@@ -48,6 +48,7 @@ from .qc import (qc_sumstats, sd_consistency_mask, dentist_outlier_mask,
 from .ldpred3 import (standardize_betas, ldpred3_by_blocks, shrink_ld_blocks,
                       SparseLD, LowRankLD)
 from .infer import ldpred3_auto_infer
+from .lassosum import lassosum2
 from .annot import ldpred3_auto_annot_blocks, read_annotations
 
 __all__ = ["PRSResult", "ScoreResult", "run_ldpred3_prs", "run_finemap",
@@ -160,8 +161,10 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         Path to the GWAS summary-statistics file.
     plink : str
         PLINK fileset prefix for the **target** genotypes to be scored.
-    method : {"auto", "grid", "inf"}, default "auto"
-        LDpred3 model.
+    method : {"auto", "grid", "inf", "annot", "lassosum2"}, default "auto"
+        LDpred3 model. ``"lassosum2"`` is the penalised-regression (L1, sparse)
+        alternative, tuned by pseudo-validation (no validation cohort); the
+        bigsnpr workflow keeps whichever of auto / lassosum2 predicts better.
     auto_chains : int, default 1
         With ``method="auto"``, average this many quality-filtered chains for the
         PRS weights — the robust LDpred2-auto estimator of Privé et al. (2023) —
@@ -415,6 +418,17 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                                          **(annot_params or {}))
         beta_adj = ares.beta_est
         enrichment = ares.enrichment
+    elif method == "lassosum2":
+        # Penalised-regression PRS (sparse, L1) over the same LD; picks (s, λ) by
+        # pseudo-validation — no validation cohort needed. Needs dense blocks.
+        if any(isinstance(R, (SparseLD, LowRankLD)) for R, _ in blocks):
+            raise ValueError("method='lassosum2' needs dense LD blocks "
+                             "(not ld_sparse / ld_lowrank)")
+        lres = lassosum2(blocks, beta_std, **(ldpred3_kwargs or {}))
+        beta_adj = lres.beta_est
+        qc_log["lassosum2"] = {"s": lres.best_s, "lambda": lres.best_lambda,
+                               "pseudoval": lres.best_score,
+                               "n_nonzero": lres.n_nonzero}
     elif method == "auto" and auto_chains and int(auto_chains) > 1:
         # Robust multi-chain LDpred3-auto PRS (Privé et al. 2023): run several
         # chains, drop the non-converged ones and average the survivors, rather
@@ -881,7 +895,7 @@ def _main(argv=None):
     g.add_argument("--bgen", help="target BGEN file (.bgen)")
     ap.add_argument("--sample", default=None, help="BGEN .sample file")
     ap.add_argument("--method", default="auto",
-                    choices=["auto", "grid", "inf", "annot"],
+                    choices=["auto", "grid", "inf", "annot", "lassosum2"],
                     help="LDpred3 model (default: auto; annot when "
                          "--annotations is given)")
     ap.add_argument("--annotations", default=None,
