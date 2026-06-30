@@ -42,9 +42,6 @@ job is to undo LD, so the LD reference must match the GWAS *and* the target
 - **External panel** (`ld_prefix=` / `--ld-prefix`) — use a matched-ancestry
   reference (e.g. the relevant 1000 Genomes superpopulation) when the target is
   small, so the LD isn't estimated from a handful of people.
-- **Cross-ancestry** (GWAS and target differ in ancestry) is *out of scope* for a
-  single-population LDpred3 and will under-perform — that needs a cross-ancestry
-  method. Keep GWAS, LD reference and target ancestry aligned.
 
 ## 2. The one-command path (recommended)
 
