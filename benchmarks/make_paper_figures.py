@@ -12,14 +12,15 @@ One command -> ``benchmarks/figures.pdf`` with:
   p8  LD at scale (realistic LD): dense vs banded vs low-rank — memory, time, accuracy
   p9  Performance: Numba JIT speed-up; multi-core scaling
 
-Pages 4-5 need realistic (coalescent) LD and are skipped with a note unless
-msprime is installed.
+The inference / bivariate / LD-scale pages need realistic (coalescent) LD and
+are skipped with a note unless msprime is installed.
 
-Pages 1-2 read the committed CSVs (``cores_1core_benchmark.csv`` /
-``methods_arch_benchmark.csv``); they are skipped with a note if absent. Pages
-3-5 compute their data from a self-contained AR(1) simulation and cache it to
-``benchmarks/figdata_*.csv`` so re-runs are fast and the underlying numbers are a
-reproducible artifact (delete the caches to recompute).
+The bigsnpr, cold-init and architecture pages read committed CSVs
+(``cores_1core_benchmark.csv`` / ``cold_init_auto.csv`` /
+``methods_arch_benchmark.csv``) and are skipped with a note if absent. The
+remaining pages compute their data from a self-contained simulation and cache it
+to ``benchmarks/figdata_*.csv`` so re-runs are fast and the underlying numbers
+are a reproducible artifact (delete the caches to recompute).
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py
 
@@ -483,7 +484,29 @@ def page_bigsnpr(pdf):
     x, y = series("LDpred3", "auto", 1); ax_m.plot(x, y, "-o", color="#1f77b4", lw=2, ms=6, label="LDpred3")
     x, y = series("bigsnpr", "auto", 1); ax_m.plot(x, y, "-^", color="#2ca02c", lw=2, ms=6, label="bigsnpr")
     ax_m.set(title="Peak memory", xlabel="SNPs (millions)", ylabel="peak RSS (GB)"); ax_m.legend(fontsize=9)
-    fig.suptitle("LDpred3 vs bigsnpr — realistic LD (coalescent), N=100k, h²=0.5", fontsize=12)
+    fig.suptitle("LDpred3 vs bigsnpr — realistic LD (coalescent), N=50k, h²=0.5 "
+                 "(auto: oracle init, both tools)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
+
+
+def page_cold(pdf):
+    path = os.path.join(HERE, "cold_init_auto.csv")
+    if not os.path.exists(path):
+        return note_page(pdf, "cold-init auto", "cold_init_auto.csv not found.")
+    with open(path) as fh:
+        rows = list(csv.DictReader(fh))
+    x = [int(r["nsnps"]) / 1e6 for r in rows]
+    fig, (ax_r, ax_t) = plt.subplots(1, 2, figsize=(11, 4.8))
+    ax_r.plot(x, [float(r["ldpred3_r2"]) for r in rows], "-o", color="#1f77b4", lw=2, ms=6, label="LDpred3")
+    ax_r.plot(x, [float(r["bigsnpr_r2"]) for r in rows], "-^", color="#2ca02c", lw=2, ms=6, label="bigsnpr")
+    ax_r.set(title="Accuracy (auto, cold init)", xlabel="SNPs (millions)", ylabel="phenotype R²")
+    ax_r.legend(fontsize=9)
+    ax_t.plot(x, [float(r["ldpred3_s"]) for r in rows], "-o", color="#1f77b4", lw=2, ms=6, label="LDpred3")
+    ax_t.plot(x, [float(r["bigsnpr_s"]) for r in rows], "-^", color="#2ca02c", lw=2, ms=6, label="bigsnpr")
+    ax_t.set(title="Running time (auto, cold init)", xlabel="SNPs (millions)", ylabel="wall-clock (s)")
+    ax_t.legend(fontsize=9)
+    fig.suptitle("auto from a cold start (h²_init=0.1, p_init=0.1, both tools, single chain)",
+                 fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
 
@@ -732,6 +755,7 @@ if __name__ == "__main__":
     out = os.path.join(HERE, "figures.pdf")
     with PdfPages(out) as pdf:
         page_bigsnpr(pdf)
+        page_cold(pdf)
         page_arch(pdf)
         page_inference(pdf)
         page_infer_ldsc(pdf)

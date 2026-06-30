@@ -10,7 +10,8 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/<script>.py
 
 **Publication figures.** `make_paper_figures.py` assembles the headline results
 into one multi-page PDF (`benchmarks/figures.pdf`): the bigsnpr time/memory
-comparison and accuracy-by-architecture (from the committed CSVs), plus h²/
+comparison, the cold-init `auto` accuracy/time comparison, and
+accuracy-by-architecture (from the committed CSVs), plus h²/
 polygenicity inference recovery, inference cross-checks (h² LDSC-vs-LDpred3-auto
 and predictive-r² estimated-vs-realized), bivariate analysis (genetic-correlation
 recovery and weak-trait prediction gain), DENTIST recovery, sparse/banded LD,
@@ -44,6 +45,8 @@ no external data.
 | Script | What it measures | Needs LD lib |
 |--------|------------------|:---:|
 | `timing_bench.py` | Per-method fit time at m=50k; `annot` cost vs #annotations and `theta_every` | ✓ |
+| `bench_vs_bigsnpr.py` | From-scratch LDpred3-vs-bigsnpr driver (200k–2M, 1 core): shared sim → both tools → time / peak memory / accuracy (→ `cores_1core_benchmark.csv`) | ✓ |
+| `bench_cold_init.py` | `auto` cold-started for **both** tools (no oracle hyper-parameters), the realistic scenario (→ `cold_init_auto.csv`) | ✓ |
 | `bench_bigsnpr_blocks.R` | bigsnpr (R reference) side of the time/memory/accuracy comparison | — |
 | `plot_methods_1core.py` | Plots the 1-core LDpred3-vs-bigsnpr comparison (→ `cores_1core_benchmark.png`) | self-contained (reads CSV) |
 | `plot_methods_arch.py` | Renders the methods-by-architecture figure from the CSV | self-contained (reads CSV) |
