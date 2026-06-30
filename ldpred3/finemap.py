@@ -271,8 +271,13 @@ def single_signal_finemap(corr, beta_hat, n_eff, *, prior_var=0.04,
     z = beta_hat * np.sqrt(n)                       # marginal z-scores
     shat2 = 1.0 / n                                 # var of the standardized effect
     V = float(prior_var)
+    # Wakefield (2009) log approximate Bayes factor:
+    #   lABF = 0.5*log(s²/(s²+V)) + 0.5*z²·V/(s²+V),   z = β̂/s.
+    # The signal lives entirely in the z² term, so it must NOT be divided by N
+    # (an earlier version cancelled z²=β̂²·N against a spurious /N, which flattened
+    # every PIP to ~uniform regardless of the signal strength).
     lbf = 0.5 * (np.log(shat2 / (shat2 + V))
-                 + z * z * V / (n * (shat2 + V)))    # z^2/n = betahat^2/shat2 * shat2
+                 + z * z * V / (shat2 + V))
     w = np.exp(lbf - lbf.max())
     pip = w / w.sum()
     post_var = 1.0 / (1.0 / V + 1.0 / shat2)
