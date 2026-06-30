@@ -49,6 +49,8 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_ld_library.py
 | Script | What it measures | Needs LD lib |
 |--------|------------------|:---:|
 | `timing_bench.py` | Per-method fit time at m=50k; `annot` cost vs #annotations and `theta_every` | ✓ |
+| `method_scaling.py` | **All methods compared on accuracy + time + memory together, 50k→1M SNPs** (marginal/inf/grid/auto/annot; → `method_scaling.{csv,png}`, per-size subprocess for clean RSS) | ✓ |
+| `bench_ldpred3_scaling.py` | LDpred3-only fit time + peak memory 200k→4M SNPs (genome-scale ceiling; → `ldpred3_scaling.{csv,png}`) | ✓ |
 | `bench_vs_bigsnpr.py` | From-scratch LDpred3-vs-bigsnpr driver (200k–2M, 1 core): shared sim → both tools → time / peak memory / accuracy (→ `cores_1core_benchmark.csv`) | ✓ |
 | `bench_cold_init.py` | `auto` cold-started for **both** tools (no oracle hyper-parameters), the realistic scenario (→ `cold_init_auto.csv`) | ✓ |
 | `bench_bigsnpr_blocks.R` | bigsnpr (R reference) side of the time/memory/accuracy comparison | — |

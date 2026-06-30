@@ -203,6 +203,59 @@ annotations raise `theta_every` to amortise it. (Persisting the running `R@β`
 residual across chunks — rather than rebuilding it each θ-update — keeps the
 default cheap; without it `annot` was ~3× `auto` instead of ~1.7×.)
 
+## Methods: accuracy vs scalability
+
+The architecture table above fixes the genome at m=50,000; this sweeps **every
+method on the same realistic-LD genome from 50k to 1M SNPs at once**, reporting
+accuracy *and* cost together. One sparse architecture (h²=0.5, p=0.01), GWAS
+N=50,000 held fixed (so power dilutes as variants multiply), realistic coalescent
+LD, single core; `grid` gets the oracle `(h²,p)`, `auto` self-tunes, `annot` gets
+one uninformative annotation. Each size runs in its own process for a clean peak
+RSS. Regenerate with `benchmarks/method_scaling.py`.
+
+![Methods: accuracy, time and memory vs genome size](../benchmarks/method_scaling.png)
+
+Genetic R² by method (accuracy falls with #SNPs because N is fixed):
+
+| #SNPs | marginal | inf | grid | auto | annot |
+|-------|---------:|----:|-----:|-----:|------:|
+| 50k   | 0.277 | 0.396 | 0.471 | **0.471** | 0.472 |
+| 100k  | 0.272 | 0.348 | 0.439 | 0.441 | 0.441 |
+| 200k  | 0.240 | 0.290 | 0.396 | 0.395 | 0.395 |
+| 500k  | 0.186 | 0.200 | **0.284** | 0.284 | 0.283 |
+| 1M    | 0.130 | 0.135 | **0.190** | 0.154 | 0.155 |
+
+Fit time (s), single core:
+
+| #SNPs | inf | grid | auto | annot |
+|-------|----:|-----:|-----:|------:|
+| 50k   | 0.3 | 0.6 | 0.4 | 1.3 |
+| 200k  | 1.1 | 2.4 | 1.7 | 5.5 |
+| 500k  | 2.6 | 5.9 | 5.7 | 15.1 |
+| 1M    | 5.3 | 11.9 | 20.8 | 39.8 |
+
+Peak memory is **LD-dominated and method-independent** — 0.48 GB at 50k →
+**2.9 GB at 1M**, ~linear in #SNPs (the `float32` block-diagonal LD), the same for
+every method (the sampler state is O(m) and negligible beside the LD).
+
+Takeaways:
+
+- **`grid`/`auto`/`annot` beat `inf` and `marginal` at every size** — the
+  spike-and-slab is the accuracy win on a sparse trait, and the gap over the raw
+  marginal score is the LD adjustment (≈0.13–0.28 absolute here).
+- **`auto` matches the oracle `grid` up to 500k**, then **under-converges at 1M**
+  (0.154 vs 0.190): self-tuning `h²`/`p` from a cold start needs more than the
+  fixed ~300-sweep budget once the genome is huge. At genome scale give `auto`
+  more iterations / chains (or warm-start the hyper-parameters) to recover the
+  oracle-`grid` accuracy — this is the same convergence effect as the
+  [cold-start table](#auto-from-a-cold-start-no-oracle-hyper-parameters).
+- **`annot` tracks `auto`** when the annotation is uninformative, at **~2–3× the
+  time** (the logistic θ-update) — the cost is worth it only when the annotation
+  carries signal (see the architecture table).
+- **Time is roughly linear in #SNPs** for `inf` (cheapest — a per-block solve, no
+  sampling) and `grid`; `auto`'s per-sweep hyper-parameter update makes it the
+  steepest of the samplers at 1M. `marginal` is free.
+
 ## Genotype-level simulation
 
 `ldpred3/simulate.py` is a full end-to-end simulation: it generates genotypes with
