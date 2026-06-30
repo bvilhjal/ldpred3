@@ -53,6 +53,14 @@ __all__ = ["PRSResult", "ScoreResult", "run_ldpred3_prs", "run_finemap",
            "preflight_prs", "score_from_weights", "load_genotypes"]
 
 
+def _inference_dict(res):
+    """The h2/p/r2 summary dict stored in ``PRSResult.inference``."""
+    return {"h2_est": res.h2_est, "h2_ci": res.h2_ci,
+            "p_est": res.p_est, "p_ci": res.p_ci,
+            "r2_est": res.r2_est, "r2_ci": res.r2_ci,
+            "n_chains_kept": res.n_chains_kept}
+
+
 def load_genotypes(path, *, sample_path=None, variant_ids=None):
     """Read genotypes from a PLINK prefix or a ``.bgen`` file (auto-detected).
 
@@ -140,6 +148,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     ld_sparse=False, ld_sparse_params=None,
                     ld_lowrank=False, ld_lowrank_params=None, ld_stream=False,
                     annotations=None, annot_params=None,
+                    auto_chains=1,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
     """Run the full sumstats -> LDpred3 -> PRS pipeline.
@@ -152,6 +161,12 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         PLINK fileset prefix for the **target** genotypes to be scored.
     method : {"auto", "grid", "inf"}, default "auto"
         LDpred3 model.
+    auto_chains : int, default 1
+        With ``method="auto"``, average this many quality-filtered chains for the
+        PRS weights — the robust LDpred2-auto estimator of Privé et al. (2023) —
+        instead of a single chain. ``>1`` enables it (~10 recommended); the same
+        multi-chain run also yields h²/p/r², so ``infer=True`` then costs nothing
+        extra. Default ``1`` keeps the single-chain behaviour.
     block_size : int, default 500
         Maximum variants per LD block.
     n_eff : float, optional
@@ -370,6 +385,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
     beta_std, _ = standardize_betas(h.beta, h.se, h.n_eff)
 
     enrichment = None
+    inference = None
     if method == "annot":
         if annotations is None:
             raise ValueError("method='annot' requires annotations=<file or array>")
@@ -383,6 +399,18 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                                          **(annot_params or {}))
         beta_adj = ares.beta_est
         enrichment = ares.enrichment
+    elif method == "auto" and auto_chains and int(auto_chains) > 1:
+        # Robust multi-chain LDpred3-auto PRS (Privé et al. 2023): run several
+        # chains, drop the non-converged ones and average the survivors, rather
+        # than scoring from a single chain. The same run also yields h2/p/r2, so
+        # --infer adds no extra cost.
+        _ip = dict(infer_params or {})
+        _ip["n_chains"] = int(auto_chains)
+        res = ldpred3_auto_infer(blocks, beta_std, h.n_eff,
+                                 ncores=ldpred3_kwargs.get("ncores", 1), **_ip)
+        beta_adj = res.beta_est
+        if infer:
+            inference = _inference_dict(res)
     else:
         beta_adj = ldpred3_by_blocks(blocks, beta_std, h.n_eff, method=method,
                                      **ldpred3_kwargs)
@@ -391,17 +419,13 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
     # weights can be reapplied on a fixed scale to other cohorts.
     fit_mean, fit_sd = dosage_stats(target_dos)
 
-    inference = None
-    if infer:
+    if infer and inference is None:
         # Streaming (block-diagonal) inference -- no dense genome-wide LD, so no
         # size cap. (infer_max_variants is kept for backwards compatibility.)
         res = ldpred3_auto_infer(blocks, beta_std, h.n_eff,
                                  ncores=ldpred3_kwargs.get("ncores", 1),
                                  **(infer_params or {}))
-        inference = {"h2_est": res.h2_est, "h2_ci": res.h2_ci,
-                     "p_est": res.p_est, "p_ci": res.p_ci,
-                     "r2_est": res.r2_est, "r2_ci": res.r2_ci,
-                     "n_chains_kept": res.n_chains_kept}
+        inference = _inference_dict(res)
 
     gv = geno.variants
     # n_matched is the initial harmonised count; record how many actually
@@ -893,6 +917,10 @@ def _main(argv=None):
     ap.add_argument("--ld-stream", action="store_true",
                     help="write a memory-mappable LD cache (with --ld-out) so a "
                          "later --ld-cache run streams blocks from disk")
+    ap.add_argument("--auto-chains", type=int, default=1,
+                    help="with --method auto: average this many filtered chains "
+                         "for a more robust PRS (Privé 2023; >1 enables it, ~10 "
+                         "recommended). Default 1 = single chain.")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
                          "(streams block-diagonal LD; works with dense, "
@@ -1020,7 +1048,7 @@ def _main(argv=None):
         ld_lowrank_params={"lowrank_variance": args.ld_lowrank_var,
                            "lowrank_min_size": args.ld_lowrank_min_size},
         ld_stream=args.ld_stream,
-        infer=args.infer)
+        auto_chains=args.auto_chains, infer=args.infer)
 
     if args.save_weights:
         res.write_weights(args.save_weights)
