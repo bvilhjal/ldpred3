@@ -43,7 +43,8 @@ from .sumstats import Sumstats, read_sumstats, detect_columns
 from .harmonize import harmonize
 from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
 from .prs import prs_score, allele_frequency, dosage_stats
-from .qc import qc_sumstats, sd_consistency_mask, dentist_outlier_mask
+from .qc import (qc_sumstats, sd_consistency_mask, dentist_outlier_mask,
+                 impute_n_eff)
 from .ldpred3 import standardize_betas, ldpred3_by_blocks, shrink_ld_blocks
 from .infer import ldpred3_auto_infer
 from .annot import ldpred3_auto_annot_blocks, read_annotations
@@ -133,6 +134,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     ld_cache=None, ld_out=None,
                     sample_path=None, ld_sample_path=None, subset_to_sumstats=True,
                     qc=True, qc_params=None, sd_check=True,
+                    impute_n=False, impute_n_params=None,
                     dentist=False, dentist_params=None,
                     ld_shrink=False, ld_shrink_params=None,
                     ld_sparse=False, ld_sparse_params=None,
@@ -175,6 +177,15 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
     sd_check : bool, default True
         After harmonisation, drop variants failing the LDpred3 SD-consistency
         check against the reference panel (:func:`qc.sd_consistency_mask`).
+    impute_n : bool, default False
+        Replace the per-variant sample size with one **imputed from ``se`` and the
+        reference allele frequency** (:func:`qc.impute_n_eff`, Privé et al. HGG
+        Advances 2022), anchored to the reported total. Use when the GWAS reports
+        only a global / constant / misspecified ``N`` — the LDpred likelihood
+        needs the true per-variant precision. Applies to a freshly-computed LD
+        (not with ``ld_cache``).
+    impute_n_params : dict, optional
+        Overrides for :func:`qc.impute_n_eff` (e.g. ``{"anchor_quantile": 0.95}``).
     dentist : bool, default False
         After building the LD blocks, drop variants flagged by the DENTIST-style
         LD-consistency filter (:func:`qc.dentist_outlier_mask`) and rebuild the
@@ -285,6 +296,19 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
             target_dos = target_dos[:, keep_sd]
             ld_dos = ld_dos[:, keep_sd]
             chrom = chrom[keep_sd]
+
+        # Per-variant effective-N imputation (Privé et al., HGG Advances 2022):
+        # recover N_j from se + reference allele frequency, anchored to the
+        # reported total, and use it as the sampler's per-variant N. Corrects a
+        # global / constant / misspecified reported N (the precision the LDpred
+        # likelihood needs). Replaces rather than drops, so no variants are lost.
+        if impute_n:
+            af_ref_i = allele_frequency(ld_dos)
+            n_total = float(np.nanmax(h.n_eff))
+            n_imp, n_log = impute_n_eff(h.se, af_ref_i, n_total,
+                                        **(impute_n_params or {}))
+            qc_log["impute_n"] = n_log
+            h.n_eff = n_imp
 
         if (ld_sparse or ld_lowrank) and dentist:
             raise ValueError("dentist requires dense LD blocks and is not "
@@ -766,6 +790,9 @@ def _main(argv=None):
                          "(off by default; can drop poorly-tagged true signals)")
     ap.add_argument("--no-sd-check", action="store_true",
                     help="skip the SD-consistency QC")
+    ap.add_argument("--impute-n", action="store_true",
+                    help="impute per-variant N from se + reference frequency "
+                         "(use when the GWAS reports only a global/constant N)")
     ap.add_argument("--ld-shrink", action="store_true",
                     help="size-aware spectral shrinkage of large LD blocks "
                          "toward the identity (helps on a finite LD panel)")
@@ -892,6 +919,7 @@ def _main(argv=None):
         ld_out=args.ld_out, ld_cache=args.ld_cache,
         annotations=args.annotations,
         qc=not args.no_qc, sd_check=not args.no_sd_check,
+        impute_n=args.impute_n,
         dentist=args.dentist, ld_shrink=args.ld_shrink,
         ld_sparse=args.ld_sparse,
         ld_sparse_params=({"max_dist": args.ld_max_dist}

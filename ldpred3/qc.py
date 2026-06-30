@@ -19,6 +19,12 @@ Two stages, matching the bigsnpr / LDpred2 tutorial workflow:
    wrong ``N``, an allele/strand error, or bad imputation and are removed. This
    runs *after* harmonisation, on the matched variants.
 
+3. :func:`impute_n_eff` — the *correction* counterpart of the SD check (Privé,
+   Arbel, Aschard & Vilhjálmsson, *HGG Advances* 2022): rather than dropping
+   variants with a wrong ``N``, recover the per-variant effective sample size
+   from ``se`` and the reference allele frequency, ``N_j ∝ 1/(se_j²·2f_j(1−f_j))``.
+   Useful when a GWAS reports only a global (or constant / misspecified) ``N``.
+
 Each function returns a boolean keep-mask and a per-filter count log.
 """
 
@@ -26,7 +32,8 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["qc_sumstats", "sd_consistency_mask", "dentist_outlier_mask"]
+__all__ = ["qc_sumstats", "sd_consistency_mask", "dentist_outlier_mask",
+           "impute_n_eff"]
 
 
 def dentist_outlier_mask(blocks, z, *, p_cutoff=5e-8, ridge=0.01, n_iter=20,
@@ -251,3 +258,79 @@ def sd_consistency_mask(beta, se, n_eff, af_ref, *,
         "n_kept": int(keep.sum()),
     }
     return keep, log, {"sd_ss": sd_ss, "sd_ref": sd_ref}
+
+
+def impute_n_eff(se, af_ref, n_total, *, anchor_quantile=0.99, info=None):
+    """Recover the per-variant effective sample size from ``se`` and frequency.
+
+    Privé, Arbel, Aschard & Vilhjálmsson (*HGG Advances* 2022): the standard error
+    of a marginal effect relates to the sample size and the (reference) allele
+    frequency by ``se_j ≈ sd_y / (√(2 f_j (1−f_j)) · √N_j)``, so the per-variant
+    effective ``N`` can be read back off the summary statistics::
+
+        N_j  ∝  1 / (se_j² · 2 f_j (1−f_j))
+
+    The unknown proportionality constant (the phenotype-variance scale ``sd_y²``,
+    and the per-allele vs standardized ``se`` scale) is fixed by **anchoring a high
+    quantile of the imputed N to the reported total** ``n_total`` — the best-typed
+    common variants carry ≈ the full sample. The result is clipped at ``n_total``
+    (a variant cannot have more than the whole sample).
+
+    This is the *correction* counterpart of :func:`sd_consistency_mask`: where a
+    GWAS reports only a global (or constant, or misspecified) ``N``, the true
+    per-variant N — which varies with imputation quality, missingness and
+    meta-analysis cohort overlap — is what the LDpred sampler needs, since it sets
+    each variant's likelihood precision. Replacing rather than dropping keeps
+    variants the SD filter would otherwise discard.
+
+    Parameters
+    ----------
+    se : array_like (m,)
+        Reported standard errors of the marginal effects (any consistent scale;
+        the anchoring is scale-invariant).
+    af_ref : array_like (m,)
+        Allele frequency of the counted allele in the reference panel.
+    n_total : float
+        Reported total (effective) GWAS sample size, used only to set the scale.
+    anchor_quantile : float, default 0.99
+        The quantile of the raw imputed N matched to ``n_total`` (robust to the
+        few noisy top variants a hard max would key on).
+    info : array_like (m,), optional
+        Imputation-quality (INFO) scores. When given, the imputed N is multiplied
+        by ``info`` as well — relevant only if ``se`` does not already reflect the
+        imputation uncertainty (it usually does, so leave unset by default).
+
+    Returns
+    -------
+    n_imp : ndarray (m,)
+        Imputed per-variant effective sample size, in ``(0, n_total]``.
+    log : dict
+        Summary diagnostics (median imputed N, fraction far below ``n_total``).
+    """
+    se = np.asarray(se, dtype=float)
+    af_ref = np.asarray(af_ref, dtype=float)
+    n_total = float(n_total)
+    sd_ref2 = 2.0 * af_ref * (1.0 - af_ref)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        n_raw = 1.0 / (se ** 2 * sd_ref2)
+    finite = np.isfinite(n_raw) & (n_raw > 0)
+    if not finite.any():
+        raise ValueError("no variants with finite se and polymorphic af_ref to "
+                         "impute N from")
+    ref = np.quantile(n_raw[finite], anchor_quantile)
+    scale = n_total / ref if ref > 0 else 1.0
+    n_imp = n_raw * scale
+    if info is not None:
+        n_imp = n_imp * np.asarray(info, dtype=float)
+    # Non-finite (se=0 or monomorphic) fall back to the reported total; clip to
+    # the physical ceiling (a variant cannot exceed the whole sample).
+    n_imp = np.where(np.isfinite(n_imp) & (n_imp > 0), n_imp, n_total)
+    n_imp = np.minimum(n_imp, n_total)
+
+    log = {
+        "n_input": int(se.size),
+        "n_total": n_total,
+        "median_imputed_n": float(np.median(n_imp)),
+        "frac_below_half": float(np.mean(n_imp < 0.5 * n_total)),
+    }
+    return n_imp, log

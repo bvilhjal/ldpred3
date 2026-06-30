@@ -8,6 +8,7 @@ GWAS sumstats + genotypes (PLINK/BGEN)
   → QC sumstats (N / MAF / INFO / duplicates / chi-sq outliers)
   → read & harmonise (align effect alleles to A1, drop ambiguous/mismatched)
   → SD-consistency QC vs the reference panel
+  → [optional] per-variant N imputation from se + frequency (--impute-n)
   → per-block LD from a reference panel (in-sample or external)
   → [optional] DENTIST LD-consistency outlier removal (--dentist)
   → ldpred3 (inf / grid / auto / annot)
@@ -92,6 +93,7 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--ncores N` | `1` | Threads for the Gibbs sampler (requires Numba). |
 | `--no-qc` | off | Skip the sumstats-only QC stage. |
 | `--no-sd-check` | off | Skip the SD-consistency QC stage. |
+| `--impute-n` | off | Impute per-variant N from `se` + reference frequency (see [Sumstats QC](#sumstats-qc)); use when the GWAS reports only a global/constant N. |
 | `--dentist` | off | Apply the DENTIST LD-consistency outlier filter (see [Sumstats QC](#sumstats-qc)). |
 | `--infer` | off | Also infer h² / polygenicity / predictive r² (see [inference.md](inference.md)). |
 | `--dry-run` | off | Preflight only: detect columns, match IDs, preview harmonisation, then exit. |
@@ -181,6 +183,16 @@ bigsnpr / LDpred2 tutorial:
   genotype SD `sd_ref = √(2·f·(1−f))`, and drop variants where the ratio leaves
   `[0.5, 2]`. This catches a wrong `N`, allele errors or bad imputation that
   harmonisation cannot.
+* **Per-variant N imputation** (`qc.impute_n_eff`, opt-in with `--impute-n`,
+  Privé et al. *HGG Advances* 2022): the *correction* counterpart of the SD
+  check. Rather than dropping variants with a wrong `N`, recover the effective
+  per-variant sample size from `se` and the reference frequency,
+  `N_j ∝ 1/(se_j²·2f_j(1−f_j))`, anchored so a high quantile matches the reported
+  total. Use it when the GWAS reports only a global / constant / misspecified `N`
+  — the LDpred likelihood sets each variant's precision from its `N`, so the
+  per-variant value (which varies with imputation quality, missingness and
+  meta-analysis overlap) matters. It *replaces* rather than drops, so no variants
+  are lost.
 * **DENTIST LD-consistency** (`qc.dentist_outlier_mask`, opt-in with `--dentist`,
   after the LD blocks are built): within each LD block, test whether each
   variant's z-score agrees with the value predicted from its LD neighbours
