@@ -40,7 +40,7 @@ import numpy as np
 from .genotype_io import read_plink
 from .bgen_io import read_bgen
 from .sumstats import Sumstats, read_sumstats, detect_columns
-from .harmonize import harmonize
+from .harmonize import harmonize, diagnose_match
 from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
 from .prs import prs_score, allele_frequency, dosage_stats
 from .qc import (qc_sumstats, sd_consistency_mask, dentist_outlier_mask,
@@ -256,8 +256,12 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
 
     h = harmonize(ss, geno.variants)
     if len(h) == 0:
-        raise ValueError("no GWAS variants matched the genotypes after "
-                         "harmonisation; check IDs/alleles/build")
+        diag = diagnose_match(ss, geno.variants)
+        raise ValueError(
+            "no GWAS variants matched the genotypes after harmonisation. "
+            f"Diagnosis: {diag['message']} "
+            f"(rsID overlap {diag['rsid_overlap']}, position overlap "
+            f"{diag['pos_overlap_normalized']}).")
 
     # LD reference: external panel (matched + allele-recoded) or in-sample.
     h, target_dos, ld_dos, chrom = _external_ld_dosage(
@@ -564,8 +568,12 @@ def run_finemap(sumstats, plink, *, regions=None, out=None, n_eff=None,
         geno = load_genotypes(plink, sample_path=sample_path)
     h = harmonize(ss, geno.variants)
     if len(h) == 0:
-        raise ValueError("no GWAS variants matched the genotypes after "
-                         "harmonisation; check IDs/alleles/build")
+        diag = diagnose_match(ss, geno.variants)
+        raise ValueError(
+            "no GWAS variants matched the genotypes after harmonisation. "
+            f"Diagnosis: {diag['message']} "
+            f"(rsID overlap {diag['rsid_overlap']}, position overlap "
+            f"{diag['pos_overlap_normalized']}).")
 
     h, target_dos, ld_dos, chrom = _external_ld_dosage(
         ss, geno, h, vids=vids, ld_prefix=ld_prefix,

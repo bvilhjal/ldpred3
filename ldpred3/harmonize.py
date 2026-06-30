@@ -26,9 +26,26 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["Harmonized", "harmonize"]
+__all__ = ["Harmonized", "harmonize", "diagnose_match"]
 
 _COMP = {"A": "T", "T": "A", "C": "G", "G": "C"}
+
+# PLINK numeric sex / mitochondrial codes -> canonical letters.
+_CHROM_ALIASES = {"23": "X", "24": "Y", "25": "XY", "26": "MT", "M": "MT"}
+
+
+def _norm_chrom(c):
+    """Canonical chromosome label: drop a ``chr`` prefix, map sex/MT codes.
+
+    Lets a ``chr1``/``1`` (or ``X``/``23``, ``MT``/``M``/``26``) labelling
+    mismatch between the sumstats and the genotypes still match by position —
+    one of the most common reasons a real-data run silently matches nothing.
+    """
+    s = str(c).strip()
+    if s[:3].lower() == "chr":
+        s = s[3:]
+    s = s.upper()
+    return _CHROM_ALIASES.get(s, s)
 
 
 def _complement(allele):
@@ -64,13 +81,13 @@ class Harmonized:
 
 
 def _build_index(variants):
-    """rsID -> row, and (chrom, pos) -> row, for the genotype variants."""
+    """rsID -> row, and (norm_chrom, pos) -> row, for the genotype variants."""
     by_id, by_pos = {}, {}
     for i in range(len(variants)):
         vid = variants.id[i]
         if vid and vid != ".":
             by_id.setdefault(vid, i)
-        by_pos.setdefault((str(variants.chrom[i]), int(variants.pos[i])), i)
+        by_pos.setdefault((_norm_chrom(variants.chrom[i]), int(variants.pos[i])), i)
     return by_id, by_pos
 
 
@@ -86,7 +103,7 @@ def harmonize(sumstats, variants, *, drop_ambiguous=True):
         sid = sumstats.id[k]
         gi = by_id.get(sid) if sid else None
         if gi is None:
-            gi = by_pos.get((str(sumstats.chrom[k]), int(sumstats.pos[k])))
+            gi = by_pos.get((_norm_chrom(sumstats.chrom[k]), int(sumstats.pos[k])))
         if gi is None:
             n_unmatched += 1
             continue
@@ -149,3 +166,70 @@ def harmonize(sumstats, variants, *, drop_ambiguous=True):
         flipped=np.array(flips, dtype=bool)[order],
         log=log,
     )
+
+
+def diagnose_match(sumstats, variants, *, sample=2000):
+    """Explain *why* few/no variants matched (build / chr-naming / alleles).
+
+    A generic "nothing matched" is the most time-wasting real-data failure. This
+    inspects the rsID and (normalised) position overlap and returns a dict with a
+    human-readable ``message`` pinning the likely cause: a genome-build mismatch
+    (rsIDs overlap but their positions disagree), a chromosome-label style clash,
+    an allele/strand problem, or genuinely disjoint variant sets.
+    """
+    gid = {v for v in variants.id if v and v != "."}
+    sid = {s for s in sumstats.id if s}
+    rsid_overlap = len(sid & gid)
+
+    gpos = {(_norm_chrom(variants.chrom[i]), int(variants.pos[i]))
+            for i in range(len(variants))}
+    spos = {(_norm_chrom(sumstats.chrom[k]), int(sumstats.pos[k]))
+            for k in range(len(sumstats))}
+    pos_overlap = len(spos & gpos)
+
+    def _prefixed(labels):
+        return any(str(c)[:3].lower() == "chr" for c in labels[:sample])
+    s_pref, g_pref = _prefixed(sumstats.chrom), _prefixed(variants.chrom)
+
+    # Build mismatch: shared rsIDs whose positions disagree.
+    build_mismatch = False
+    if rsid_overlap:
+        g_at = {variants.id[i]: (_norm_chrom(variants.chrom[i]), int(variants.pos[i]))
+                for i in range(len(variants)) if variants.id[i]}
+        shared = list(sid & gid)[:sample]
+        disagree = tot = 0
+        for k in range(len(sumstats)):
+            r = sumstats.id[k]
+            if r in g_at and r in shared:
+                tot += 1
+                if g_at[r] != (_norm_chrom(sumstats.chrom[k]), int(sumstats.pos[k])):
+                    disagree += 1
+        build_mismatch = tot > 0 and disagree / tot > 0.5
+
+    msgs = []
+    if build_mismatch:
+        msgs.append("rsIDs overlap but their chrom:pos disagree — likely a "
+                    "genome-build mismatch (e.g. hg19 vs hg38); lift over to a "
+                    "common build")
+    if rsid_overlap == 0 and pos_overlap == 0:
+        if s_pref != g_pref:
+            msgs.append("chromosome labels differ in style (one side uses a 'chr' "
+                        "prefix) — normalisation handles this, so a remaining "
+                        "0-overlap points to different builds or variant sets")
+        else:
+            msgs.append("no rsID and no chrom:pos overlap — the sumstats and "
+                        "genotypes look like different variant sets or builds")
+    if rsid_overlap and pos_overlap and not build_mismatch:
+        msgs.append("variants overlap but harmonisation dropped them — likely an "
+                    "allele/strand or effect-column problem (check ea/oa columns)")
+
+    return {
+        "n_sumstats": len(sumstats),
+        "n_genotype_variants": len(variants),
+        "rsid_overlap": rsid_overlap,
+        "pos_overlap_normalized": pos_overlap,
+        "sumstats_chr_prefixed": s_pref,
+        "genotype_chr_prefixed": g_pref,
+        "build_mismatch_suspected": build_mismatch,
+        "message": "; ".join(msgs) if msgs else "no obvious cause detected",
+    }
