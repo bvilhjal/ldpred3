@@ -150,7 +150,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     ld_sparse=False, ld_sparse_params=None,
                     ld_lowrank=False, ld_lowrank_params=None, ld_stream=False,
                     annotations=None, annot_params=None,
-                    auto_chains=1, ldsc_init=False,
+                    auto_chains=1, ldsc_init=False, alpha=-1.0,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
     """Run the full sumstats -> LDpred3 -> PRS pipeline.
@@ -248,6 +248,13 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         (memmap), so resident memory is ~O(one block) and an LD larger than RAM
         still fits. Build once with ``ld_lowrank=True, ld_out=…, ld_stream=True``;
         reuse cheaply with ``ld_cache=…``.
+    alpha : float, default -1.0
+        Exponent of the MAF-dependent effect-size prior (Privé et al. 2023):
+        each variant's slab variance is scaled by ``[2f(1-f)]^(1+alpha)`` from the
+        target allele frequency ``f``. ``-1`` (default) is the flat prior and
+        reproduces the original sampler exactly; more negative concentrates effect
+        on common variants, less negative on rarer ones. ``method="auto"``/
+        ``"grid"`` only (not multi-chain auto, lassosum2 or annot).
     sumstats_cols : dict, optional
         Column overrides forwarded to :func:`read_sumstats`.
     **ldpred3_kwargs
@@ -402,6 +409,25 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
             ldpred3_kwargs.setdefault("h2_init", h2_ldsc)
         elif method in ("inf", "grid"):
             ldpred3_kwargs.setdefault("h2", h2_ldsc)
+
+    # MAF-dependent effect-size prior (Privé et al. 2023): scale each variant's
+    # slab variance by [2f(1-f)]^(1+alpha). alpha=-1 (default) is the flat prior
+    # and reproduces the original sampler bit-for-bit. Only the dense grid / auto
+    # by-blocks path supports it; reject the combinations that route elsewhere.
+    if alpha != -1.0:
+        if method not in ("auto", "grid"):
+            raise ValueError("alpha (the MAF-dependent prior) applies to "
+                             "method='auto' or 'grid' only")
+        if method == "auto" and auto_chains and int(auto_chains) > 1:
+            raise ValueError("alpha (the MAF-dependent prior) is not supported "
+                             "with the multi-chain auto estimator (auto_chains>1)")
+        ldpred3_kwargs["af"] = allele_frequency(target_dos)
+        ldpred3_kwargs["alpha"] = alpha
+        # the MAF prior runs per-block (the global pooled-hyperparameter auto
+        # path doesn't carry per-variant slab weights).
+        if method == "auto":
+            ldpred3_kwargs.setdefault("global_hyper", False)
+        qc_log["maf_prior_alpha"] = float(alpha)
 
     enrichment = None
     inference = None
@@ -954,6 +980,10 @@ def _main(argv=None):
                     help="with --method auto: average this many filtered chains "
                          "for a more robust PRS (Privé 2023; >1 enables it, ~10 "
                          "recommended). Default 1 = single chain.")
+    ap.add_argument("--alpha", type=float, default=-1.0,
+                    help="MAF-dependent effect-size prior exponent (Privé 2023): "
+                         "slab variance scales as [2f(1-f)]^(1+alpha). Default -1 "
+                         "= flat prior (unchanged); auto/grid only.")
     ap.add_argument("--infer", action="store_true",
                     help="also infer h2 / polygenicity / predictive r2 "
                          "(streams block-diagonal LD; works with dense, "
@@ -1082,7 +1112,7 @@ def _main(argv=None):
                            "lowrank_min_size": args.ld_lowrank_min_size},
         ld_stream=args.ld_stream,
         auto_chains=args.auto_chains, ldsc_init=args.ldsc_init,
-        infer=args.infer)
+        alpha=args.alpha, infer=args.infer)
 
     if args.save_weights:
         res.write_weights(args.save_weights)
