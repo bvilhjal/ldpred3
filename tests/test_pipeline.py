@@ -185,6 +185,21 @@ def test_pipeline_dentist_runs_and_keeps_signal(tmp_path):
     assert r2 > 0.20, f"PRS R^2 after DENTIST too low: {r2:.3f}"
 
 
+def test_pipeline_auto_chains_robust_prs(tmp_path):
+    # Multi-chain auto (Privé 2023) runs end-to-end, predicts, and reuses the run
+    # for --infer (one InferResult drives both weights and h2/p/r2).
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=8)
+    res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
+                          auto_chains=4, infer=True,
+                          infer_params={"burn_in": 60, "num_iter": 80})
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"multi-chain auto PRS R^2 too low: {r2:.3f}"
+    # the multi-chain run also populated the inference dict
+    assert res.inference is not None
+    assert 0 < res.inference["h2_est"] < 1.5
+    assert res.inference["n_chains_kept"] >= 2
+
+
 def test_pipeline_impute_n_runs_and_keeps_signal(tmp_path):
     # --impute-n runs end-to-end, logs its diagnostics, and (when the reported N
     # is already correct) leaves the PRS predictive — no harm.
