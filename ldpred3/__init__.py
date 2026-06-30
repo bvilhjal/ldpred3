@@ -31,7 +31,8 @@ from .pipeline import (
 )
 from .infer import ldpred3_auto_infer, InferResult
 from .annot import ldpred3_auto_annot, ldpred3_auto_annot_blocks, AnnotResult
-from .ldsc import ld_scores, ldsc_h2, LDSCResult, ldsc_rg, LDSCRgResult
+from .ldsc import (ld_scores, ldsc_h2, LDSCResult, ldsc_rg, LDSCRgResult,
+                   partition_h2)
 from .bivariate import (ldpred3_auto_bivariate, ldpred3_auto_bivariate_blocks,
                         BivariateResult)
 from .finemap import (ldpred3_pip, single_signal_finemap, finemap_by_blocks,
@@ -70,6 +71,7 @@ __all__ = [
     "LDSCResult",
     "ldsc_rg",
     "LDSCRgResult",
+    "partition_h2",
     "ldpred3_auto_bivariate",
     "ldpred3_auto_bivariate_blocks",
     "BivariateResult",

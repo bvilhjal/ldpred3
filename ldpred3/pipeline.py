@@ -45,7 +45,8 @@ from .ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
 from .prs import prs_score, allele_frequency, dosage_stats
 from .qc import (qc_sumstats, sd_consistency_mask, dentist_outlier_mask,
                  impute_n_eff)
-from .ldpred3 import standardize_betas, ldpred3_by_blocks, shrink_ld_blocks
+from .ldpred3 import (standardize_betas, ldpred3_by_blocks, shrink_ld_blocks,
+                      SparseLD, LowRankLD)
 from .infer import ldpred3_auto_infer
 from .annot import ldpred3_auto_annot_blocks, read_annotations
 
@@ -148,7 +149,7 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                     ld_sparse=False, ld_sparse_params=None,
                     ld_lowrank=False, ld_lowrank_params=None, ld_stream=False,
                     annotations=None, annot_params=None,
-                    auto_chains=1,
+                    auto_chains=1, ldsc_init=False,
                     infer=False, infer_max_variants=30000, infer_params=None,
                     sumstats_cols=None, **ldpred3_kwargs):
     """Run the full sumstats -> LDpred3 -> PRS pipeline.
@@ -383,6 +384,21 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
                            mmap=ld_stream)
 
     beta_std, _ = standardize_betas(h.beta, h.se, h.n_eff)
+
+    # Optionally seed the sampler's heritability from LD Score regression (the
+    # bigsnpr workflow): h2_init for auto, the fixed h2 for inf/grid. Needs dense
+    # blocks (LDSC's r^2 is dense); skipped otherwise.
+    if ldsc_init and not any(isinstance(R, (SparseLD, LowRankLD))
+                             for R, _ in blocks):
+        from .ldsc import ld_scores, ldsc_h2
+        ell = ld_scores(blocks)
+        chisq = h.n_eff * beta_std ** 2          # z^2 = N * beta_std^2
+        h2_ldsc = float(min(max(ldsc_h2(chisq, ell, h.n_eff).h2, 1e-3), 1.0))
+        qc_log["ldsc_h2_init"] = h2_ldsc
+        if method == "auto":
+            ldpred3_kwargs.setdefault("h2_init", h2_ldsc)
+        elif method in ("inf", "grid"):
+            ldpred3_kwargs.setdefault("h2", h2_ldsc)
 
     enrichment = None
     inference = None
@@ -917,6 +933,9 @@ def _main(argv=None):
     ap.add_argument("--ld-stream", action="store_true",
                     help="write a memory-mappable LD cache (with --ld-out) so a "
                          "later --ld-cache run streams blocks from disk")
+    ap.add_argument("--ldsc-init", action="store_true",
+                    help="seed the sampler's h2 from LD Score regression "
+                         "(h2_init for auto, fixed h2 for inf/grid)")
     ap.add_argument("--auto-chains", type=int, default=1,
                     help="with --method auto: average this many filtered chains "
                          "for a more robust PRS (Privé 2023; >1 enables it, ~10 "
@@ -1048,7 +1067,8 @@ def _main(argv=None):
         ld_lowrank_params={"lowrank_variance": args.ld_lowrank_var,
                            "lowrank_min_size": args.ld_lowrank_min_size},
         ld_stream=args.ld_stream,
-        auto_chains=args.auto_chains, infer=args.infer)
+        auto_chains=args.auto_chains, ldsc_init=args.ldsc_init,
+        infer=args.infer)
 
     if args.save_weights:
         res.write_weights(args.save_weights)

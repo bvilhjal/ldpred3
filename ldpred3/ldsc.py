@@ -23,7 +23,31 @@ from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["ld_scores", "ldsc_h2", "LDSCResult", "ldsc_rg", "LDSCRgResult"]
+__all__ = ["ld_scores", "ldsc_h2", "LDSCResult", "ldsc_rg", "LDSCRgResult",
+           "partition_h2"]
+
+
+def partition_h2(blocks, beta):
+    """Per-block (local) heritability ``β' R β`` from fitted effects.
+
+    Given the adjusted (posterior-mean) effects and the per-block LD, returns the
+    genetic variance attributable to each LD block — the "where is the
+    heritability" partition behind the disease-architecture story (Privé et al.
+    2023). The values sum to the global ``β' R β``.
+
+    Being a plug-in on the posterior *mean* (rather than the per-sweep
+    ``E[β'Rβ]``), it slightly under-estimates the absolute total; use it for the
+    **relative** distribution across blocks. ``blocks`` is the dense
+    ``[(R, idx), ...]`` list; ``beta`` the genome-wide effect vector.
+    """
+    beta = np.asarray(beta, dtype=float)
+    local = []
+    for R, idx in blocks:
+        idx = np.asarray(idx)
+        b = beta[idx]
+        R = np.asarray(R, dtype=float)
+        local.append(float(b @ (R @ b)))
+    return np.asarray(local)
 
 
 def ld_scores(blocks, *, n_ref=None):
