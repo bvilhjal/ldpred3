@@ -58,6 +58,29 @@ The picture is method-dependent — there is no blanket "N× faster":
   beats LDpred3's per-block Python-orchestrated one. This is LDpred3's weak
   spot at fixed hyper-parameters.
 
+### `auto` from a cold start (no oracle hyper-parameters)
+
+The table above warm-starts both autos at the oracle h²/p. In practice you don't
+know them — learning them is auto's whole point. Re-running with **both** tools
+cold-started at `h2_init=0.1, p_init=0.1` (single chain, same burn-in/iterations,
+same LD and sumstats; regenerate with `benchmarks/bench_cold_init.py`):
+
+| #SNPs | LDpred3 R² | bigsnpr R² | LDpred3 (s) | bigsnpr (s) |
+|-------|----------:|-----------:|------------:|------------:|
+| 200k  | 0.388 | 0.388 | **2.8** | 5.7 |
+| 500k  | **0.279** | 0.237 | **9.3** | 31.7 |
+| 1M    | **0.155** | 0.144 | **29.3** | 82.9 |
+| 2M    | **0.086** | 0.084 | **66.5** | 147.6 |
+
+From a cold start LDpred3's auto is **at least as accurate as bigsnpr's and 2–3×
+faster** — they tie at 200k, and LDpred3 leads by up to ~18% (500k) at the larger
+sizes. Both fall a little short of their oracle-init numbers (the fixed 300-sweep
+budget doesn't fully converge the hyper-parameters at 1M+), but LDpred3 degrades
+less; the oracle warm-start in the main table is what lets bigsnpr's single chain
+catch up. Caveat: this is bigsnpr's **single-chain** auto, matched to LDpred3 —
+its recommended usage runs ~30 chains over a `vec_p_init` grid, which would
+recover accuracy at roughly 30× the cost.
+
 ## End-to-end pipeline vs bigsnpr
 
 Beyond the per-block accuracy check above, the **whole pipeline** was validated
