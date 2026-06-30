@@ -75,6 +75,51 @@ def _simulate(tmp_path, n_train=4000, n_target=1500, m=600, p_causal=0.1,
     return prefix, ss_path, g_te
 
 
+def _write_ref(tmp_path, m, *, swap=None, n_ref=3000, seed=99, name="ref"):
+    """External LD reference sharing the target's variant IDs. If ``swap`` is a
+    boolean mask, those variants count the OTHER allele (A1/A2 exchanged and
+    dosage -> 2 - dosage) — the orientation mismatch the pipeline must undo."""
+    rng = np.random.default_rng(seed)
+    af = rng.uniform(0.1, 0.9, m)
+    G = rng.binomial(2, af, size=(n_ref, m)).astype(np.int8)
+    a1 = np.array(["A"] * m, dtype=object)
+    a2 = np.array(["G"] * m, dtype=object)
+    if swap is not None and np.any(swap):
+        G = G.copy(); G[:, swap] = 2 - G[:, swap]
+        a1 = a1.copy(); a2 = a2.copy()
+        a1[swap], a2[swap] = a2[swap], a1[swap]
+    variants = VariantTable(
+        chrom=np.array(["1"] * m, dtype=object),
+        id=np.array([f"rs{i}" for i in range(m)], dtype=object),
+        cm=np.zeros(m), pos=np.arange(1, m + 1, dtype=np.int64) * 100, a1=a1, a2=a2)
+    smp = SampleTable(
+        fid=np.array([f"R{i}" for i in range(n_ref)], dtype=object),
+        iid=np.array([f"R{i}" for i in range(n_ref)], dtype=object),
+        sex=np.ones(n_ref, dtype=np.int64), pheno=np.full(n_ref, np.nan))
+    prefix = str(tmp_path / name)
+    write_plink(prefix, G, variants, smp)
+    return prefix
+
+
+def test_external_ld_reference_allele_orientation(tmp_path):
+    # An LD-reference panel that counts the opposite allele for some variants
+    # must give the SAME PRS as a correctly-oriented panel: the pipeline recodes
+    # reference dosages to the target's counted allele before building LD.
+    m = 400
+    prefix, ss_path, _ = _simulate(tmp_path, m=m, seed=7)
+    oriented = _write_ref(tmp_path, m, swap=None, name="ref_ok")
+    swap = np.zeros(m, dtype=bool); swap[::3] = True          # flip 1/3 of variants
+    swapped = _write_ref(tmp_path, m, swap=swap, name="ref_swap")
+
+    kw = dict(method="auto", block_size=200, num_iter=120, burn_in=40, seed=1)
+    a = run_ldpred3_prs(ss_path, prefix, ld_prefix=oriented, **kw)
+    b = run_ldpred3_prs(ss_path, prefix, ld_prefix=swapped, **kw)
+    # Same underlying reference genotypes, only re-oriented -> identical LD ->
+    # (near-)identical scores. Without the recoding fix the flipped-sign LD
+    # would change the posterior and the correlation would drop well below 1.
+    assert np.corrcoef(a.scores, b.scores)[0, 1] > 0.999
+
+
 def test_end_to_end_prs_predicts_genetic_value(tmp_path):
     prefix, ss_path, g_te = _simulate(tmp_path, seed=1)
     res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=200,
@@ -273,3 +318,12 @@ def test_allele_flip_is_corrected(tmp_path):
     res1 = run_ldpred3_prs(flipped, prefix, method="inf", block_size=150)
 
     np.testing.assert_allclose(res0.scores, res1.scores, rtol=1e-6, atol=1e-6)
+
+
+def test_pipeline_infer_rejects_compact_ld(tmp_path):
+    import pytest
+    prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=14)
+    for kw in ({"ld_lowrank": True}, {"ld_sparse": True}):
+        with pytest.raises(ValueError, match="dense LD"):
+            run_ldpred3_prs(ss_path, prefix, method="auto", block_size=150,
+                            num_iter=30, burn_in=10, seed=1, infer=True, **kw)

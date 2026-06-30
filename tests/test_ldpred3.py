@@ -430,6 +430,13 @@ def test_global_auto_rejects_bad_blocks():
     with pytest.raises(NotImplementedError):
         ldpred3_by_blocks(blocks, bhat, n, method="auto", global_hyper=True,
                           sparsify=True, burn_in=5, num_iter=5)
+    # kwargs only honoured per-block (global_hyper=False) must not be silently
+    # swallowed in the global-hyper path.
+    for bad_kw in ({"allow_jump_sign": False}, {"prior_weights": np.ones(bhat.size)},
+                   {"shrink_corr": 0.9}):
+        with pytest.raises(TypeError, match="unsupported keyword"):
+            ldpred3_by_blocks(blocks, bhat, n, method="auto", global_hyper=True,
+                              burn_in=5, num_iter=5, **bad_kw)
 
 
 def test_inf_zero_beta_is_finite():

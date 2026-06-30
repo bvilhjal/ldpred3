@@ -253,9 +253,20 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         target_dos = geno.dosage[:, h.var_index]
         chrom = geno.variants.chrom[h.var_index]
         ref_order = {vid: i for i, vid in enumerate(ref.variants.id[href.var_index])}
-        ref_cols = href.var_index[[ref_order[v] for v in
-                                   geno.variants.id[h.var_index]]]
-        ld_dos = ref.dosage[:, ref_cols]
+        ref_pos = [ref_order[v] for v in geno.variants.id[h.var_index]]
+        ref_cols = href.var_index[ref_pos]
+        # Recode reference dosages to count the SAME allele as the target/beta.
+        # Both panels were harmonised against the same sumstats, so a variant is
+        # in opposite orientation iff its flip flag differs; recode (2 - dosage)
+        # there. Using the flip flags (not a raw A1 string compare) keeps this
+        # correct for strand-flipped variants too. Without this, an LD-reference
+        # SNP counting the other allele would feed the sampler the wrong-sign
+        # correlations against a beta that is in target-A1 orientation.
+        ld_dos = ref.dosage[:, ref_cols].astype(float, copy=True)
+        recode = h.flipped != href.flipped[ref_pos]
+        if np.any(recode):
+            x = ld_dos[:, recode]
+            ld_dos[:, recode] = np.where(np.isfinite(x), 2.0 - x, x)
     else:
         ld_dos = target_dos
 
@@ -295,6 +306,9 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         if (ld_sparse or ld_lowrank) and dentist:
             raise ValueError("dentist requires dense LD blocks and is not "
                              "compatible with ld_sparse / ld_lowrank")
+        if (ld_sparse or ld_lowrank) and infer:
+            raise ValueError("infer=True currently requires dense LD blocks and "
+                             "is not compatible with ld_sparse / ld_lowrank")
         # Compact LD representations keep persistent memory sub-O(k²) for large
         # blocks (genome / sequencing scale): banded SparseLD (O(k·bandwidth)) or
         # low-rank LowRankLD (O(k·rank), preferred on realistic LD). The dense

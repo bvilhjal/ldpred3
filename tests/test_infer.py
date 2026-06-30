@@ -12,7 +12,10 @@ import sys
 import numpy as np
 
 
+import pytest                                       # noqa: E402
+
 from ldpred3.infer import ldpred3_auto_infer       # noqa: E402
+from ldpred3.ld_utils import lowrank_ld, sparsify_ld   # noqa: E402
 
 
 def _block_R(m, nblk, rng):
@@ -194,3 +197,19 @@ def test_streaming_blocks_matches_dense():
     pred = Gte @ strm.beta_est
     r2_test = np.corrcoef(pred, yte)[0, 1] ** 2
     assert abs(strm.r2_est - r2_test) < 0.12
+
+
+def test_infer_rejects_lowrank_and_sparse_blocks():
+    # Inference needs dense LD; compact representations must fail loudly, not
+    # crash inside np.ascontiguousarray with a cryptic error.
+    rng = np.random.default_rng(3)
+    R = _block_R(120, 2, rng)
+    beta_hat = rng.standard_normal(120) * 0.02
+    lr = [(lowrank_ld(R[:60, :60]), np.arange(60)),
+          (lowrank_ld(R[60:, 60:]), np.arange(60, 120))]
+    with pytest.raises(ValueError, match="dense LD"):
+        ldpred3_auto_infer(lr, beta_hat, 10000, n_chains=2, burn_in=10, num_iter=10)
+    sp = [(sparsify_ld(R[:60, :60]), np.arange(60)),
+          (sparsify_ld(R[60:, 60:]), np.arange(60, 120))]
+    with pytest.raises(ValueError, match="dense LD"):
+        ldpred3_auto_infer(sp, beta_hat, 10000, n_chains=2, burn_in=10, num_iter=10)

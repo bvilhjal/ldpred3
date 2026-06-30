@@ -19,6 +19,8 @@ The caller is responsible for having aligned ``beta`` to the matrix's counted
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 __all__ = ["allele_frequency", "standardize_dosage", "prs_score"]
@@ -32,6 +34,16 @@ def _as_float_with_nan(dosage):
     g = g.copy()
     g[g < 0] = np.nan
     return g
+
+
+def _column_means(g):
+    """Per-column mean ignoring NaN; all-missing columns -> 0 (not NaN)."""
+    with warnings.catch_warnings():        # silence "Mean of empty slice"
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        mean = np.nanmean(g, axis=0)
+    all_missing = ~np.isfinite(mean)
+    mean[all_missing] = 0.0
+    return mean, all_missing
 
 
 def allele_frequency(dosage):
@@ -48,14 +60,17 @@ def standardize_dosage(dosage, *, eps=1e-12):
     and unit variance. Monomorphic columns (zero variance) become all-zero.
     """
     g = _as_float_with_nan(dosage)
-    mean = np.nanmean(g, axis=0)
+    mean, all_missing = _column_means(g)
     # Mean-impute missing entries.
     inds = np.where(np.isnan(g))
     g[inds] = np.take(mean, inds[1])
     sd = g.std(axis=0)
     Z = g - mean
-    np.divide(Z, sd, out=Z, where=sd > eps)
-    Z[:, sd <= eps] = 0.0
+    # All-missing / monomorphic / non-finite-SD columns carry no information ->
+    # all-zero (so they contribute nothing rather than poisoning the score).
+    bad = all_missing | ~np.isfinite(sd) | (sd <= eps)
+    np.divide(Z, sd, out=Z, where=~bad)
+    Z[:, bad] = 0.0
     return Z
 
 
@@ -83,7 +98,7 @@ def prs_score(dosage, beta, *, standardize=True):
         G = standardize_dosage(dosage)
     else:
         g = _as_float_with_nan(dosage)
-        mean = np.nanmean(g, axis=0)
+        mean, _ = _column_means(g)          # all-missing -> 0, no NaN propagation
         inds = np.where(np.isnan(g))
         g[inds] = np.take(mean, inds[1])
         G = g
