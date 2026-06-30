@@ -88,12 +88,14 @@ d = np.load(os.path.join(%r, "ld_blocks.npz"))
 nb = int(d["nb"]); K = int(d["K"]); H2 = float(d["h2"]); P = float(d["p"])
 N = float(d["n"]); BURN = int(d["burn"]); IT = int(d["it"])
 lib = d["lib"]
-blocks = [(lib[b].astype(np.float32), np.arange(b*K,(b+1)*K)) for b in range(nb)]
+blocks = [(lib[b], np.arange(b*K,(b+1)*K)) for b in range(nb)]  # float32 views, no copy
 bhat = d["bhat"]; n = np.full(nb*K, N)
 def fit(m):
     if m=="inf":  return ldpred3_by_blocks(blocks,bhat,n,method="inf",h2=H2)
     if m=="grid": return ldpred3_by_blocks(blocks,bhat,n,method="grid",h2=H2,p=P,burn_in=BURN,num_iter=IT)
-    if m=="auto": return ldpred3_by_blocks(blocks,bhat,n,method="auto",burn_in=BURN,num_iter=IT,seed=1)
+    # auto warm-started at the same oracle hyper-parameters bigsnpr's
+    # snp_ldpred2_auto() gets via h2_init / vec_p_init -- apples-to-apples.
+    if m=="auto": return ldpred3_by_blocks(blocks,bhat,n,method="auto",burn_in=BURN,num_iter=IT,seed=1,h2_init=H2,p_init=P)
 fit("auto")  # warm JIT (not timed)
 out={}; betas={}
 for m in ("inf","grid","auto"):
