@@ -1,6 +1,7 @@
 """Inference evaluation: does LDpred3-auto-infer recover h² and polygenicity?
 
-Self-contained (no external LD library). Simulates a GWAS on an AR(1) panel,
+Self-contained (no external LD library). Simulates a GWAS on a coalescent
+(realistic-LD) panel,
 runs multi-chain LDpred3-auto inference (no validation cohort), and checks the
 posterior median and 95% credible interval against the known truth:
 
@@ -16,7 +17,7 @@ truth (should be ~0.95 if the intervals are calibrated).
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3.simulate import simulate_genotypes
+from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks
 from ldpred3.infer import ldpred3_auto_infer
 
@@ -24,15 +25,13 @@ NB, K = 15, 200            # m = 3000
 M = NB * K
 N_REF = 8000               # LD reference panel size
 N_GWAS = 40000
-RHO = 0.8
 REPS = 10
 CHAINS, BURN, ITER = 6, 150, 150
 
 
 def simulate(h2, p, seed):
     rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, M)
-    G, _ = simulate_genotypes(N_REF, [K] * NB, maf, RHO, rng)
+    G, _ = simulate_genotypes_coalescent(N_REF, M, K, seed=seed)   # realistic LD
     blocks = compute_ld_blocks(G, block_size=K)
     Rf = [(R.astype(float), idx) for R, idx in blocks]
 
@@ -55,7 +54,7 @@ def infer(blocks, beta_hat, seed):
 
 
 t0 = time.time()
-print(f"Inference recovery, AR(1) LD, m={M} ({NB}x{K}), Nref={N_REF}, "
+print(f"Inference recovery, coalescent LD, m={M} ({NB}x{K}), Nref={N_REF}, "
       f"N_gwas={N_GWAS}, {REPS} reps, {CHAINS} chains\n")
 
 print("(A) Heritability h² (p fixed = 0.02):")

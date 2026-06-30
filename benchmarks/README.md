@@ -53,8 +53,9 @@ no external data.
 
 ## Features: QC, LD representation & performance
 
-All **self-contained** (no `ld_library.npz`): they simulate an AR(1) genotype
-panel internally, so they run anywhere.
+All **self-contained** (no `ld_library.npz`): they simulate a genotype panel
+internally with realistic **coalescent** LD (`simulate_genotypes_coalescent`), so
+they run anywhere `msprime` is installed (`pip install msprime`).
 
 | Script | What it measures |
 |--------|------------------|

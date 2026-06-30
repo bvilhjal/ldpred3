@@ -17,19 +17,17 @@ NB, K = 10, 200            # m = 2000 (kept modest so the pure-Python run is qui
 M = NB * K
 N_GWAS = 20000
 H2, P = 0.5, 0.02
-RHO = 0.8
 BURN, ITER = 60, 150
 
 
 def time_one_fit():
     """Build a problem and time a single auto fit (excludes JIT warm-up)."""
     import numpy as np
-    from ldpred3.simulate import simulate_genotypes
+    from ldpred3.simulate import simulate_genotypes_coalescent
     from ldpred3.ld import compute_ld_blocks
     from ldpred3 import ldpred3_by_blocks
     rng = np.random.default_rng(0)
-    maf = rng.uniform(0.05, 0.5, M)
-    G, _ = simulate_genotypes(5000, [K] * NB, maf, RHO, rng)
+    G, _ = simulate_genotypes_coalescent(5000, M, K, seed=0)   # realistic LD
     blocks = compute_ld_blocks(G, block_size=K)
     beta = np.zeros(M); c = rng.random(M) < P
     beta[c] = rng.standard_normal(int(c.sum()))

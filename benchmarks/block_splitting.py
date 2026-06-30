@@ -1,8 +1,8 @@
 """Optimal LD-block splitting (Prive 2022) vs fixed-size blocks.
 
-Self-contained. Builds one region whose true LD consists of several independent
-sub-blocks of *unequal* size (recombination valleys between them), then splits it
-two ways at the same maximum block size:
+Self-contained (coalescent LD). Builds one region whose realistic LD has genuine
+recombination valleys (the coalescent-with-recombination naturally yields haplotype
+blocks of unequal size), then splits it two ways at the same maximum block size:
 
   * fixed   -- cut every ``max_size`` SNPs, blind to structure (boundaries fall
                mid-block).
@@ -17,26 +17,23 @@ per-block storage (sum of k^2), and the genetic R2 of a block-diagonal auto PRS.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3.simulate import simulate_genotypes
+from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks
 from ldpred3 import ldpred3_by_blocks, optimal_ld_blocks
 
-TRUE_SIZES = [137, 211, 89, 256, 170, 137]    # unequal true LD blocks, sum = 1000
-M = sum(TRUE_SIZES)
+M = 3000                   # one contiguous coalescent region of 3000 SNPs
 MAX_SIZE = 250
 MIN_SIZE = 30
 N_REF = 4000
 N_GWAS = 20000
 H2, P = 0.5, 0.02
-RHO = 0.9
 REPS = 3
 
 
 def build(seed):
     rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, M)
-    # Independent true sub-blocks -> one region with valleys between them.
-    G, _ = simulate_genotypes(N_REF, TRUE_SIZES, maf, RHO, rng)
+    # One coalescent region: realistic LD with genuine recombination valleys.
+    G, _ = simulate_genotypes_coalescent(N_REF, M, M, seed=seed)
     Gs = (G - G.mean(0)) / G.std(0)
     R = (Gs.T @ Gs) / N_REF                    # full dense region LD (m x m)
 
@@ -74,7 +71,7 @@ ldpred3_by_blocks([(_R.astype(np.float32), np.arange(M))], _bh, n, method="auto"
                   global_hyper=False, burn_in=10, num_iter=10, seed=0)
 
 t0 = time.time()
-print(f"LD-block splitting, AR(1) sub-blocks {TRUE_SIZES} (m={M}), max_size="
+print(f"LD-block splitting, coalescent LD (m={M}), max_size="
       f"{MAX_SIZE}, Nref={N_REF}, N_gwas={N_GWAS}, h2={H2}, p={P}, {REPS} reps\n")
 print(f"{'split':>9} | {'#blocks':>7} | {'discarded LD2':>13} | {'storage k^2':>11} | {'R2':>6}")
 print("-" * 60)

@@ -12,7 +12,7 @@ import os, sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
 from ldpred3._numba import HAVE_NUMBA
-from ldpred3.simulate import simulate_genotypes
+from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks
 from ldpred3.ldpred3 import _gibbs_blocks
 
@@ -21,15 +21,13 @@ M = NB * K
 N_REF = 2000
 N_GWAS = 50000
 H2, P = 0.5, 0.01
-RHO = 0.8
 BURN, ITER = 100, 200
 CORES = [1, 2, 4]
 
 
 def build(seed):
     rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, M)
-    G, _ = simulate_genotypes(N_REF, [K] * NB, maf, RHO, rng)
+    G, _ = simulate_genotypes_coalescent(N_REF, M, K, seed=seed)   # realistic LD
     blocks = compute_ld_blocks(G, block_size=K)
     beta = np.zeros(M); c = rng.random(M) < P
     beta[c] = rng.standard_normal(int(c.sum()))

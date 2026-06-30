@@ -19,7 +19,7 @@ Run single-core for stable numbers:
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3.simulate import simulate_genotypes
+from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks
 from ldpred3.qc import dentist_outlier_mask
 from ldpred3 import ldpred3_by_blocks
@@ -29,7 +29,6 @@ M = NB * K
 N_REF = 10000              # individuals used to estimate the LD panel
 N_GWAS = 10000             # GWAS sample size
 H2, P = 0.5, 0.05          # heritability, polygenicity (sparse)
-RHO = 0.9                  # within-block AR(1) LD (well-tagged causal variants)
 N_CORRUPT = 30             # spurious hits planted at non-causal variants
 CORRUPT_Z = 8.0            # z-score of each planted false association
 REPS = 5
@@ -38,8 +37,7 @@ REPS = 5
 def build(seed):
     """One replicate: estimated LD blocks, true betas, marginal sumstats."""
     rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, M)
-    G, _ = simulate_genotypes(N_REF, [K] * NB, maf, RHO, rng)
+    G, _ = simulate_genotypes_coalescent(N_REF, M, K, seed=seed)   # realistic LD
     blocks = compute_ld_blocks(G, block_size=K)          # (R, idx) per block
     Rfull = [(R.astype(float), idx) for R, idx in blocks]
 
@@ -94,7 +92,7 @@ def fit_r2(blocks, beta_hat, keep, gv, beta):
 
 
 t0 = time.time()
-print(f"DENTIST recovery, AR(1) LD, m={M} ({NB}x{K}), Nref={N_REF}, "
+print(f"DENTIST recovery, coalescent LD, m={M} ({NB}x{K}), Nref={N_REF}, "
       f"N_gwas={N_GWAS}, h2={H2}, p={P}, {REPS} reps\n")
 
 cleanA, noflt, dent, caught, planted = [], [], [], [], []

@@ -1,6 +1,6 @@
 """Size-aware LD shrinkage of large blocks on a finite reference panel.
 
-Self-contained (AR(1) genotypes). A block's sample LD from ``Nref`` reference
+Self-contained (coalescent genotypes). A block's sample LD from ``Nref`` reference
 individuals is noise-dominated when the block is large relative to ``Nref``
 (Marchenko-Pastur). This shows that shrinking *large* blocks toward the identity
 -- ``alpha = min(max_shrink, k / Nref)`` per block, via
@@ -18,7 +18,7 @@ keeps the MP-inflated top eigenvalues and does not help here.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3.simulate import simulate_genotypes
+from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks
 from ldpred3 import ldpred3_by_blocks, shrink_ld_blocks
 
@@ -27,19 +27,17 @@ M = sum(SIZES)
 N_POP = 8000               # "population" sample -> true LD
 N_GWAS = 50000
 H2, P = 0.5, 0.01
-RHO = 0.8
 REPS = 3
 NREFS = [500, 1000, 2000]
 
 
 def population(seed=0):
-    rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, M)
-    G, _ = simulate_genotypes(N_POP, SIZES, maf, RHO, rng)
+    # One coalescent region of M SNPs (realistic LD), partitioned into SIZES blocks.
+    G, _ = simulate_genotypes_coalescent(N_POP, M, M, seed=seed)
     pop = compute_ld_blocks(G, chrom=_block_chrom(), block_size=max(SIZES))
     Rp = [(R.astype(float), idx) for R, idx in pop]
     chol = [np.linalg.cholesky(R + 1e-4 * np.eye(len(idx))) for R, idx in Rp]
-    return maf, Rp, chol
+    return G, Rp, chol
 
 
 def _block_chrom():
@@ -56,8 +54,8 @@ def r2(Rp, be, beta):
     return float(num * num / den) if den > 0 else 0.0
 
 
-maf, Rp, chol = population()
-print(f"LD shrinkage of large blocks, AR(1), mixed blocks {SIZES} (m={M}), "
+Gpop, Rp, chol = population()
+print(f"LD shrinkage of large blocks, coalescent LD, mixed blocks {SIZES} (m={M}), "
       f"N_gwas={N_GWAS}, h2={H2}, p={P}, {REPS} reps\n")
 print(f"{'Nref':>5} | {'no-shrink':>9} | {'uniform .1':>10} | {'size-aware':>10} "
       f"|| {'h2 raw':>6} | {'h2 sz':>6}")
@@ -73,10 +71,12 @@ for nref in NREFS:
         bh = np.empty(M)
         for (R, ix), ch in zip(Rp, chol):
             bh[ix] = R @ beta[ix] + (ch @ rng.standard_normal(len(ix))) / np.sqrt(N_GWAS)
-        # reference panel of nref individuals (independent draw, same structure)
-        Gref, _ = simulate_genotypes(nref, SIZES, maf, RHO, rng)
+        # reference panel of nref individuals: a finite subsample of the
+        # population (realistic finite-panel LD noise, Marchenko-Pastur).
+        ref_rows = rng.choice(N_POP, nref, replace=False)
         ref = [(R.astype(np.float32), idx) for R, idx in
-               compute_ld_blocks(Gref, chrom=_block_chrom(), block_size=max(SIZES))]
+               compute_ld_blocks(Gpop[ref_rows], chrom=_block_chrom(),
+                                 block_size=max(SIZES))]
         uni = [((1 - 0.1) * np.asarray(R, float) + 0.1 * np.eye(len(idx)), idx)
                for R, idx in ref]
         for u in uni:

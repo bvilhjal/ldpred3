@@ -18,7 +18,7 @@ shows a tight band with shrink applied.
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3.simulate import simulate_genotypes
+from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks
 from ldpred3 import ldpred3_by_blocks, sparsify_ld
 
@@ -27,14 +27,12 @@ M = NB * K
 N_REF = 5000
 N_GWAS = 20000
 H2, P = 0.5, 0.02
-RHO = 0.85
 REPS = 3
 
 
 def build(seed):
     rng = np.random.default_rng(seed)
-    maf = rng.uniform(0.05, 0.5, M)
-    G, _ = simulate_genotypes(N_REF, [K] * NB, maf, RHO, rng)
+    G, _ = simulate_genotypes_coalescent(N_REF, M, K, seed=seed)   # realistic LD
     blocks = compute_ld_blocks(G, block_size=K)
     Rfull = [(R.astype(float), idx) for R, idx in blocks]
 
@@ -77,7 +75,7 @@ ldpred3_by_blocks(_sp, _bh, n, method="auto", global_hyper=False,
                   burn_in=10, num_iter=10, seed=0)
 
 t0 = time.time()
-print(f"Sparse/banded LD tradeoff, AR(1) LD, m={M} ({NB}x{K}), Nref={N_REF}, "
+print(f"Sparse/banded LD tradeoff, coalescent LD, m={M} ({NB}x{K}), Nref={N_REF}, "
       f"N_gwas={N_GWAS}, h2={H2}, p={P}, {REPS} reps\n")
 print(f"{'config':>20} | {'density':>8} | {'fit s':>7} | {'R2':>6}")
 print("-" * 50)
