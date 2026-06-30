@@ -37,6 +37,7 @@ from .bivariate import (ldpred3_auto_bivariate, ldpred3_auto_bivariate_blocks,
 from .finemap import (ldpred3_pip, single_signal_finemap, finemap_by_blocks,
                       FineMapResult, CredibleSet)
 from .impute import impute_sumstats_blocks, ImputeResult
+from .scale import n_eff_case_control, h2_liability, standardize_prs
 
 __all__ = [
     "standardize_betas",
@@ -79,6 +80,9 @@ __all__ = [
     "CredibleSet",
     "impute_sumstats_blocks",
     "ImputeResult",
+    "n_eff_case_control",
+    "h2_liability",
+    "standardize_prs",
 ]
 
 __version__ = "0.1.0"
