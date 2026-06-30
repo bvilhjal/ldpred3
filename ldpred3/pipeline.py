@@ -818,6 +818,20 @@ def score_from_weights(weights, plink, *, sample_path=None, scaling="target",
                        n_weights=m, n_matched=len(h))
 
 
+def _write_scores(path, fids, iids, scores, percentiles=False):
+    """Write FID/IID/PRS, optionally with standardized Z and percentile columns."""
+    extra = ""
+    if percentiles:
+        from .scale import standardize_prs
+        z, pct = standardize_prs(scores)
+    with open(path, "w") as fh:
+        fh.write("FID\tIID\tPRS" + ("\tZ\tPCT\n" if percentiles else "\n"))
+        for i, (fid, iid, s) in enumerate(zip(fids, iids, scores)):
+            if percentiles:
+                extra = f"\t{z[i]:.4g}\t{pct[i]:.4g}"
+            fh.write(f"{fid}\t{iid}\t{s:.6g}{extra}\n")
+
+
 def _main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description="LDpred3 PRS pipeline")
@@ -836,6 +850,11 @@ def _main(argv=None):
                     help="max variants per LD block (default: 500)")
     ap.add_argument("--n-eff", type=float, default=None,
                     help="effective sample size, if the sumstats lack an N column")
+    ap.add_argument("--n-cases", type=float, default=None,
+                    help="case count (with --n-controls) -> effective N "
+                         "4/(1/Ncase+1/Ncontrol) for a binary-trait GWAS")
+    ap.add_argument("--n-controls", type=float, default=None,
+                    help="control count (see --n-cases)")
     ap.add_argument("--ld-prefix", default=None, help="external LD panel prefix")
     ap.add_argument("--ld-ridge", type=float, default=0.0,
                     help="shrink each LD block towards the identity by this "
@@ -893,6 +912,9 @@ def _main(argv=None):
     ap.add_argument("--score-chunk", type=int, default=1000,
                     help="with --weights on PLINK: variants per streamed chunk "
                          "(lower = less memory at biobank scale; default 1000)")
+    ap.add_argument("--prs-percentiles", action="store_true",
+                    help="also write standardized PRS (Z) and percentile (PCT) "
+                         "columns to the scores output")
     ap.add_argument("--out", help="output scores file (or fine-map output prefix)")
     ap.add_argument("--finemap", action="store_true",
                     help="fine-map instead of computing a PRS: write per-variant "
@@ -912,16 +934,22 @@ def _main(argv=None):
     args = ap.parse_args(argv)
     target = args.plink or args.bgen
 
+    # Binary-trait effective N from case/control counts (overrides --n-eff).
+    if args.n_cases is not None or args.n_controls is not None:
+        if args.n_cases is None or args.n_controls is None:
+            ap.error("--n-cases and --n-controls must be given together")
+        from .scale import n_eff_case_control
+        args.n_eff = n_eff_case_control(args.n_cases, args.n_controls)
+        print(f"effective N (case/control) = {args.n_eff:.0f}")
+
     # Mode 1: score directly from a saved weights file (no sumstats/LD/refit).
     if args.weights:
         if not args.out:
             ap.error("--weights requires --out")
         sr = score_from_weights(args.weights, target, sample_path=args.sample,
                                 scaling=args.scaling, chunk=args.score_chunk)
-        with open(args.out, "w") as fh:
-            fh.write("FID\tIID\tPRS\n")
-            for fid, iid, s in zip(sr.sample_fid, sr.sample_iid, sr.scores):
-                fh.write(f"{fid}\t{iid}\t{s:.6g}\n")
+        _write_scores(args.out, sr.sample_fid, sr.sample_iid, sr.scores,
+                      percentiles=args.prs_percentiles)
         print(f"matched {sr.n_matched} / {sr.n_weights} weights; "
               f"wrote {len(sr.scores)} PRS to {args.out}")
         return
@@ -998,10 +1026,8 @@ def _main(argv=None):
         res.write_weights(args.save_weights)
         print(f"wrote {len(res.beta_adjusted)} weights to {args.save_weights}")
 
-    with open(args.out, "w") as fh:
-        fh.write("FID\tIID\tPRS\n")
-        for fid, iid, s in zip(res.sample_fid, res.sample_iid, res.scores):
-            fh.write(f"{fid}\t{iid}\t{s:.6g}\n")
+    _write_scores(args.out, res.sample_fid, res.sample_iid, res.scores,
+                  percentiles=args.prs_percentiles)
 
     q = res.qc_log or {}
     if "n_input" in q:

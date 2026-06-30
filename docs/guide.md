@@ -117,6 +117,21 @@ In Python the same numbers are `res.scores` (aligned to `res.sample_fid` /
 `res.sample_iid`). `res.beta_adjusted` holds the per-variant weights (see
 [§9](#9-re-using-work-saved-weights--cached-ld) to save and reuse them).
 
+### Binary (case/control) traits
+
+Two scale choices that quietly cost accuracy if skipped:
+
+- **Effective sample size.** Pass the *effective* N, not the raw total —
+  `--n-cases NCASE --n-controls NCONTROL` (or `ldpred3.n_eff_case_control`)
+  computes `4/(1/Ncase + 1/Ncontrol)`. This is what the LDpred likelihood (and
+  the `--impute-n` N-recovery) needs.
+- **Liability-scale heritability.** A 0/1 phenotype gives *observed*-scale h²;
+  convert it to the comparable, prevalence-aware liability scale with
+  `ldpred3.h2_liability(h2_obs, prevalence, prop_cases=…)` (Lee et al. 2011).
+
+For interpretable output, `--prs-percentiles` (or `ldpred3.standardize_prs`) adds
+each individual's standardized PRS (Z) and percentile.
+
 ## 3. Is the PRS any good? (evaluating)
 
 A PRS is only useful if it predicts. Two ways to judge it:
