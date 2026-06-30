@@ -126,6 +126,7 @@ python -m pytest tests/        # full suite
 - [docs/pipeline.md](docs/pipeline.md) — pipeline, QC, file formats, CLI flags
 - [docs/inference.md](docs/inference.md) — h² / polygenicity / r² / genetic-correlation inference
 - [docs/finemap.md](docs/finemap.md) — fine-mapping: PIPs, credible sets, genome-wide & file-based
+- [docs/impute.md](docs/impute.md) — LD-based summary-statistic imputation (experimental)
 - [docs/algorithm.md](docs/algorithm.md) — sampler internals, sparse LD, LD splitting, bivariate model
 - [docs/benchmarks.md](docs/benchmarks.md) — accuracy, speed, scaling and robustness benchmarks
 - [CHANGELOG.md](CHANGELOG.md) — release history
