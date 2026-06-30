@@ -65,8 +65,42 @@ the top |effect| in their LD neighbourhood):
   ~0 — the variant is not in the model, so it can never be localised.
 - The annotation's *prediction* gain is small here (0.979 → 0.982): in-sample,
   the smeared typed effect predicts about as well; the annotation's value is
-  **localisation** (and, by the same mechanism, cross-ancestry transfer, which
-  this single-population simulation does not exercise).
+  **localisation**.
+
+## Cross-ancestry portability
+
+The bigger question is *transfer*: a causal functional variant is shared across
+populations but its LD tags are not, so an effect placed on discovery-population
+tags transfers poorly. `benchmarks/impute_portability.py` simulates two
+populations with a coalescent split (msprime; shared variants, **diverged LD**),
+runs the GWAS + LD + imputation in population A, drops the functional causals, and
+scores genetic R² in **A (in-sample)** and **B (cross-ancestry)**:
+
+| pipeline | R² pop A | R² pop B | retained B/A |
+|----------|---------:|---------:|-------------:|
+| drop / auto | 0.972 | 0.666 | 68% |
+| drop / annot | 0.970 | 0.704 | 73% |
+| **impute / auto** | 0.994 | **0.917** | **92%** |
+| impute / annot | 0.993 | 0.893 | 90% |
+
+The result is sharper than the naive "annotations drive portability" guess:
+
+- **Imputation is the dominant portability lever** (retained transfer 68% → 92%).
+  Specifying the model on the **shared** variant set lets the effect sit on
+  variants that exist and carry the same effect in B, instead of A-specific tags
+  that do not transfer. This is the same misspecification fix as above, and it is
+  large cross-ancestry.
+- **The annotation's value is attribution, not transfer.** On top of imputation it
+  gives no clear transfer gain here (92% → 90%, within noise); its demonstrated
+  benefit is **localising** the causal (the table above). Without imputation it
+  nudges transfer up a little (68% → 73%) by shifting effect onto the *typed*
+  functional variants.
+
+So the two benefits are **distinct**: imputation fixes model specification (helps
+in-sample accuracy *and* cross-ancestry transfer), while the functional annotation
+helps you find *which* variant is causal. (This is a single-locus-architecture,
+clean-population-LD simulation — real portability also involves allele-frequency
+and causal-effect differences it does not model.)
 
 ## Caveats
 
@@ -78,6 +112,8 @@ the top |effect| in their LD neighbourhood):
   annotation mislocalises. The mitigation is that `ldpred3_auto_annot_blocks`
   **learns** the annotation weights from the data (S-LDSC-style), rather than
   trusting them blindly.
-- Cross-ancestry **portability** is the larger prize (shared functional causal,
-  population-specific tags); demonstrating it needs two LD panels and is left as
-  future work.
+- Cross-ancestry **portability** (above) is driven by the imputation /
+  model-specification fix, not by the annotation — a useful correction to the
+  initial intuition. The simulation is clean-population LD with a shared
+  single-locus architecture; real transfer also involves allele-frequency and
+  causal-effect heterogeneity it does not capture.
