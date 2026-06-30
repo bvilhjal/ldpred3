@@ -7,6 +7,18 @@ follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Fine-mapping** (`docs/finemap.md`). The spike-and-slab sampler's per-SNP
+  posterior inclusion probability (PIP) is turned into the standard fine-mapping
+  outputs, reusing the same model / LD / QC as the PRS:
+  - `ldpred3_pip` — per-locus PIPs, posterior effect mean/SD and **credible sets**
+    (LD-clustered, purity-filtered, with tie-expansion so the 95% set stays
+    calibrated); `single_signal_finemap` ABF baseline.
+  - `finemap_by_blocks` — genome-wide driver over LD blocks (independent →
+    parallel via `ncores`), with an `only_significant` loci filter.
+  - `run_finemap` + CLI `--finemap` — GWAS file → `<out>.pip.tsv` (per-variant)
+    and `<out>.cs.tsv` (credible sets); `--regions` (BED) /
+    `--finemap-only-significant` / `--finemap-coverage`. Benchmark: credible-set
+    coverage ~0.95 with median set size ~2 (`benchmarks/finemap_recovery.py`).
 - **Scaling to millions of SNPs.** Composable LD representations for the
   genome / sequencing-scale regime (`docs/pipeline.md` → Scaling):
   - **Low-rank LD** (`LowRankLD`, `--ld-lowrank`): top-eigenvector blocks fit in

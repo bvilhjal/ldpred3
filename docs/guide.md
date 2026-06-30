@@ -12,8 +12,9 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 [your own LD blocks](#5-working-from-your-own-ld-blocks-library-path) ·
 [annotations](#6-annotation-informed-prs-annot) ·
 [h²/p/r² inference](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set) ·
-[reuse work](#8-re-using-work-saved-weights--cached-ld) ·
-[scaling](#9-scaling--performance) · [troubleshooting](#10-troubleshooting)
+[fine-mapping](#8-fine-mapping-which-variants-are-causal) ·
+[reuse work](#9-re-using-work-saved-weights--cached-ld) ·
+[scaling](#10-scaling--performance) · [troubleshooting](#11-troubleshooting)
 
 > **In one line:** `pip install . numba` then
 > `ldpred3 --sumstats gwas.txt.gz --plink target --out prs.txt`
@@ -28,11 +29,12 @@ detail. All build on the base command `ldpred3 --sumstats gwas.txt.gz --plink ta
 | Score a cohort (the default) | *(nothing — `auto` runs)* | [§2](#2-the-one-command-path-recommended) |
 | Sanity-check inputs before a long run | `--dry-run` | [§2](#2-the-one-command-path-recommended) |
 | Also estimate h² / polygenicity / r² | `--infer` | [§7](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set) |
+| Fine-map causal variants (PIPs + credible sets) | `--finemap` | [§8](#8-fine-mapping-which-variants-are-causal) |
 | Use functional annotations | `--method annot --annotations annot.tsv` | [§6](#6-annotation-informed-prs-annot) |
-| Fit once, then score more cohorts cheaply | `--save-weights w.txt`, then `--weights w.txt` | [§8](#8-re-using-work-saved-weights--cached-ld) |
-| Make scores comparable **across** cohorts | `--weights w.txt --scaling frozen` | [§8](#8-re-using-work-saved-weights--cached-ld) |
-| Cache LD to speed up re-runs | `--ld-out ld.npz` once, then `--ld-cache ld.npz` | [§8](#8-re-using-work-saved-weights--cached-ld) |
-| Scale to millions of SNPs (sequencing) | `--ld-lowrank --ld-lowrank-min-size 1000 --ld-stream` | [§9](#9-scaling--performance) |
+| Fit once, then score more cohorts cheaply | `--save-weights w.txt`, then `--weights w.txt` | [§9](#9-re-using-work-saved-weights--cached-ld) |
+| Make scores comparable **across** cohorts | `--weights w.txt --scaling frozen` | [§9](#9-re-using-work-saved-weights--cached-ld) |
+| Cache LD to speed up re-runs | `--ld-out ld.npz` once, then `--ld-cache ld.npz` | [§9](#9-re-using-work-saved-weights--cached-ld) |
+| Scale to millions of SNPs (sequencing) | `--ld-lowrank --ld-lowrank-min-size 1000 --ld-stream` | [§10](#10-scaling--performance) |
 
 ## 1. What you need
 
@@ -113,7 +115,7 @@ fam1    ind2   -0.0137
 
 In Python the same numbers are `res.scores` (aligned to `res.sample_fid` /
 `res.sample_iid`). `res.beta_adjusted` holds the per-variant weights (see
-[§8](#8-re-using-work-saved-weights--cached-ld) to save and reuse them).
+[§9](#9-re-using-work-saved-weights--cached-ld) to save and reuse them).
 
 ## 3. Is the PRS any good? (evaluating)
 
@@ -241,7 +243,55 @@ statistics (it agrees with the LDpred3-auto h² but is less precise — see
 [inference.md](inference.md)). Full method and validation in
 [inference.md](inference.md).
 
-## 8. Re-using work: saved weights & cached LD
+## 8. Fine-mapping: which variants are causal?
+
+A PRS predicts a phenotype; **fine-mapping localises the signal** — at a
+GWAS-significant locus, which SNP(s) actually drive it? LDpred3's spike-and-slab
+sampler already gives each SNP its posterior probability of being causal (the
+**PIP**), so fine-mapping reuses the same model, LD and QC as the PRS — no new
+inputs.
+
+```bash
+# whole genome (every LD block) -> fm.pip.tsv + fm.cs.tsv
+ldpred3 --finemap --sumstats gwas.txt.gz --plink target --out fm
+
+# only loci around genome-wide-significant hits (faster; the usual workflow)
+ldpred3 --finemap --sumstats gwas.txt.gz --plink target \
+        --finemap-only-significant 5e-8 --out fm
+
+# restrict to your own regions (BED: chrom start end [name])
+ldpred3 --finemap --sumstats gwas.txt.gz --plink target --regions loci.bed --out fm
+```
+
+Two tables come out:
+
+| file | one row per | key columns |
+|------|-------------|-------------|
+| `fm.pip.tsv` | variant | `pip`, posterior mean/SD, marginal `z` |
+| `fm.cs.tsv` | credible set | `coverage`, `lead_variant`, `purity_min_abs_r`, member `variants` |
+
+The **credible set** is the deliverable: the smallest set of variants that
+contains the causal one with 95% probability. It is *calibrated* — a 95% set
+contains the true causal variant ~95% of the time — whereas raw PIP values are
+prior-dependent, so read the sets, not the absolute PIPs. A **purity** score
+(min |r| among members) flags sets diluted by LD; tightly-linked proxies the data
+cannot tell apart are kept together.
+
+In Python:
+
+```python
+from ldpred3 import run_finemap
+res = run_finemap("gwas.txt.gz", "target", only_significant=5e-8, out="fm")
+for cs in res.credible_sets:
+    print(cs.lead_variant, round(cs.lead_pip, 3), len(cs.variants))
+```
+
+Already have summary statistics and an LD matrix? Skip the files and call the
+locus fine-mapper directly — `ldpred3_pip(corr, beta_hat, n_eff)` for one locus,
+`finemap_by_blocks(blocks, beta_hat, n_eff)` genome-wide. Full reference and the
+coverage benchmark: [finemap.md](finemap.md).
+
+## 9. Re-using work: saved weights & cached LD
 
 Two flags avoid redoing the expensive parts when you score more cohorts or
 re-run with different settings.
@@ -293,7 +343,7 @@ The cache records the variant set it was built for; if your inputs/QC change so
 the harmonised variants differ, the run stops with a clear error rather than
 silently using stale LD — rebuild it with `--ld-out`.
 
-## 9. Scaling & performance
+## 10. Scaling & performance
 
 - **Install Numba** (`pip install numba`). The inner sampler is JIT-compiled and
   cached; without it you get identical results but a much slower pure-Python
@@ -318,7 +368,7 @@ silently using stale LD — rebuild it with `--ld-out`.
 - **Fewer iterations:** `warm_start=True` and adaptive stopping (`tol=`) on the
   samplers (algorithm.md).
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|

@@ -5,8 +5,8 @@ A dependency-light (NumPy-only, optional Numba) Python implementation of
 polygenic-score pipeline: from GWAS summary statistics + genotypes to one score
 per individual, no R required. It matches the reference implementation
 (`bigsnpr`) on accuracy using **~2× less memory**, scales from 2M SNPs dense to
-**sequencing-size data** with low-rank / on-disk LD, and needs **no validation
-cohort**.
+**sequencing-size data** with low-rank / on-disk LD, needs **no validation
+cohort**, and **fine-maps causal variants** from the same model.
 
 > **New here?** Start with the **[user guide](docs/guide.md)** — it walks from a
 > GWAS + target dataset to a polygenic score, helps you choose a model, and lists
@@ -45,6 +45,7 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 |------|--------------|
 | `--dry-run` | preflight inputs (column mapping, ID match, harmonisation) — no fitting |
 | `--infer` | also estimate h², polygenicity and predictive r² |
+| `--finemap` | fine-map causal variants: per-variant PIPs + 95% credible sets ([fine-mapping](docs/finemap.md)) |
 | `--method annot --annotations a.tsv` | use functional-annotation priors |
 | `--dentist` | drop LD-inconsistent variants (allele/strand errors, LD mismatch); off by default |
 | `--ld-lowrank` | low-rank (eigen) LD — fit huge blocks in ~¼ the memory at matched accuracy ([scaling](docs/pipeline.md#scaling-to-millions-of-snps)) |
@@ -65,6 +66,11 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 
 ### What else it does
 
+- **Fine-mapping — which variants are causal?** The same spike-and-slab sampler
+  gives each SNP's posterior inclusion probability, so `run_finemap` / `--finemap`
+  turns a locus into per-variant **PIPs** and calibrated **95% credible sets**
+  (`ldpred3_pip`, genome-wide `finemap_by_blocks`). See
+  **[docs/finemap.md](docs/finemap.md)**.
 - **Heritability, polygenicity & out-of-sample r² — no validation set**
   (`ldpred3_auto_infer`, Privé et al. 2023), with an
   **[LD Score regression](docs/inference.md)** cross-check (`ldsc_h2`).
@@ -119,6 +125,7 @@ python -m pytest tests/        # full suite
 - **[docs/guide.md](docs/guide.md)** — start here: choose a model, run the pipeline, read the output, troubleshoot
 - [docs/pipeline.md](docs/pipeline.md) — pipeline, QC, file formats, CLI flags
 - [docs/inference.md](docs/inference.md) — h² / polygenicity / r² / genetic-correlation inference
+- [docs/finemap.md](docs/finemap.md) — fine-mapping: PIPs, credible sets, genome-wide & file-based
 - [docs/algorithm.md](docs/algorithm.md) — sampler internals, sparse LD, LD splitting, bivariate model
 - [docs/benchmarks.md](docs/benchmarks.md) — accuracy, speed, scaling and robustness benchmarks
 - [CHANGELOG.md](CHANGELOG.md) — release history
