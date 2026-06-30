@@ -71,7 +71,7 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 |------|---------|--------------|
 | `--sumstats FILE` | — | GWAS summary statistics (required unless `--weights`). See [Sumstats input format](#sumstats-input-format). |
 | `--plink PREFIX` | — | Target genotypes as PLINK 1 `.bed/.bim/.fam` (one of `--plink`/`--bgen` required). |
-| `--bgen FILE` | — | Target genotypes as BGEN v1.2 (alternative to `--plink`). |
+| `--bgen FILE` | — | Target genotypes as BGEN v1.2 (alternative to `--plink`). Streamed: only the requested variants are decoded/held, so it is memory-safe at biobank scale (v1.2/layout-2, none/zlib, biallelic diploid). |
 | `--sample FILE` | none | BGEN `.sample` file (sample IDs for `--bgen`). |
 | `--out FILE` | — | Output scores file (required for a run; see [Outputs](#outputs)). |
 | `--method {auto,grid,inf,annot}` | `auto` | LDpred3 model; see [Choosing a model](../README.md#choosing-a-model). |
@@ -160,7 +160,7 @@ ldpred3 --sumstats gwas.txt.gz --plink target --ld-cache cache.npz --out prs.txt
 | Module          | What it does                                                           |
 |-----------------|-----------------------------------------------------------------------|
 | `genotype_io`   | Read/write PLINK 1 `.bed/.bim/.fam` (2-bit decode, NumPy-only)         |
-| `bgen_io`       | Read BGEN v1.2/layout-2 (uncompressed or zlib; biallelic diploid)      |
+| `bgen_io`       | Read BGEN v1.2/layout-2 (uncompressed or zlib; biallelic diploid), streamed — only requested variants decoded |
 | `sumstats`      | Parse GWAS files with flexible column aliases (OR→β, SE-from-p)        |
 | `qc`            | Sumstats QC: N / MAF / INFO / duplicate / chi-sq + SD-consistency + DENTIST |
 | `harmonize`     | Match variants + align effect alleles (swap-flip, strand, palindrome) |

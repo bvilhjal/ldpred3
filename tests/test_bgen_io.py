@@ -72,6 +72,22 @@ def test_bgen_variant_subset(tmp_path):
     np.testing.assert_allclose(sub.dosage, full.dosage[:, [1, 7, 8]], atol=1e-4)
 
 
+def test_bgen_truncated_file_raises(tmp_path):
+    import pytest
+    rng = np.random.default_rng(11)
+    dosage = rng.integers(0, 3, size=(12, 6)).astype(np.int8)
+    variants, samples = _tables(12, 6)
+    path = str(tmp_path / "g.bgen")
+    write_bgen(path, dosage, variants, samples)
+    # lop off the tail so a genotype block runs past EOF -> clear error, not a
+    # silent short read (the streaming reader validates every read length).
+    full = open(path, "rb").read()
+    with open(path, "wb") as fh:
+        fh.write(full[:-50])
+    with pytest.raises(ValueError, match="truncated|decompress"):
+        read_bgen(path)
+
+
 def test_bgen_matches_plink_dosage(tmp_path):
     """Same genotypes via PLINK and BGEN must give identical dosages."""
     rng = np.random.default_rng(3)

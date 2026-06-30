@@ -37,7 +37,11 @@ def _decompress(comp, raw, expected_len):
     if comp == 0:
         return raw
     if comp == 1:
-        return zlib.decompress(raw)
+        out = zlib.decompress(raw)
+        if expected_len is not None and len(out) != expected_len:
+            raise ValueError(f"BGEN block decompressed to {len(out)} bytes, "
+                             f"expected {expected_len} (corrupt block?)")
+        return out
     if comp == 2:
         raise NotImplementedError(
             "this BGEN uses zstd compression; install the 'zstandard' package "
@@ -91,79 +95,76 @@ def read_bgen(path, sample_path=None, variant_ids=None):
     BGEN itself has no embedded sample-identifier block.
 
     ``variant_ids`` (an iterable of rsIDs / variant IDs) keeps only the matching
-    variants: the file is scanned sequentially but the expensive probability
-    decode (and the output matrix memory) is paid **only for wanted variants** —
-    so reading the GWAS SNPs from a biobank BGEN avoids decoding the rest.
+    variants: the file is **streamed** — read incrementally and ``seek``-ed past
+    the genotype block of every unwanted variant — so neither the whole file nor
+    the unwanted probability blocks are ever held in memory. Reading the GWAS
+    SNPs from a biobank-scale BGEN stays memory-bounded by the wanted subset.
     """
     wanted = set(variant_ids) if variant_ids is not None else None
-    with open(path, "rb") as fh:
-        data = fh.read()
 
-    offset = struct.unpack_from("<I", data, 0)[0]
-    header_len = struct.unpack_from("<I", data, 4)[0]
-    n_variants = struct.unpack_from("<I", data, 8)[0]
-    n_samples = struct.unpack_from("<I", data, 12)[0]
-    magic = data[16:20]
-    if magic not in (_MAGIC, b"\x00\x00\x00\x00"):
-        raise ValueError(f"{path}: not a BGEN file (bad magic {magic!r})")
-    flags = struct.unpack_from("<I", data, 4 + header_len - 4)[0]
-    compression = flags & 0x3
-    layout = (flags >> 2) & 0xF
-    has_sample_ids = (flags >> 31) & 0x1
-    if layout != 2:
-        raise NotImplementedError(f"{path}: only BGEN layout 2 is supported")
+    def rd(fh, n):
+        b = fh.read(n)
+        if len(b) != n:
+            raise ValueError(f"{path}: truncated BGEN (wanted {n} bytes)")
+        return b
 
-    pos = 4 + header_len
-    sample_ids = None
-    if has_sample_ids:
-        pos += 4                                  # length of sample-id block
-        n2 = struct.unpack_from("<I", data, pos)[0]
-        pos += 4
-        ids = []
-        for _ in range(n2):
-            ln = struct.unpack_from("<H", data, pos)[0]
-            pos += 2
-            ids.append(data[pos:pos + ln].decode())
-            pos += ln
-        sample_ids = ids
+    def ru16(fh):
+        return struct.unpack("<H", rd(fh, 2))[0]
 
-    pos = 4 + offset                              # start of variant blocks
+    def ru32(fh):
+        return struct.unpack("<I", rd(fh, 4))[0]
+
+    def rstr(fh):                                  # u16-length-prefixed string
+        return rd(fh, ru16(fh)).decode()
 
     chrom, vid, posn, a1, a2 = [], [], [], [], []
     dosage_cols = []
 
-    def read_str():
-        nonlocal pos
-        ln = struct.unpack_from("<H", data, pos)[0]
-        pos += 2
-        s = data[pos:pos + ln].decode()
-        pos += ln
-        return s
+    with open(path, "rb") as fh:                   # buffered: small reads are cheap
+        offset = ru32(fh)
+        header_len = ru32(fh)
+        n_variants = ru32(fh)
+        n_samples = ru32(fh)
+        magic = rd(fh, 4)
+        if magic not in (_MAGIC, b"\x00\x00\x00\x00"):
+            raise ValueError(f"{path}: not a BGEN file (bad magic {magic!r})")
+        fh.seek(4 + header_len - 4)                # flags are the header's last 4 B
+        flags = ru32(fh)
+        compression = flags & 0x3
+        layout = (flags >> 2) & 0xF
+        has_sample_ids = (flags >> 31) & 0x1
+        if layout != 2:
+            raise NotImplementedError(f"{path}: only BGEN layout 2 is supported")
 
-    for v in range(n_variants):
-        this_vid = read_str()                     # variant ID
-        rsid = read_str()                         # rsID
-        this_id = rsid or this_vid
-        this_chrom = read_str()
-        this_pos = struct.unpack_from("<I", data, pos)[0]; pos += 4
-        k = struct.unpack_from("<H", data, pos)[0]; pos += 2
-        alleles = []
-        for _ in range(k):
-            ln = struct.unpack_from("<I", data, pos)[0]; pos += 4
-            alleles.append(data[pos:pos + ln].decode()); pos += ln
+        sample_ids = None
+        if has_sample_ids:
+            fh.seek(4 + header_len)
+            ru32(fh)                               # sample-id block length (skip)
+            n2 = ru32(fh)
+            sample_ids = [rd(fh, ru16(fh)).decode() for _ in range(n2)]
 
-        clen = struct.unpack_from("<I", data, pos)[0]; pos += 4
-        keep = wanted is None or this_id in wanted or this_vid in wanted
-        if keep:
-            if compression != 0:
-                ulen = struct.unpack_from("<I", data, pos)[0]
-                block = _decompress(compression, data[pos + 4:pos + clen], ulen)
+        fh.seek(4 + offset)                        # start of variant blocks
+        for v in range(n_variants):
+            this_vid = rstr(fh)                    # variant ID
+            rsid = rstr(fh)                        # rsID
+            this_id = rsid or this_vid
+            this_chrom = rstr(fh)
+            this_pos = ru32(fh)
+            k = ru16(fh)
+            alleles = [rd(fh, ru32(fh)).decode() for _ in range(k)]
+
+            clen = ru32(fh)                        # genotype block length
+            keep = wanted is None or this_id in wanted or this_vid in wanted
+            if keep:
+                block = rd(fh, clen)
+                if compression != 0:
+                    ulen = struct.unpack_from("<I", block, 0)[0]
+                    block = _decompress(compression, block[4:], ulen)
+                dosage_cols.append(_decode_probs_to_dosage(block, n_samples))
+                vid.append(this_id); chrom.append(this_chrom); posn.append(this_pos)
+                a1.append(alleles[0]); a2.append(alleles[1] if k > 1 else "")
             else:
-                block = data[pos:pos + clen]
-            dosage_cols.append(_decode_probs_to_dosage(block, n_samples))
-            vid.append(this_id); chrom.append(this_chrom); posn.append(this_pos)
-            a1.append(alleles[0]); a2.append(alleles[1] if k > 1 else "")
-        pos += clen                               # always advance past the block
+                fh.seek(clen, 1)                   # skip the block, never read it
 
     n_kept = len(dosage_cols)
     dosage = (np.empty((n_samples, 0), dtype=np.float32) if n_kept == 0
