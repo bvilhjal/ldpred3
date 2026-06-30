@@ -1300,8 +1300,11 @@ def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter
     ``h2``/``p`` each sweep (global hyper-parameters, pooled across blocks) and
     stores ``curr_beta`` every ``sample_every`` post-burn-in sweeps for the
     LDpred3-auto predictive-r2 estimator -- without ever materialising a
-    genome-wide LD matrix. Returns ``(avg_beta, h2_path, p_path, samples)`` with
-    ``samples`` an ``(n_saved, m)`` float32 array.
+    genome-wide LD matrix. Like :func:`_gibbs_blocks_stream`, blocks may be dense
+    (float32), banded :class:`SparseLD` (O(k·bandwidth)) or :class:`LowRankLD`
+    (O(k·rank) eigenspace), so inference scales the same way scoring does.
+    Returns ``(avg_beta, h2_path, p_path, samples)`` with ``samples`` an
+    ``(n_saved, m)`` float32 array.
     """
     beta_hat = np.ascontiguousarray(beta_hat, dtype=np.float64)
     n = np.ascontiguousarray(n, dtype=np.float64)
@@ -1311,14 +1314,23 @@ def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter
     n_const = bool(n.size > 0 and n.min() == n.max())
     n0 = float(n[0]) if n_const else 0.0
 
+    # Per-block payloads, de-duplicated by identity for dense blocks.
+    # kind: 0=dense (float32), 1=SparseLD (banded CSR), 2=LowRankLD (eigenspace).
+    # LowRank blocks carry a persistent score buffer s = U^T beta (length r).
     cache = {}
-    fblocks = []
+    fblocks = []           # (kind, obj, start, k, s_or_None)
     for cb, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
-        key = id(cb)
-        if key not in cache:
-            cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
         idx = np.asarray(idx)
-        fblocks.append((cache[key], int(idx[0]), int(idx.shape[0])))
+        start, k = int(idx[0]), int(idx.shape[0])
+        if isinstance(cb, SparseLD):
+            fblocks.append((1, cb, start, k, None))
+        elif isinstance(cb, LowRankLD):
+            fblocks.append((2, cb, start, k, np.zeros(cb.U.shape[1])))
+        else:
+            key = id(cb)
+            if key not in cache:
+                cache[key] = np.ascontiguousarray(cb, dtype=np.float32)
+            fblocks.append((0, cache[key], start, k, None))
 
     curr_beta = np.zeros(m)
     Rb = np.zeros(m)
@@ -1339,12 +1351,23 @@ def _gibbs_blocks_stream_sample(blocks, beta_hat, n, h2, p, *, burn_in, num_iter
         resync = (it % 100 == 0)
         nb_causal = 0
         gv = 0.0
-        for cbf, start, k in fblocks:
+        for kind, obj, start, k, s in fblocks:
             sl = slice(start, start + k)
-            nbc, gvb = _gibbs_one_sweep_jit(
-                cbf, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl], post_means[sl],
-                unif[sl], gauss[sl], c1, log_prior_odds, False,
-                n_const, n0, resync)
+            if kind == 1:
+                nbc, gvb = _gibbs_one_sweep_sparse_jit(
+                    obj.indptr, obj.indices, obj.data, beta_hat[sl], n[sl],
+                    curr_beta[sl], Rb[sl], post_means[sl], unif[sl], gauss[sl],
+                    c1, log_prior_odds, False, n_const, n0, resync)
+            elif kind == 2:
+                nbc, gvb = _gibbs_one_sweep_lowrank_jit(
+                    obj.U, beta_hat[sl], n[sl], curr_beta[sl], s, post_means[sl],
+                    unif[sl], gauss[sl], c1, log_prior_odds, False,
+                    n_const, n0, resync)
+            else:
+                nbc, gvb = _gibbs_one_sweep_jit(
+                    obj, beta_hat[sl], n[sl], curr_beta[sl], Rb[sl],
+                    post_means[sl], unif[sl], gauss[sl], c1, log_prior_odds,
+                    False, n_const, n0, resync)
             nb_causal += nbc
             gv += gvb
 

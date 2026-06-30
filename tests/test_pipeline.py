@@ -320,10 +320,16 @@ def test_allele_flip_is_corrected(tmp_path):
     np.testing.assert_allclose(res0.scores, res1.scores, rtol=1e-6, atol=1e-6)
 
 
-def test_pipeline_infer_rejects_compact_ld(tmp_path):
-    import pytest
+def test_pipeline_infer_with_compact_ld(tmp_path):
+    # --infer now scales with the LD representation: low-rank and banded blocks
+    # flow through the streaming sampler and still report h2/p/r2.
     prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=14)
     for kw in ({"ld_lowrank": True}, {"ld_sparse": True}):
-        with pytest.raises(ValueError, match="dense LD"):
-            run_ldpred3_prs(ss_path, prefix, method="auto", block_size=150,
-                            num_iter=30, burn_in=10, seed=1, infer=True, **kw)
+        res = run_ldpred3_prs(ss_path, prefix, method="auto", block_size=150,
+                              num_iter=60, burn_in=30, seed=1, infer=True,
+                              infer_params={"n_chains": 4, "burn_in": 60,
+                                            "num_iter": 80}, **kw)
+        assert res.inference is not None
+        assert 0 < res.inference["h2_est"] < 1.5
+        assert res.inference["r2_ci"][0] <= res.inference["r2_est"] \
+            <= res.inference["r2_ci"][1]
