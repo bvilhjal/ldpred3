@@ -1,7 +1,5 @@
 """Tests for per-variant priors (SBayesRC-style annotation-informed prior)."""
 
-import os
-import sys
 
 import numpy as np
 

@@ -1,7 +1,5 @@
 """Tests for sumstats QC."""
 
-import os
-import sys
 
 import numpy as np
 

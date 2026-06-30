@@ -128,3 +128,19 @@ def test_borrows_strength_for_low_power_trait():
                                  method="auto", burn_in=120, num_iter=150, seed=rep)
         uni.append(_genetic_r2(solo, b2, blocks, idxs))
     assert np.mean(bi) > np.mean(uni) + 0.02, (np.mean(bi), np.mean(uni))
+
+
+def test_bivariate_rejects_compact_blocks():
+    # Compact (sparse / low-rank) LD blocks must fail loudly, not crash with a
+    # cryptic float() TypeError inside np.ascontiguousarray.
+    import pytest
+    from ldpred3 import sparsify_ld, lowrank_ld
+    rng = np.random.default_rng(0)
+    R = (0.3 ** np.abs(np.subtract.outer(np.arange(40), np.arange(40)))).astype(float)
+    b1 = rng.standard_normal(40) * 0.02
+    b2 = rng.standard_normal(40) * 0.02
+    for conv in (sparsify_ld, lowrank_ld):
+        blocks = [(conv(R), np.arange(40))]
+        with pytest.raises(NotImplementedError, match="dense LD"):
+            ldpred3_auto_bivariate_blocks(blocks, b1, b2, 10000, 10000,
+                                          burn_in=5, num_iter=5, h2_cap=(0.1, 0.1))

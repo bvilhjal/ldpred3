@@ -26,7 +26,6 @@ Effects given as odds ratios are converted to ``beta = log(OR)``. A missing
 from __future__ import annotations
 
 from dataclasses import dataclass
-import csv
 import gzip
 import math
 

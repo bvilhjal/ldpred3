@@ -53,8 +53,8 @@ def _decode_probs_to_dosage(block, n_samples):
     """Decode one layout-2 unphased diploid biallelic genotype block -> dosage."""
     n = struct.unpack_from("<I", block, 0)[0]
     k = struct.unpack_from("<H", block, 4)[0]
-    pmin = block[6]
-    pmax = block[7]
+    # bytes 6, 7 = min / max ploidy (unused: only diploid is supported);
+    # the per-sample ploidy/missing bytes start at offset 8.
     if n != n_samples:
         raise ValueError("variant sample count disagrees with header")
     if k != 2:

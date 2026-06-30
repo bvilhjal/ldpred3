@@ -31,9 +31,7 @@ Run::
 from __future__ import annotations
 
 import argparse
-import os
 import resource
-import sys
 import time
 
 import numpy as np

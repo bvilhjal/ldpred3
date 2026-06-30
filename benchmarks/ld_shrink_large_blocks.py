@@ -15,7 +15,7 @@ keeps the MP-inflated top eigenvalues and does not help here.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/ld_shrink_large_blocks.py
 """
-import sys, time
+import sys
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
 from ldpred3.simulate import simulate_genotypes_coalescent

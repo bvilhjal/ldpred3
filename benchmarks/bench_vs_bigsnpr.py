@@ -14,7 +14,7 @@ Run:  python benchmarks/bench_vs_bigsnpr.py            # full 200k-2M sweep
 The R side needs bigsnpr (see bench_bigsnpr_blocks.R); set RSCRIPT / R_LIBS_USER
 if R packages live in a user library.
 """
-import os, sys, csv, json, time, shutil, subprocess
+import os, sys, csv, json, time, subprocess
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))

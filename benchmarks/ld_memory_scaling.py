@@ -17,7 +17,6 @@ Two caveats this prints make explicit:
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/ld_memory_scaling.py
 """
 import sys
-import numpy as np
 sys.path.insert(0, "/home/user/iprs")
 from ldpred3.simulate import simulate_genotypes_coalescent
 from ldpred3.ld import compute_ld_blocks

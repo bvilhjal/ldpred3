@@ -16,6 +16,7 @@ dependencies = ["numpy>=1.20"]
 fast = ["numba>=0.59"]          # JIT-compiled Gibbs sampler (strongly recommended)
 sim = ["msprime>=1.3"]          # realistic-LD (coalescent) simulation
 test = ["pytest>=7"]
+lint = ["ruff>=0.5"]            # pyflakes-style lint gate (see [tool.ruff])
 
 [project.scripts]
 ldpred3 = "ldpred3.pipeline:_main"
@@ -26,3 +27,12 @@ packages = ["ldpred3"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+# Lint for real defects, not style: the codebase deliberately uses compact
+# multi-statement lines (E702) and long lines, so we enforce only pyflakes (F) —
+# unused imports / variables, redefinitions, undefined names, f-string slips.
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["F"]

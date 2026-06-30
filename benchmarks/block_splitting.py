@@ -18,7 +18,6 @@ import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
 from ldpred3.simulate import simulate_genotypes_coalescent
-from ldpred3.ld import compute_ld_blocks
 from ldpred3 import ldpred3_by_blocks, optimal_ld_blocks
 
 M = 3000                   # one contiguous coalescent region of 3000 SNPs
