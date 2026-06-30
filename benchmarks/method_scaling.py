@@ -19,7 +19,7 @@ import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, "_method_worker.py")
-METHODS = ["marginal", "inf", "grid", "auto", "annot"]
+METHODS = ["marginal", "inf", "grid", "auto", "annot", "lassosum2"]
 SIZES = [int(float(a)) for a in sys.argv[1:]] or \
         [50_000, 100_000, 200_000, 500_000, 1_000_000]
 
@@ -80,7 +80,7 @@ try:
 
     x = np.array(SIZES) / 1e6
     colors = {"marginal": "C0", "inf": "C1", "grid": "C2",
-              "auto": "C3", "annot": "C4"}        # consistent across panels
+              "auto": "C3", "annot": "C4", "lassosum2": "C5"}  # consistent across panels
     fig, (axr, axt, axm) = plt.subplots(1, 3, figsize=(14, 4.2))
     for meth in METHODS:
         r2 = [results[m]["methods"][meth]["r2"] for m in SIZES]
