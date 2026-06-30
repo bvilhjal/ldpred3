@@ -39,6 +39,19 @@ def test_weights_roundtrip_reproduces_scores(tmp_path):
     assert np.allclose(sr.scores, res.scores, atol=1e-6)
 
 
+def test_weights_scoring_is_chunk_invariant(tmp_path):
+    # The PLINK scoring path streams the .bed in variant-chunks; the result must
+    # not depend on the chunk size (and must match a single full-width chunk).
+    prefix, ss_path, _ = _simulate(tmp_path, m=400, seed=2)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200)
+    wpath = str(tmp_path / "prs.weights.txt")
+    res.write_weights(wpath)
+    s_small = score_from_weights(wpath, prefix, chunk=7).scores
+    s_big = score_from_weights(wpath, prefix, chunk=100000).scores
+    np.testing.assert_allclose(s_small, s_big, atol=1e-9)
+    np.testing.assert_allclose(s_small, res.scores, atol=1e-6)
+
+
 def test_weights_scoring_handles_allele_flips(tmp_path):
     """Weights should still apply after the target swaps A1/A2."""
     prefix, ss_path, _ = _simulate(tmp_path, m=300, seed=3)
