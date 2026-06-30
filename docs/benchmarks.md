@@ -449,8 +449,10 @@ Two costs, and they are different in kind:
   dense accuracy (0.986 vs 0.987) but fits ~9× slower**, and that part does not
   amortise. The slowdown is structural — the dense sampler keeps the full
   residual vector and reads `(Rβ)_j` in O(1), whereas the eigenspace fit
-  recomputes `(Rβ)_j = U[j]·s` in O(rank) per SNP (a batched `U·s` matvec could
-  narrow this).
+  recomputes `(Rβ)_j = U[j]·s` in O(rank) per SNP. This is intrinsic, not an
+  implementation gap: the Gibbs sweep is sequential — `s` changes after every SNP
+  — so the reads can't be batched into one `U·s` matvec, and keeping a full
+  residual instead would cost O(k) per update (worse).
 
 **Banding is worse on realistic LD on every axis except a small memory edge over
 dense** (slower than dense *and* it drops accuracy to 0.76). So low-rank is the
