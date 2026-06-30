@@ -135,6 +135,25 @@ helps you find *which* variant is causal.
 > model. The robust, direction-of-effect claim is: *imputation > annotation* for
 > transfer; the magnitude is setup-dependent.
 
+## Running time
+
+Imputation is a **one-time pre-step** (per LD block: a small dense solve), so it
+amortises across every later fit / method — it is not a per-sweep cost.
+`benchmarks/impute_timing.py` (blocks of 500, single core):
+
+| #SNPs | impute | one `auto_annot` fit | impute / fit |
+|------:|-------:|---------------------:|-------------:|
+| 6k | 0.06 s | 0.17 s | 33% |
+| 50k | 0.38 s | 1.50 s | 25% |
+| 100k | 0.78 s | 2.88 s | 27% |
+
+So ~**8 µs/SNP, linear in #SNPs, ≈¼–⅓ of a single fit**. And it gets **cheaper as
+missingness rises** (0.55 s at 10% missing → 0.13 s at 70%, m=50k): the per-block
+cost is `O(k_typed³)`, so more missing ⇒ a smaller typed block ⇒ a smaller solve —
+it is cheapest exactly where the accuracy gain is largest. The `O(k_typed³)`
+dependence does mean **large blocks are pricier** (k≈2000 is ~64× a k=500 block
+per block); recombination-aware block splitting keeps that bounded.
+
 ## Caveats
 
 - The gain is bounded by **imputation quality** (`imp_r²`) — a poorly-tagged
