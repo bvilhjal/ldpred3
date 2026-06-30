@@ -119,6 +119,36 @@ LDSC's value is its **robustness and speed** (a moment regression, no sampling)
 and its intercept as a confounding diagnostic; LDpred3-auto's is **efficiency**.
 Regenerate with `benchmarks/compare_ldsc_infer.py`.
 
+### Across genetic architectures
+
+Does inference hold up as the architecture changes? Fixing true h²=0.5 and
+sweeping four architectures (reference-panel LD `Nref=2000`, m=6000, N=50000, 10
+reps), estimating h² with both methods and polygenicity `p` with LDpred3-auto.
+Regenerate with `benchmarks/infer_architectures.py`.
+
+| architecture | LDSC h² | LDpred3 h² | p_true | LDpred3 p |
+|--------------|--------:|-----------:|-------:|----------:|
+| infinitesimal | 0.554 ± 0.060 | 0.547 ± 0.008 | 1.00  | 0.266 ± 0.041 |
+| sparse (p=0.01) | 0.545 ± 0.143 | 0.527 ± 0.010 | 0.010 | 0.030 ± 0.004 |
+| polygenic (p=0.2) | 0.575 ± 0.043 | 0.544 ± 0.005 | 0.200 | 0.188 ± 0.012 |
+| major locus | 0.544 ± 0.188 | 0.548 ± 0.014 | 0.020 | 0.036 ± 0.006 |
+
+- **h² inference is architecture-robust.** LDpred3-auto lands at ~0.53–0.55 for
+  *every* architecture, very precisely; the uniform ~0.04 upward bias is the
+  reference-panel LD mismatch (the same across architectures), not the
+  architecture — so the 95% h² CI under-covers here for the bias reason in
+  [interval calibration](#interval-calibration), not because any architecture
+  breaks the estimator. LDSC is unbiased-on-average but far noisier, and its SD
+  blows up on the sparse and major-locus architectures (0.14–0.19) where its
+  infinitesimal `E[χ²]` assumption is most stressed.
+- **Polygenicity recovery is architecture-dependent.** `p` is recovered well for
+  the **polygenic** trait (0.188 vs 0.20) and order-correct for **sparse**
+  (0.030 vs 0.010) and **major-locus** (0.036 vs 0.020, the few huge effects read
+  as slightly more variants), but the spike-and-slab cannot represent a truly
+  **infinitesimal** trait (p=1) and saturates around 0.27 — read `p` as "how
+  concentrated", precise in the mid-polygenic range and a floor estimate at the
+  infinitesimal limit.
+
 The same holds for the **genetic correlation** between two traits: `ldsc_rg`
 (cross-trait LD Score regression, `E[z₁z₂] = intercept + (√(N₁N₂)·ρ_g/M)·ℓ`)
 cross-checks the `r_g` from `ldpred3_auto_bivariate`. Under the same realistic

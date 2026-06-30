@@ -86,6 +86,38 @@ ABF "covers" only by dumping the whole locus into one set; LDpred3-PIP localizes
 to a handful of variants at the same coverage. Coverage is also robust to a finite
 LD reference panel (1.00 clean → 0.95 at Nref=500).
 
+### Across genetic architectures and methods
+
+The same three metrics across five locus architectures (coalescent LD, 60
+loci/cell, target z=7), comparing LDpred3-PIP, the ABF baseline and a naive
+**marginal top-SNP** (the most significant variant as a size-1 set). Regenerate
+with `benchmarks/finemap_architectures.py`.
+
+| architecture | method | coverage | power | median \|CS\| |
+|--------------|--------|---------:|------:|-------------:|
+| single | LDpred3-PIP | 0.97 | 0.93 | **2** |
+| single | ABF | 1.00 | 1.00 | 380 |
+| single | marginal-top | 0.72 | 0.72 | 1 |
+| two-independent | LDpred3-PIP | 0.93 | **0.90** | 2 |
+| two-independent | ABF | 1.00 | 1.00 | 380 |
+| two-independent | marginal-top | 0.60 | 0.30 | 1 |
+| two-linked | LDpred3-PIP | 0.93 | 0.82 | 2 |
+| two-linked | marginal-top | 0.60 | 0.30 | 1 |
+| causal+background | LDpred3-PIP | 0.92 | 0.93 | 2 |
+| major+sparse | LDpred3-PIP | 0.93 | 0.45 | 3 |
+
+- **LDpred3-PIP is the only method that both localizes and finds multiple
+  signals.** It keeps ~0.92–0.97 coverage with **median set size 2–3** across all
+  architectures, and on the two-signal architectures it recovers ~1.8 sets/locus
+  (power 0.82–0.90) — allelic heterogeneity the single-signal methods cannot see.
+- **ABF covers (1.00) but never localizes** (median size 380 = the whole locus);
+  its single-signal model also reports one set even when there are two.
+- **marginal-top localizes (size 1) but misses signals**: power collapses to
+  ~0.30 on two-signal architectures (it can only flag the lead variant) and its
+  coverage is ~0.6–0.75 (the top SNP is often a proxy, not the causal).
+- **`major+sparse` is the hard case** for power (0.45): every method nails the
+  major variant, but the two small (z≈4) effects are near the detection floor.
+
 ## Genome-wide
 
 Blocks are independent (block-diagonal LD), so genome-wide fine-mapping runs the

@@ -67,6 +67,7 @@ they run anywhere `msprime` is installed (`pip install msprime`).
 |--------|------------------|
 | `infer_recovery.py` | LDpred3-auto-infer: h² and polygenicity recovery vs truth, CI width and empirical 95% coverage (no validation cohort) |
 | `finemap_recovery.py` | LDpred3-PIP fine-mapping: credible-set coverage, power and resolution (set size) vs signal strength / #causal, clean vs reference-panel LD, and vs the ABF baseline |
+| `finemap_architectures.py` | Fine-mapping **methods × architectures**: LDpred3-PIP vs ABF vs marginal-top across single / two-signal (independent & linked) / polygenic-background / major+sparse loci — coverage, power, resolution |
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
 | `ld_shrink_large_blocks.py` | Size-aware LD shrinkage (`shrink_ld_blocks`): R² and h² on a finite reference panel, no-shrink vs uniform vs size-aware, across Nref |
 | `ld_memory_scaling.py` | Persistent LD storage dense O(k²) vs banded SparseLD O(k·w) across block sizes, with a 10M-SNP extrapolation (realistic coalescent LD) |
@@ -82,6 +83,7 @@ they run anywhere `msprime` is installed (`pip install msprime`).
 | Script | What it measures | Needs LD lib |
 |--------|------------------|:---:|
 | `compare_ldsc_infer.py` | Heritability: LDSC vs LDpred3-auto-infer vs truth (reference-panel LD) | ✓ |
+| `infer_architectures.py` | h² (LDSC & LDpred3-auto) and polygenicity (LDpred3-auto) recovery **across four architectures** (infinitesimal / sparse / polygenic / major-locus), reference-panel LD | ✓ |
 | `compare_bivariate_rg.py` | Genetic correlation: bivariate LDSC vs bivariate LDpred3 vs truth | ✓ |
 | `inference_benchmark.py` | Accuracy **and** running time for all inference estimators (incl. a marginal no-LD baseline) | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures | ✓ |
