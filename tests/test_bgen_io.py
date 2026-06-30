@@ -1,7 +1,5 @@
 """Tests for the BGEN v1.2 reader/writer."""
 
-import os
-import sys
 
 import numpy as np
 import pytest

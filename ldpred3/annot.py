@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ldpred3 import _jit, _stable_postp, _as_n_vector, SparseLD
+from .ldpred3 import _jit, _stable_postp, _as_n_vector, SparseLD, LowRankLD
 
 __all__ = ["AnnotResult", "ldpred3_auto_annot", "ldpred3_auto_annot_blocks",
            "read_annotations"]
@@ -371,8 +371,11 @@ def ldpred3_auto_annot(corr, beta_hat, n_eff, annotations, *, learn="eb",
     >>> res.enrichment            # {"coding": 1.2, "conserved": 0.8}
     >>> res.beta_est              # adjusted effects to build the PRS
     """
-    if isinstance(corr, SparseLD):
-        raise NotImplementedError("ldpred3_auto_annot needs a dense LD matrix")
+    if isinstance(corr, (SparseLD, LowRankLD)):
+        raise NotImplementedError(
+            "ldpred3_auto_annot needs a dense LD matrix, not a "
+            f"{type(corr).__name__}; the annotation learner does not support the "
+            "compact (sparse / low-rank) LD representations")
     if learn not in ("eb", "probit"):
         raise ValueError("learn must be 'eb' or 'probit'")
     if theta_every < 1:
@@ -447,6 +450,12 @@ def ldpred3_auto_annot_blocks(blocks, beta_hat, n_eff, annotations, *,
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
+    for R, _ in blocks:
+        if isinstance(R, (SparseLD, LowRankLD)):
+            raise NotImplementedError(
+                "ldpred3_auto_annot_blocks needs dense LD blocks, not a "
+                f"{type(R).__name__}; the annotation learner does not support "
+                "the compact (sparse / low-rank) LD representations")
     blks = [(np.ascontiguousarray(R, dtype=np.float32), np.asarray(idx))
             for R, idx in blocks]
     covered = np.concatenate([idx for _, idx in blks])

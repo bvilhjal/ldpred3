@@ -6,7 +6,7 @@ coalescent LD. This is the dominant real-world error source that the earlier
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3 import ld_scores, ldsc_rg, ldpred3_auto_bivariate_blocks, ldpred3_by_blocks
+from ldpred3 import ld_scores, ldsc_rg, ldpred3_auto_bivariate_blocks
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)

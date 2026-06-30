@@ -1,7 +1,5 @@
 """End-to-end pipeline test: simulate -> GWAS -> PLINK+sumstats -> PRS."""
 
-import os
-import sys
 
 import numpy as np
 

@@ -233,12 +233,18 @@ def test_read_annotations_aligns_by_id(tmp_path):
     np.testing.assert_allclose(A[:, 1], [0, 0.5, 0, 0.2])
 
 
-def test_sparse_ld_rejected():
-    from ldpred3 import sparsify_ld
+def test_compact_ld_rejected():
+    # Both compact representations (sparse / low-rank), via both entry points,
+    # must raise NotImplementedError rather than crash with a cryptic TypeError.
+    from ldpred3 import sparsify_ld, lowrank_ld
     R = 0.5 ** np.abs(np.subtract.outer(np.arange(40), np.arange(40)))
-    ld = sparsify_ld(R)
-    with pytest.raises(NotImplementedError):
-        ldpred3_auto_annot(ld, np.zeros(40), 5000, np.ones((40, 1)))
+    for conv in (sparsify_ld, lowrank_ld):
+        ld = conv(R)
+        with pytest.raises(NotImplementedError, match="dense LD"):
+            ldpred3_auto_annot(ld, np.zeros(40), 5000, np.ones((40, 1)))
+        with pytest.raises(NotImplementedError, match="dense LD"):
+            ldpred3_auto_annot_blocks([(ld, np.arange(40))], np.zeros(40), 5000,
+                                      np.ones((40, 1)))
 
 
 # --------------------------------------------------------------------------- #

@@ -7,6 +7,19 @@ on:
     branches: [master]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: ruff (pyflakes)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install -e ".[lint]"
+      - name: Lint (pyflakes-only; see [tool.ruff] in pyproject)
+        run: ruff check .
+
   test:
     runs-on: ubuntu-latest
     strategy:

@@ -6,8 +6,6 @@ matches the PRS's actual R2 in the held-out test cohort -- the central claim
 of Privé et al. (AJHG 2023).
 """
 
-import os
-import sys
 
 import numpy as np
 

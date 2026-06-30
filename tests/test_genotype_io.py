@@ -1,7 +1,5 @@
 """Tests for the PLINK genotype reader/writer."""
 
-import os
-import sys
 
 import numpy as np
 

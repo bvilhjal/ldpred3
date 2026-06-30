@@ -29,7 +29,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ldpred3 import _jit, _stable_postp, _as_n_vector, ldpred3_by_blocks
+from .ldpred3 import (_jit, _as_n_vector, ldpred3_by_blocks,
+                      SparseLD, LowRankLD)
 
 __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
            "ldpred3_auto_bivariate_blocks"]
@@ -287,6 +288,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
 
     fblocks = []
     for R, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
+        if isinstance(R, (SparseLD, LowRankLD)):
+            raise NotImplementedError(
+                "bivariate LDpred3 needs dense LD blocks, not a "
+                f"{type(R).__name__}; it does not support the compact "
+                "(sparse / low-rank) LD representations")
         idx = np.asarray(idx)
         if not np.array_equal(idx, np.arange(idx[0], idx[0] + idx.shape[0])):
             raise ValueError("each block must use contiguous indices")

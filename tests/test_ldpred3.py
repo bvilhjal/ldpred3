@@ -9,7 +9,6 @@ Run with ``pytest`` or directly with ``python tests/test_ldpred3.py``.
 """
 
 import os
-import sys
 
 import numpy as np
 
@@ -36,7 +35,7 @@ def test_sparse_streaming_auto_matches_dense():
     from ldpred3.simulate import simulate_genotypes
     from ldpred3.ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
     from ldpred3 import SparseLD
-    import tempfile, os
+    import tempfile
     nb, k, m, n = 6, 300, 1800, 20000
     rng = np.random.default_rng(0)
     maf = rng.uniform(0.05, 0.5, m)
@@ -92,7 +91,7 @@ def test_lowrank_streaming_auto_matches_dense():
     from ldpred3.simulate import simulate_genotypes
     from ldpred3.ld import compute_ld_blocks, save_ld_blocks, load_ld_blocks
     from ldpred3 import LowRankLD, lowrank_ld, ldpred3_inf
-    import tempfile, os
+    import tempfile
     nb, k, m, n = 6, 300, 1800, 20000
     rng = np.random.default_rng(0)
     maf = rng.uniform(0.05, 0.5, m)
@@ -135,7 +134,6 @@ def test_lowrank_streaming_auto_matches_dense():
 
 def test_shrink_ld_blocks_is_size_aware():
     # alpha = min(max_shrink, k / n_ref): small block ~untouched, large shrunk.
-    rng = np.random.default_rng(0)
     small = _ar1_corr(50, 0.6).astype(np.float32)
     big = _ar1_corr(800, 0.6).astype(np.float32)
     blocks = [(small, np.arange(50)), (big, np.arange(50, 850))]

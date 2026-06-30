@@ -1,12 +1,17 @@
 """
 LD representations and construction utilities for LDpred3.
 
-Holds the sparse-LD container and the routines that build / reshape LD matrices
+Holds the compact-LD containers and the routines that build / reshape LD matrices
 independently of the samplers:
 
 * :class:`SparseLD` -- a banded LD matrix in CSR form (the sampler only touches
   non-zero neighbours).
+* :class:`LowRankLD` -- a low-rank LD approximation ``R ~= U U.T`` with unit
+  diagonal; the sampler works in the r-dimensional eigenspace (O(k·rank)).
 * :func:`sparsify_ld` -- threshold / band a dense LD matrix into a ``SparseLD``.
+* :func:`lowrank_ld` -- eigen-truncate a dense LD matrix into a ``LowRankLD``.
+* :func:`shrink_ld_blocks` -- size-aware spectral shrinkage of per-block LD
+  toward the identity (regularises large blocks from a finite reference panel).
 * :func:`block_diagonal_ld` -- pack per-block dense LD into one block-diagonal
   ``SparseLD``.
 * :func:`optimal_ld_blocks` -- recombination-aware block splitting (Privé 2022).

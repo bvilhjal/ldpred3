@@ -20,7 +20,6 @@ tests without an external PLINK install.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 
 import numpy as np
 

@@ -1,7 +1,5 @@
 """Tests for the sumstats reader and harmonisation rules."""
 
-import os
-import sys
 
 import numpy as np
 

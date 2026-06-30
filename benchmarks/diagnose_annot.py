@@ -13,7 +13,7 @@ hyper-parameters (h2, effective p) of:
 import sys, time
 import numpy as np
 sys.path.insert(0, "/home/user/iprs")
-from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks, ldpred3_auto
+from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks
 
 LIB = np.load("ld_library.npz")
 libR = LIB["R"].astype(np.float64)

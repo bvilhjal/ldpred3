@@ -1,7 +1,5 @@
 """Tests for PRS scoring."""
 
-import os
-import sys
 
 import numpy as np
 
