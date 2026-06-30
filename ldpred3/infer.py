@@ -35,7 +35,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .ldpred3 import (_gibbs_kernel_sample_jit, _gibbs_blocks_stream_sample,
-                      _as_n_vector, _check_h2_p, SparseLD)
+                      _as_n_vector, _check_h2_p, SparseLD, LowRankLD)
 
 __all__ = ["InferResult", "ldpred3_auto_infer"]
 
@@ -86,6 +86,12 @@ def _prep_blocks(blocks, shrink_corr):
     """float32 ``(R, idx)`` blocks, off-diagonal optionally shrunk."""
     out = []
     for R, idx in blocks:
+        if isinstance(R, (SparseLD, LowRankLD)):
+            raise ValueError(
+                "inference (ldpred3_auto_infer / infer=True) currently requires "
+                "dense LD blocks; got a "
+                f"{type(R).__name__}. Re-run without ld_sparse / ld_lowrank for "
+                "the inference path.")
         R = np.ascontiguousarray(R, dtype=np.float32)
         if shrink_corr != 1.0:
             R = R * np.float32(shrink_corr)

@@ -1653,6 +1653,12 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
             tol=kwargs.pop("tol", 0.0), check_every=kwargs.pop("check_every", 50))
         h2_init = kwargs.pop("h2_init", 0.1)
         p_init = kwargs.pop("p_init", 0.1)
+        if kwargs:
+            raise TypeError(
+                f"unsupported keyword(s) for global_hyper auto: {sorted(kwargs)}. "
+                "allow_jump_sign / prior_weights / shrink_corr are only honoured "
+                "with global_hyper=False (per-block); they would otherwise be "
+                "silently ignored here.")
         has_special = any(isinstance(cb, (SparseLD, LowRankLD)) for cb, _ in blk)
         if ncores and ncores > 1 and not has_special:
             # Multicore: packed blocks + prange (more memory, parallel sweeps).

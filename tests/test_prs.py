@@ -47,6 +47,18 @@ def test_prs_score_missing_imputed_to_mean():
     np.testing.assert_allclose(scores, [2.0, 0.0, 1.0])
 
 
+def test_all_missing_column_does_not_poison_scores():
+    # An entirely-missing variant column must contribute nothing, not NaN.
+    dosage = np.array([[2, -1], [0, -1], [1, -1]], dtype=np.int8)
+    Z = standardize_dosage(dosage)
+    assert np.all(np.isfinite(Z))
+    np.testing.assert_array_equal(Z[:, 1], 0.0)
+    beta = np.array([0.7, 3.0])                 # nonzero weight on the dead column
+    for std in (True, False):
+        scores = prs_score(dosage, beta, standardize=std)
+        assert np.all(np.isfinite(scores)), f"NaN PRS with standardize={std}"
+
+
 def test_prs_score_standardized_default():
     rng = np.random.default_rng(2)
     dosage = rng.integers(0, 3, size=(50, 4)).astype(np.int8)
