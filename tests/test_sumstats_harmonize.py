@@ -120,3 +120,47 @@ def test_complement_and_palindrome_helpers():
     assert _complement("N") is None
     assert _is_palindromic("A", "T")
     assert not _is_palindromic("A", "G")
+
+
+def test_harmonize_chr_prefix_and_sex_codes(tmp_path):
+    # Genotypes labelled '1'; sumstats use 'chr1' (and 'chrX'/'23' style) — they
+    # must still match by position after chromosome normalisation.
+    from ldpred3.harmonize import _norm_chrom
+    assert _norm_chrom("chr1") == "1" and _norm_chrom("1") == "1"
+    assert _norm_chrom("chrX") == "X" and _norm_chrom("23") == "X"
+    assert _norm_chrom("MT") == "MT" and _norm_chrom("26") == "MT" and _norm_chrom("M") == "MT"
+
+    path = _write(tmp_path,
+        "CHR BP A1 A2 BETA SE N\n"
+        "chr1 200 C T 0.7 0.01 1000\n")   # 'chr1' vs genotype '1'
+    ss = read_sumstats(path)
+    h = harmonize(ss, _variants())
+    assert list(h.var_index) == [1]
+    np.testing.assert_allclose(h.beta, [0.7])
+
+
+def test_diagnose_match_build_mismatch(tmp_path):
+    # Same rsIDs, but shifted positions -> diagnosed as a build mismatch.
+    from ldpred3.harmonize import diagnose_match
+    v = _variants()
+    path = _write(tmp_path,
+        "SNP CHR BP A1 A2 BETA SE N\n"
+        "rs1 1 999100 A G 0.2 0.01 1000\n"
+        "rs2 1 999200 C T 0.2 0.01 1000\n")
+    ss = read_sumstats(path)
+    d = diagnose_match(ss, v)
+    assert d["rsid_overlap"] == 2
+    assert d["build_mismatch_suspected"]
+    assert "build" in d["message"]
+
+
+def test_diagnose_match_disjoint(tmp_path):
+    from ldpred3.harmonize import diagnose_match
+    v = _variants()
+    path = _write(tmp_path,
+        "SNP CHR BP A1 A2 BETA SE N\n"
+        "rsX 9 10 A G 0.2 0.01 1000\n")
+    ss = read_sumstats(path)
+    d = diagnose_match(ss, v)
+    assert d["rsid_overlap"] == 0 and d["pos_overlap_normalized"] == 0
+    assert "different variant sets" in d["message"] or "build" in d["message"]
