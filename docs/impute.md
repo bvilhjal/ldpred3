@@ -67,6 +67,33 @@ the top |effect| in their LD neighbourhood):
   the smeared typed effect predicts about as well; the annotation's value is
   **localisation**.
 
+> **This is a best case.** It drops *exactly the causal* variants — the
+> highest-value, most adversarial missingness. Under realistic **random**
+> missingness the prediction gain is much smaller (next section). Read the
+> attribution/localisation result as the durable finding; treat the prediction
+> numbers here as an upper bound.
+
+### Realistic (random) missingness
+
+`benchmarks/impute_missingness.py` removes the adversarial setup: a **random**
+fraction of variants is untyped (a variant is missing because of the array, not
+because it is causal), and `ldpred3_auto_annot` is fit with vs without imputation.
+Genetic R² (population LD), swept:
+
+| sweep | no-impute → impute (Δ) |
+|-------|------------------------|
+| missingness 10% / 30% / 50% / 70% | 0.983→0.993 (+0.010) · 0.972→0.990 (+0.018) · 0.943→0.986 (+0.043) · 0.922→0.974 (**+0.052**) |
+| polygenicity p = 0.001 / 0.01 / 0.1 | +0.015 · +0.018 · +0.010 |
+| heritability h² = 0.2 / 0.5 / 0.8 | +0.026 · +0.018 · +0.016 |
+| #SNPs = 3k / 6k / 12k | +0.011 · +0.018 · +0.021 |
+
+Under random missingness imputation gives a **consistent but modest** gain —
+**~1–2% genetic R², rising to ~5% at heavy (70%) missingness** — and it grows with
+the missingness fraction and the #SNPs (both increase the model-misspecification
+that imputation fixes). So the layer is worth having where the GWAS sumstats are
+much sparser than the LD/target panel, but it is not a large, universal win; the
+dramatic figures above are the drop-the-causals best case.
+
 ## Cross-ancestry portability
 
 The bigger question is *transfer*: a causal functional variant is shared across
@@ -98,9 +125,15 @@ The result is sharper than the naive "annotations drive portability" guess:
 
 So the two benefits are **distinct**: imputation fixes model specification (helps
 in-sample accuracy *and* cross-ancestry transfer), while the functional annotation
-helps you find *which* variant is causal. (This is a single-locus-architecture,
-clean-population-LD simulation — real portability also involves allele-frequency
-and causal-effect differences it does not model.)
+helps you find *which* variant is causal.
+
+> **Same best-case caveat.** This too drops *exactly the functional causals*, so
+> the 92% vs 68% is an upper bound on the portability gain; with random
+> missingness the cross-ancestry effect, like the in-sample one, is smaller. And
+> the simulation is single-locus-architecture, clean-population LD — real transfer
+> also involves allele-frequency and causal-effect heterogeneity it does not
+> model. The robust, direction-of-effect claim is: *imputation > annotation* for
+> transfer; the magnitude is setup-dependent.
 
 ## Caveats
 

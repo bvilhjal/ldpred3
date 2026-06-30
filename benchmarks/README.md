@@ -70,7 +70,8 @@ they run anywhere `msprime` is installed (`pip install msprime`).
 | `finemap_architectures.py` | Fine-mapping **methods × architectures**: LDpred3-PIP vs ABF vs marginal-top across single / two-signal (independent & linked) / polygenic-background / major+sparse loci — coverage, power, resolution |
 | `finemap_genomewide.py` | **Genome-wide** fine-mapping (`finemap_by_blocks`) over 100k–500k SNPs: genome-wide coverage/power/resolution + runtime, and `only_significant` vs all-blocks (false-set rate). *(needs `ld_library.npz`)* |
 | `impute_annot.py` | **LD imputation × functional annotations**: drop functional causals, impute, fit auto/annot, matched vs mismatched LD — prediction R² (misspecification fix) and localisation of untyped functional causals. *(needs `ld_library.npz`)* |
-| `impute_portability.py` | **Cross-ancestry transfer**: two-population coalescent split (diverged LD), GWAS in pop A scored in A & B — imputation drives portability (retained 68%→92%); self-contained (msprime) |
+| `impute_portability.py` | **Cross-ancestry transfer**: two-population coalescent split (diverged LD), GWAS in pop A scored in A & B — imputation drives portability (retained 68%→92%, best case); self-contained (msprime) |
+| `impute_missingness.py` | **Realistic test**: `auto_annot` with/without imputation under **random** missingness, swept over missingness / polygenicity / h² / #SNPs — modest, honest gain (~1–2% R², up to ~5% at 70% missing). *(needs `ld_library.npz`)* |
 | `dentist_recovery.py` | DENTIST filter: PRS R² recovered after planted allele/strand errors, error catch-rate, and false-drop cost on clean data |
 | `ld_shrink_large_blocks.py` | Size-aware LD shrinkage (`shrink_ld_blocks`): R² and h² on a finite reference panel, no-shrink vs uniform vs size-aware, across Nref |
 | `ld_memory_scaling.py` | Persistent LD storage dense O(k²) vs banded SparseLD O(k·w) across block sizes, with a 10M-SNP extrapolation (realistic coalescent LD) |
