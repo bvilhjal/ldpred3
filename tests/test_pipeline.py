@@ -185,6 +185,19 @@ def test_pipeline_dentist_runs_and_keeps_signal(tmp_path):
     assert r2 > 0.20, f"PRS R^2 after DENTIST too low: {r2:.3f}"
 
 
+def test_pipeline_impute_n_runs_and_keeps_signal(tmp_path):
+    # --impute-n runs end-to-end, logs its diagnostics, and (when the reported N
+    # is already correct) leaves the PRS predictive — no harm.
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=8)
+    res = run_ldpred3_prs(ss_path, prefix, method="inf", block_size=200,
+                          impute_n=True)
+    assert "impute_n" in res.qc_log
+    log = res.qc_log["impute_n"]
+    assert 0 < log["median_imputed_n"] <= log["n_total"]
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"PRS R^2 with impute_n too low: {r2:.3f}"
+
+
 def test_pipeline_ld_shrink_runs_and_keeps_signal(tmp_path):
     # Size-aware LD shrinkage runs end-to-end, logs n_ref, and stays predictive.
     prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=9)

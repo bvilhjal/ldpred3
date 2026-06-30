@@ -139,3 +139,44 @@ def test_dentist_skips_small_blocks():
     z = np.array([10.0, -10.0])
     keep, log = dentist_outlier_mask([(R, np.arange(2))], z, min_block=3)
     assert keep.all()
+
+
+def test_impute_n_eff_recovers_constant_n():
+    # se generated from a known N and frequency: se = 1/sqrt(N * 2f(1-f)) on the
+    # standardized scale -> the imputed N should recover N (anchored to n_total).
+    from ldpred3.qc import impute_n_eff
+    rng = np.random.default_rng(0)
+    m, N = 2000, 50000
+    af = rng.uniform(0.05, 0.95, m)
+    se = 1.0 / np.sqrt(N * 2 * af * (1 - af))
+    n_imp, log = impute_n_eff(se, af, N)
+    # recovered within a few percent for the bulk
+    assert np.median(np.abs(n_imp - N) / N) < 0.05
+    assert (n_imp <= N + 1e-6).all()           # clipped at the total
+
+
+def test_impute_n_eff_recovers_varying_n():
+    # Half the variants are typed at full N, half at N/2 (meta-analysis style):
+    # the imputed N must track the two-tier structure, not the single global N.
+    from ldpred3.qc import impute_n_eff
+    rng = np.random.default_rng(1)
+    m, N = 4000, 80000
+    af = rng.uniform(0.05, 0.95, m)
+    n_true = np.where(rng.random(m) < 0.5, N, N // 2).astype(float)
+    se = 1.0 / np.sqrt(n_true * 2 * af * (1 - af))
+    n_imp, log = impute_n_eff(se, af, N)
+    full = n_true == N
+    half = n_true == N // 2
+    # the two groups separate cleanly around their true sizes
+    assert abs(np.median(n_imp[full]) - N) / N < 0.05
+    assert abs(np.median(n_imp[half]) - N / 2) / (N / 2) < 0.08
+    assert np.median(n_imp[full]) > 1.5 * np.median(n_imp[half])
+
+
+def test_impute_n_eff_handles_degenerate_entries():
+    from ldpred3.qc import impute_n_eff
+    af = np.array([0.3, 0.0, 0.5, 1.0])       # two monomorphic
+    se = np.array([0.01, 0.01, 0.0, 0.02])    # one zero-se
+    n_imp, log = impute_n_eff(se, af, 10000)
+    assert np.all(np.isfinite(n_imp)) and np.all(n_imp > 0)
+    assert np.all(n_imp <= 10000 + 1e-6)
