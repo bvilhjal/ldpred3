@@ -25,11 +25,15 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py
 ```
 
 **LD library.** Most scripts simulate from a cached coalescent LD library,
-`ld_library.npz` (100 blocks × 500×500 correlation matrices, ~200 MB, **not
-committed**), expected in the working directory. Generate it once with msprime
-(see `ldpred3/simulate.py --ld-model coalescent`) or substitute your own
-`{"R": array of shape (n_blocks, k, k)}`. The "self-contained" scripts below need
-no external data.
+`ld_library.npz` (100 blocks × 500×500 correlation matrices, ~100 MB `float32`,
+**not committed**), expected in the working directory. Generate it once with
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_ld_library.py
+```
+
+(needs msprime; ~15 s) or substitute your own `{"R": array of shape
+(n_blocks, k, k)}`. The "self-contained" scripts below need no external data.
 
 ## Methods: accuracy
 

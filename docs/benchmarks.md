@@ -5,7 +5,7 @@ with `benchmarks/bench_vs_bigsnpr.py` (the from-scratch driver: shared
 simulation → both tools → `benchmarks/cores_1core_benchmark.csv`; R side in
 `benchmarks/bench_bigsnpr_blocks.R`; plot with `benchmarks/plot_methods_1core.py`).
 
-## vs bigsnpr (realistic LD, 200k–2M SNPs, single core)
+## vs bigsnpr (realistic LD, 200k–1M SNPs, single core)
 
 The benchmark uses **realistic LD** — each block is a `k`-SNP correlation matrix
 from a coalescent-with-recombination simulation (msprime: haplotype plateaus,
@@ -26,37 +26,41 @@ Wall-clock time (s), single core:
 
 | #SNPs | inf py / big | grid py / big | auto py / big |
 |-------|-------------:|--------------:|--------------:|
-| 200k  | **2.7** / 3.0 | 5.6 / **2.6** | **2.6** / 3.9 |
-| 500k  | **4.9** / 6.1 | 13.9 / **7.5** | **7.1** / 11.3 |
-| 1M    | 9.8 / **8.7** | 27.7 / **15.2** | **14.1** / 21.8 |
-| 2M    | 19.7 / **15.2** | 55.2 / **31.0** | **28.0** / 44.5 |
+| 200k  | 1.3 / **0.9** | 2.5 / **1.4** | **1.5** / 2.1 |
+| 500k  | **3.1** / 4.3 | 6.1 / **3.9** | **4.0** / 5.9 |
+| 1M    | **7.0** / 15.6 | 12.8 / **9.3** | **8.8** / 14.7 |
 
 Peak memory (GB) — LD-dominated, so ~equal across the three methods:
 
 | #SNPs | LDpred3 | bigsnpr | ratio |
 |-------|----------:|--------:|------:|
-| 200k  | **0.60** | 1.05 | 1.8× |
-| 500k  | **1.20** | 2.29 | 1.9× |
-| 1M    | **2.23** | 4.39 | 2.0× |
-| 2M    | **4.28** | 8.57 | 2.0× |
+| 200k  | **0.79** | 1.14 | 1.4× |
+| 500k  | **1.47** | 2.48 | 1.7× |
+| 1M    | **2.50** | 4.48 | 1.8× |
 
 **Prediction accuracy is identical** between the two at every size and method —
-e.g. auto phenotype-scale R² 0.388/0.388 at 200k → 0.103/0.102 at 2M (the level
+e.g. auto phenotype-scale R² 0.395/0.395 at 200k → 0.190/0.190 at 1M (the level
 falls with #SNPs because the GWAS power N is fixed; R²_pheno = genetic-R² × h²,
 h²=0.5).
 
+> Measured on a 16 GB Apple-Silicon laptop, single core. The **2M-SNP** point is
+> omitted here: bigsnpr's ~5.5 GB on-disk SFBM thrashes on 16 GB RAM, so its 2M
+> timing is memory-bound (minutes), not a representative single-core compute time;
+> LDpred3's `float32` LD stays ~4.4 GB and runs fine at 2M. Re-run
+> `bench_vs_bigsnpr.py` on a larger-memory box for the full 200k–2M sweep.
+
 The picture is method-dependent — there is no blanket "N× faster":
 
-- **Memory:** LDpred3 is **~2× leaner**, the gap widening from 1.8× at 200k to a
-  clean 2.0× at 2M (`float32` LD + one block resident; bigsnpr's SFBM stores
-  `float64` values plus per-entry indices).
-- **`-auto`:** LDpred3 is **~1.5–1.6× faster** at matched initialization — its
+- **Memory:** LDpred3 is **~1.4–1.8× leaner**, the gap widening with size
+  (`float32` LD + one block resident; bigsnpr's SFBM stores `float64` values
+  plus per-entry indices).
+- **`-auto`:** LDpred3 is **~1.4–1.7× faster** at matched initialization — its
   streaming global-hyper sampler is the strongest path.
-- **`-inf`:** roughly on par — LDpred3 faster up to 500k, bigsnpr faster at
-  1–2M (its compiled solve scales a little better on the largest blocks).
-- **`-grid`:** **bigsnpr is ~1.8–2× faster** here; its compiled C++ grid sampler
-  beats LDpred3's per-block Python-orchestrated one. This is LDpred3's weak
-  spot at fixed hyper-parameters.
+- **`-inf`:** on par at 200k (bigsnpr a hair faster) and **faster at 500k–1M** —
+  the per-block linear solve holds up well.
+- **`-grid`:** **bigsnpr is ~1.4–1.8× faster** here; its compiled C++ grid sampler
+  beats LDpred3's per-block Python-orchestrated one, though the gap narrows with
+  size. This is LDpred3's weak spot at fixed hyper-parameters.
 
 ### `auto` from a cold start (no oracle hyper-parameters)
 
@@ -67,13 +71,12 @@ same LD and sumstats; regenerate with `benchmarks/bench_cold_init.py`):
 
 | #SNPs | LDpred3 R² | bigsnpr R² | LDpred3 (s) | bigsnpr (s) |
 |-------|----------:|-----------:|------------:|------------:|
-| 200k  | 0.388 | 0.388 | **2.8** | 5.7 |
-| 500k  | **0.279** | 0.237 | **9.3** | 31.7 |
-| 1M    | **0.155** | 0.144 | **29.3** | 82.9 |
-| 2M    | **0.086** | 0.084 | **66.5** | 147.6 |
+| 200k  | 0.395 | 0.395 | **1.7** | 3.3 |
+| 500k  | **0.284** | 0.251 | **6.1** | 17.7 |
+| 1M    | **0.154** | 0.146 | **19.7** | 48.6 |
 
 From a cold start LDpred3's auto is **at least as accurate as bigsnpr's and 2–3×
-faster** — they tie at 200k, and LDpred3 leads by up to ~18% (500k) at the larger
+faster** — they tie at 200k, and LDpred3 leads by up to ~13% (500k) at the larger
 sizes. Both fall a little short of their oracle-init numbers (the fixed 300-sweep
 budget doesn't fully converge the hyper-parameters at 1M+), but LDpred3 degrades
 less; the oracle warm-start in the main table is what lets bigsnpr's single chain
@@ -117,37 +120,37 @@ Genetic R² at **N = 10,000** (the lower-power regime separates the methods):
 
 | architecture | marginal | inf | grid | auto | annot |
 |--------------|---------:|----:|-----:|-----:|------:|
-| infinitesimal       | 0.451 | **0.532** | 0.531 | 0.526 | 0.527 |
-| sparse (p=0.01)     | 0.460 | 0.541 | **0.747** | 0.746 | 0.747 |
-| polygenic (p=0.2)   | 0.442 | 0.530 | **0.531** | 0.528 | 0.529 |
-| major locus         | 0.459 | 0.533 | **0.684** | 0.672 | 0.672 |
-| annotation-enriched | 0.457 | 0.536 | 0.646 | 0.644 | **0.662** |
+| infinitesimal       | 0.451 | **0.528** | 0.527 | 0.524 | 0.525 |
+| sparse (p=0.01)     | 0.440 | 0.520 | 0.738 | **0.739** | 0.738 |
+| polygenic (p=0.2)   | 0.446 | 0.523 | **0.524** | 0.523 | 0.524 |
+| major locus         | 0.434 | 0.518 | **0.686** | 0.675 | 0.674 |
+| annotation-enriched | 0.458 | 0.530 | 0.632 | 0.632 | **0.648** |
 
 Genetic R² at **N = 50,000** (higher power; everything shifts up and compresses):
 
 | architecture | marginal | inf | grid | auto | annot |
 |--------------|---------:|----:|-----:|-----:|------:|
-| infinitesimal       | 0.565 | **0.794** | 0.792 | 0.789 | 0.789 |
-| sparse (p=0.01)     | 0.575 | 0.797 | 0.941 | 0.942 | **0.942** |
-| polygenic (p=0.2)   | 0.559 | 0.791 | **0.797** | 0.797 | 0.796 |
-| major locus         | 0.574 | 0.794 | **0.904** | 0.903 | 0.903 |
-| annotation-enriched | 0.577 | 0.796 | 0.900 | 0.901 | **0.908** |
+| infinitesimal       | 0.570 | **0.790** | 0.789 | 0.786 | 0.786 |
+| sparse (p=0.01)     | 0.563 | 0.787 | 0.944 | **0.945** | 0.944 |
+| polygenic (p=0.2)   | 0.570 | 0.789 | **0.795** | 0.795 | 0.795 |
+| major locus         | 0.557 | 0.787 | **0.903** | 0.902 | 0.902 |
+| annotation-enriched | 0.580 | 0.792 | 0.899 | 0.899 | **0.906** |
 
 Takeaways:
 
 - **The raw marginal PRS is always far behind** — the LD adjustment is the
-  first-order win (≈0.45→0.53 at N=10k, ≈0.57→0.79 at N=50k).
+  first-order win (≈0.45→0.52 at N=10k, ≈0.57→0.79 at N=50k).
 - **`inf` is architecture-robust but flat**: it is the best model *only* under a
   truly infinitesimal (or near-infinitesimal polygenic) architecture, and leaves
   large gains on the table whenever the trait is sparse or has major loci.
 - **`grid`/`auto` win decisively on sparse and major-locus** architectures
-  (e.g. 0.75/0.68 vs 0.53 for `inf` at N=10k) — the spike-and-slab captures
+  (e.g. 0.74/0.69 vs 0.52 for `inf` at N=10k) — the spike-and-slab captures
   concentrated signal. **`auto` matches the oracle `grid`** (handed the true
   `h²` and `p`) without any hyper-parameters — the practical default.
 - **`annot` matches `auto` when the annotation is uninformative and beats it
   when it carries signal.** On the annotation-enriched architecture it is the
-  best method at both power levels (N=10k: 0.662 vs grid 0.646; N=50k: 0.908 vs
-  0.901), and it never falls behind `auto` elsewhere. The lift from a *single*
+  best method at both power levels (N=10k: 0.648 vs grid 0.632; N=50k: 0.906 vs
+  0.899), and it never falls behind `auto` elsewhere. The lift from a *single*
   binary annotation is modest — SBayesRC's larger real-data gains come from many
   S-LDSC-calibrated annotations — but it is consistent and free of the
   "garbage-in" penalty a *fixed* bad prior would carry.
@@ -172,13 +175,13 @@ Regenerate with `benchmarks/timing_bench.py`.
 
 | method | fit time (s) |
 |--------|-------------:|
-| inf    | 0.56 |
-| auto   | 2.13 |
-| grid   | 2.20 |
-| annot  | 3.99 |
+| inf    | 0.31 |
+| auto   | 1.46 |
+| grid   | 1.45 |
+| annot  | 2.51 |
 
 `inf` is cheapest (one linear solve per block, no sampling). `grid`/`auto` are
-the spike-and-slab Gibbs samplers and cost about the same. `annot` is ~1.9×
+the spike-and-slab Gibbs samplers and cost about the same. `annot` is ~1.7×
 `auto`: it runs the same per-block effect sweeps plus a logistic annotation-map
 update every sweep.
 
@@ -188,17 +191,17 @@ solve in the number of annotations `K`, run every `theta_every` sweeps. Fit time
 
 | #annotations K | `theta_every=1` (default) | `theta_every=10` |
 |---------------:|--------------------------:|-----------------:|
-| 1   | 4.0  | 2.6 |
-| 5   | 4.5  | 2.6 |
-| 20  | 6.4  | 2.8 |
-| 50  | 10.5 | 3.1 |
-| 100 | 22.9 | 4.4 |
+| 1   | 2.5  | 1.6 |
+| 5   | 2.8  | 1.6 |
+| 20  | 3.3  | 1.7 |
+| 50  | 6.6  | 2.0 |
+| 100 | 12.6 | 2.6 |
 
 So the convergence-correct default (`theta_every=1`) is nearly free for a handful
 of annotations but its `O(K²)` per-sweep cost takes over by `K ≈ 50`; with many
 annotations raise `theta_every` to amortise it. (Persisting the running `R@β`
 residual across chunks — rather than rebuilding it each θ-update — keeps the
-default cheap; without it `annot` was ~3× `auto` instead of ~1.9×.)
+default cheap; without it `annot` was ~3× `auto` instead of ~1.7×.)
 
 ## Genotype-level simulation
 
@@ -256,16 +259,16 @@ The LDpred3 *algorithm* works from summary statistics + the LD matrix, so its
 cost is **independent of the GWAS sample size N** and is driven instead by the
 **LD structure (block size)**. The benchmarks below separate the algorithm's
 `fit` time from the simulation/GWAS/LD-construction `prep` time (which does scale
-with N). Measured on a 4-core / 15 GB box, Numba on, h²=0.5, p=0.01.
+with N). Measured on a 16 GB Apple-Silicon laptop, Numba on, h²=0.5, p=0.01.
 
 **Independent of N** (`--n-independence`, m=10000, blocks of 200): fit time is
 flat while prep grows with N.
 
 | N_train | prep (s) | fit_grid (s) | fit_auto (s) |
 |---------|---------|--------------|--------------|
-| 2000   | 4.1  | 0.200 | 0.367 |
-| 8000   | 10.4 | 0.199 | 0.305 |
-| 32000  | 46.9 | 0.195 | 0.270 |
+| 2000   | 1.5  | 0.059 | 0.041 |
+| 8000   | 4.3  | 0.057 | 0.038 |
+| 32000  | 15.2 | 0.057 | 0.037 |
 
 **Driven by LD block size** (`--ld-scaling`, m=20000 fixed, N=8000): larger LD
 blocks make each block's solve/sampler costlier. The infinitesimal model is a
@@ -274,11 +277,11 @@ stay nearly flat for sparse traits thanks to the running-residual update.
 
 | block size | #blocks | fit_inf (s) | fit_grid (s) | fit_auto (s) |
 |-----------|---------|-------------|--------------|--------------|
-| 100   | 200 | 0.076 | 0.379 | 0.664 |
-| 250   | 80  | 0.105 | 0.402 | 0.680 |
-| 500   | 40  | 0.167 | 0.398 | 0.731 |
-| 1000  | 20  | 0.347 | 0.410 | 0.468 |
-| 2000  | 10  | 1.082 | 0.469 | 0.541 |
+| 100   | 200 | 0.017 | 0.123 | 0.097 |
+| 250   | 80  | 0.044 | 0.120 | 0.079 |
+| 500   | 40  | 0.116 | 0.119 | 0.080 |
+| 1000  | 20  | 0.385 | 0.127 | 0.094 |
+| 2000  | 10  | 1.331 | 0.146 | 0.123 |
 
 **Scaling #SNPs** (`--scaling`, N=8000, blocks of 200): with N fixed, total
 runtime and memory grow ~linearly in #SNPs (≈1 ms/SNP; memory bounded by the
@@ -288,13 +291,45 @@ dilute the fixed GWAS power — `grid` degrades gracefully while raw
 
 | #SNPs | prep (s) | fit (s) | peak mem (GB) | marginal | inf | grid | auto | ceiling |
 |-------|---------|--------|---------------|---------|-----|------|------|---------|
-| 10000  | ~10 | ~0.7 | 0.30 | 0.167 | 0.174 | 0.465 | 0.452 | 0.503 |
-| 50000  | ~46 | ~3.5 | 0.74 | 0.051 | 0.050 | 0.316 | 0.264 | 0.485 |
-| 100000 | ~98 | ~7   | 1.28 | 0.016 | 0.015 | 0.181 | 0.115 | 0.482 |
+| 10000  | ~4  | ~0.5 | 0.32 | 0.167 | 0.174 | 0.463 | 0.463 | 0.503 |
+| 50000  | ~22 | ~0.6 | 0.89 | 0.051 | 0.050 | 0.316 | 0.316 | 0.485 |
+| 100000 | ~44 | ~1.5 | 1.32 | 0.016 | 0.015 | 0.185 | 0.059 | 0.482 |
 
 Practical takeaway: for dense data with long-range / large LD blocks, the dense
 per-block LD storage and the infinitesimal solve become the bottleneck, which
 motivates the banded / sparse-LD backend (see [algorithm.md](algorithm.md)).
+
+### Genome-scale scalability (200k–4M SNPs)
+
+How far does LDpred3 scale on a commodity laptop? This pushes the **fitting**
+step alone (LD already constructed, the realistic-LD library cycled to the target
+size, single core, 16 GB Apple-Silicon) from 200k up to **4M SNPs** — past a fully
+imputed genome. Regenerate with `benchmarks/bench_ldpred3_scaling.py`.
+
+![LDpred3 scalability to 4M SNPs](../benchmarks/ldpred3_scaling.png)
+
+| #SNPs | peak RAM | inf (s) | grid (s) | auto (s) | auto R² |
+|-------|---------:|--------:|---------:|---------:|--------:|
+| 200k  | 0.80 GB | 1.2 | 2.4 | 1.5 | 0.395 |
+| 500k  | 1.46 GB | 3.0 | 5.8 | 3.6 | 0.284 |
+| 1M    | 2.41 GB | 5.9 | 12.0 | 8.1 | 0.190 |
+| 2M    | 4.46 GB | 12.0 | 24.1 | 15.6 | 0.103 |
+| 3M    | 6.43 GB | 19.0 | 37.8 | 25.6 | 0.069 |
+| 4M    | 8.52 GB | 28.6 | 50.1 | 42.8 | 0.052 |
+
+Both axes are **linear in #SNPs**. Fit time runs ~8–10 µs/SNP (4M `auto` in well
+under a minute; `grid` ~50 s). Peak memory grows at **~2.1 GB per million SNPs** —
+the `float32` dense LD held resident during the fit — so **4M fits in 8.5 GB**, and
+the practical dense-in-RAM ceiling on a 16 GB machine is **~6–7M SNPs**. (The auto
+R² falls with #SNPs only because GWAS power N=50,000 is held fixed while variants
+multiply — it is not a scaling limit.)
+
+The contrast with bigsnpr is the headline: bigsnpr's `float64` on-disk SFBM
+already thrashed at 2M on this 16 GB machine, whereas LDpred3's `float32` LD sails
+to 4M. And to go **past** the dense-RAM ceiling, the low-rank / on-disk
+`--ld-stream` backend keeps resident memory at O(one block) regardless of genome
+size (see [LD representations at scale](#ld-representations-at-scale-memory-vs-running-time)) —
+so LDpred3 is not capped at 6–7M; that is just the dense-in-RAM limit.
 
 ## Robustness: LD reference quality & sample size
 
@@ -309,17 +344,17 @@ estimated from `Nref` reference individuals rather than known exactly:
 
 | Nref | pred R² | h² proxy |
 |------|--------:|---------:|
-| 500   | 0.825 | 0.910 |
-| 1000  | 0.912 | 0.672 |
-| 2000  | 0.965 | 0.560 |
-| 5000  | 0.984 | 0.521 |
-| 10000 | 0.989 | 0.514 |
-| ∞ (true LD) | 0.992 | 0.493 |
+| 500   | 0.829 | 0.932 |
+| 1000  | 0.912 | 0.683 |
+| 2000  | 0.970 | 0.540 |
+| 5000  | 0.988 | 0.512 |
+| 10000 | 0.989 | 0.512 |
+| ∞ (true LD) | 0.992 | 0.491 |
 
 A **small panel is actively harmful**: at Nref=500 the noisy LD makes the sampler
-over-fit, inflating h² to 0.91 (true 0.5) and dropping R² to 0.83. Accuracy is
+over-fit, inflating h² to 0.93 (true 0.5) and dropping R² to 0.83. Accuracy is
 near-clean only by **Nref≈5000**; a 1000-Genomes-scale panel (~2000) already
-costs ~3% R² and a ~12% h² over-estimate. This is the systematic bias behind the
+costs ~2% R² and a ~8% h² over-estimate. This is the systematic bias behind the
 0% interval coverage in [inference.md](inference.md#interval-calibration) — use
 the largest matched-ancestry panel you can.
 
@@ -327,11 +362,11 @@ the largest matched-ancestry panel you can.
 
 | N_used / N_true | pred R² | h² proxy |
 |-----------------|--------:|---------:|
-| 0.70 | 0.979 | 0.533 |
-| 0.85 | 0.972 | 0.547 |
-| 1.00 | 0.965 | 0.560 |
-| 1.15 | 0.958 | 0.574 |
-| 1.30 | 0.951 | 0.586 |
+| 0.70 | 0.981 | 0.519 |
+| 0.85 | 0.977 | 0.529 |
+| 1.00 | 0.970 | 0.540 |
+| 1.15 | 0.965 | 0.551 |
+| 1.30 | 0.957 | 0.565 |
 
 LDpred3-`auto` is **fairly robust to N**: ±30% changes R² by only ~±1.5% and
 moves the h² proxy roughly in proportion to `N_used`. There is even a mild twist
@@ -353,9 +388,9 @@ genetic R² = squared correlation of the PRS with the true genetic value).
 
 | N | marginal | inf | auto |
 |--------|---------:|----:|-----:|
-| 10000  | 0.585 | 0.812 | 0.946 |
-| 50000  | 0.609 | 0.911 | **0.969** |
-| 200000 | 0.614 | 0.935 | 0.950 |
+| 10000  | 0.594 | 0.815 | 0.946 |
+| 50000  | 0.622 | 0.912 | **0.970** |
+| 200000 | 0.628 | 0.935 | 0.951 |
 
 `auto` is strong even at N=10k and rises to ~0.97 — but note it **dips slightly at
 N=200k while `inf` keeps climbing**. That is the *reference-LD ceiling*: with a
@@ -368,10 +403,10 @@ better LD reference matters more than more samples (see
 
 | h² | marginal | inf | auto |
 |-----|---------:|----:|-----:|
-| 0.1 | 0.585 | 0.812 | 0.948 |
-| 0.3 | 0.605 | 0.891 | **0.971** |
-| 0.5 | 0.609 | 0.911 | 0.969 |
-| 0.8 | 0.611 | 0.923 | 0.963 |
+| 0.1 | 0.594 | 0.815 | 0.946 |
+| 0.3 | 0.617 | 0.893 | **0.970** |
+| 0.5 | 0.622 | 0.912 | 0.970 |
+| 0.8 | 0.625 | 0.924 | 0.965 |
 
 Genetic R² (PRS vs the *genetic* value) is fairly flat in h² for `auto` — the
 metric normalises out the heritability, so what it shows is that `auto` recovers
@@ -383,14 +418,14 @@ R² would instead scale ~linearly with h².
 
 | p | marginal | inf | auto |
 |-------|---------:|----:|-----:|
-| 0.001 | 0.599 | 0.914 | **0.969** |
-| 0.01  | 0.609 | 0.911 | **0.969** |
-| 0.1   | 0.618 | 0.910 | 0.922 |
-| 1.0 (infinitesimal) | 0.603 | 0.912 | 0.905 |
+| 0.001 | 0.579 | 0.904 | 0.962 |
+| 0.01  | 0.622 | 0.912 | **0.970** |
+| 0.1   | 0.619 | 0.909 | 0.923 |
+| 1.0 (infinitesimal) | 0.609 | 0.907 | 0.901 |
 
-This is the clearest axis: `auto` **excels on sparse architectures** (0.97 at
-p≤0.01) and **degrades toward the infinitesimal limit** (0.905 at p=1), where its
-spike-and-slab is mildly mis-specified and the matched `inf` model (0.912) edges
+This is the clearest axis: `auto` **excels on sparse architectures** (0.96–0.97 at
+p≤0.01) and **degrades toward the infinitesimal limit** (0.901 at p=1), where its
+spike-and-slab is mildly mis-specified and the matched `inf` model (0.907) edges
 it. `inf` is flat ~0.91 across p by construction (it assumes all variants causal,
 so sparsity neither helps nor hurts it). The practical reading: `auto` is the
 right default — it wins wherever there is concentrated signal and is only a hair
@@ -403,55 +438,57 @@ sumstats contain LD-inconsistent errors, and what does it cost on clean data?
 This plants spurious genome-wide-significant hits at **non-causal** variants (an
 allele/strand error that inflates a null variant's z out of line with its LD
 neighbours), fits LDpred3-`auto` with and without the filter, and reports genetic
-R². AR(1) LD, m=4000 (20×200 blocks), Nref=10k, N=10k, h²=0.5, p=0.05, 5 reps.
+R². Coalescent LD, m=4000 (20×200 blocks), Nref=10k, N=10k, h²=0.5, p=0.05, 5 reps.
 Regenerate with `benchmarks/dentist_recovery.py`.
 
 | condition | genetic R² |
 |-----------|-----------:|
-| clean (no errors) | 0.911 |
-| corrupted, no filter | 0.512 |
-| corrupted, `--dentist` | **0.684** |
+| clean (no errors) | 0.917 |
+| corrupted, no filter | 0.811 |
+| corrupted, `--dentist` | **0.907** |
 
-30 planted errors/rep; DENTIST catches **96%** of them. On *clean* sumstats it
-drops **0.59%** of genuine variants (the false-positive cost).
+30 planted errors/rep; DENTIST catches **100%** of them. On *clean* sumstats it
+drops **0.02%** of genuine variants (the false-positive cost).
 
-Reading: a handful of LD-inconsistent false hits roughly halves the PRS (0.91 →
-0.51) because the LD adjustment propagates them to their neighbours; DENTIST
-recovers most of the loss (→ 0.68). But it is **not free** — it drops ~0.6% of
-genuine variants even with nothing wrong, and that cost climbs steeply with
-GWAS power (the per-variant z grows, so well-tagged true signals start tripping
-the residual test). That is exactly why it is **off by default**: turn it on when
-you suspect allele/strand errors or an LD-reference mismatch, and keep `p_cutoff`
-stringent.
+Reading: a handful of LD-inconsistent false hits cost ~0.11 R² (0.92 → 0.81) as
+the LD adjustment propagates them to their neighbours; DENTIST recovers almost all
+of the loss (→ 0.91). On *realistic* LD the filter is sharper than on idealized
+AR(1): an out-of-line z stands out clearly against structured neighbours, so it
+catches **all** planted errors and almost never false-flags a genuine variant
+(0.02%). It is still **off by default** — the false-positive cost climbs with GWAS
+power (the per-variant z grows, so well-tagged true signals start tripping the
+residual test) — but turn it on when you suspect allele/strand errors or an
+LD-reference mismatch, and keep `p_cutoff` stringent.
 
 ## Sparse / banded LD: storage vs accuracy
 
-Real LD is banded, so a dense block wastes memory on ~zero entries.
 `sparsify_ld` thresholds and/or distance-bands each block into a CSR `SparseLD`
 the sampler updates in O(bandwidth). Storage (density = stored entries / dense),
-single-core fit time and genetic R² across settings (AR(1) LD, m=4000 = 8×500
-blocks, Nref=5k, N=20k, h²=0.5, p=0.02). Regenerate with
+single-core fit time and genetic R² across settings, on **realistic coalescent
+LD**, m=4000 = 8×500 blocks, Nref=5k, N=20k, h²=0.5, p=0.02. Regenerate with
 `benchmarks/sparse_ld_tradeoff.py`.
 
 | config | density | fit (s) | R² |
 |--------|--------:|--------:|---:|
-| dense | 100.0% | 0.10 | 0.983 |
-| threshold 1e-2 | 52.3% | 0.09 | 0.982 |
-| threshold 1e-3 | 94.9% | 0.10 | 0.983 |
-| band max_dist=50 | 19.1% | 0.09 | 0.974 |
-| band 25 + shrink 0.9 | 9.9% | 0.08 | 0.972 |
+| dense | 100.0% | 0.03 | 0.978 |
+| threshold 1e-2 | 95.7% | 0.05 | 0.978 |
+| threshold 1e-3 | 99.6% | 0.05 | 0.979 |
+| band max_dist=50 | 19.2% | 0.10 | 0.780 |
+| band 25 + shrink 0.9 | 9.9% | 0.06 | 0.744 |
 
-Thresholding at 1e-2 **halves storage for free** (R² 0.982 vs 0.983). Distance
-banding is far more aggressive — a 50-SNP band keeps **~19%** of entries and a
-25-SNP band with `shrink=0.9` just **~10%**, at a small accuracy cost (~0.01 R²).
-Banding can break positive-definiteness, which destabilises the sampler;
-`shrink` < 1 restores diagonal dominance (and is why the tightest band stays
-accurate). At these block sizes (k=500) the time difference is minor — the win is
-memory; the speed win grows with bandwidth.
+On realistic LD the two sparsification knobs behave very differently. **Magnitude
+thresholding barely compresses** — real LD has few genuinely-zero entries, so even
+a 1e-2 cutoff keeps ~96% of the block (vs ~52% on idealized AR(1)) — but it is
+lossless (R² 0.978). **Distance banding compresses hard** (a 50-SNP band keeps
+~19%, a shrunk 25-SNP band ~10%) **but is lossy on realistic LD**: it discards
+real long-range structure, dropping R² from 0.978 to **0.78 / 0.74**. (`shrink` < 1
+restores the positive-definiteness banding breaks, but cannot recover the lost
+signal.)
 
-> **This table is AR(1) LD, which is genuinely banded.** On *realistic* LD,
-> distance banding is **lossy** (it discards real long-range structure) — see the
-> next section, where low-rank LD is the right memory tool instead.
+> **The lesson on realistic LD:** thresholding is free but barely helps, and
+> banding helps but is lossy. The right memory tool for realistic LD is **low-rank**
+> `LowRankLD`, which compresses ~5× at no accuracy cost — see the next section.
+> (On genuinely-banded AR(1) LD, by contrast, distance banding is nearly free.)
 
 ## LD representations at scale: memory vs running time
 
@@ -465,16 +502,16 @@ eigendecomposition), per-fit time, and genetic R². Regenerate with
 
 | representation | LD memory | build (s) | fit (s) | R² |
 |----------------|----------:|----------:|--------:|---:|
-| dense | 80 MB | 3.1 | **0.18** | 0.987 |
-| band w200 | 30 MB | 3.2 | 1.9 | 0.758 |
-| **low-rank 99.5%** | **16 MB** | 10.2 | 1.6 | **0.986** |
+| dense | 80 MB | 2.1 | **0.09** | 0.987 |
+| band w200 | 30 MB | 2.2 | 0.9 | 0.757 |
+| **low-rank 99.5%** | **16 MB** | 8.2 | 0.8 | **0.986** |
 
 Two costs, and they are different in kind:
 
 * **Build (the eigendecomposition) is one-time and cached.** It is part of LD
   *construction*, not the fit — computed once, saved as the `U` factor (`--ld-out`,
   including the memmap `--ld-stream` cache) and reused across every later fit /
-  cohort via `--ld-cache`. So the 10.2 s amortises to ~0 per run, exactly as the
+  cohort via `--ld-cache`. So the 8.2 s amortises to ~0 per run, exactly as the
   dense LD's own `Z·Zᵀ` does; it should not be charged to a fit.
 * **The recurring cost is fit time.** Low-rank **cuts memory ~5× and matches
   dense accuracy (0.986 vs 0.987) but fits ~9× slower**, and that part does not
@@ -513,19 +550,21 @@ already fits dense (then dense is fastest).
 ## Optimal LD-block splitting
 
 `optimal_ld_blocks` (Privé 2022) places block boundaries in low-LD valleys
-instead of at fixed offsets. Here one region is built from unequal true
-sub-blocks `[137, 211, 89, 256, 170, 137]` (m=1000) so the fixed cuts land
-mid-block; both splits use the same `max_size=250`. Regenerate with
-`benchmarks/block_splitting.py`.
+instead of at fixed offsets. Here one contiguous region of **realistic coalescent
+LD** (m=3000) supplies genuine recombination valleys; both splits use the same
+`max_size=250`. Regenerate with `benchmarks/block_splitting.py`.
 
 | split | #blocks | discarded LD² | storage (Σk²) | R² |
 |-------|--------:|--------------:|--------------:|---:|
-| fixed | 4 | 116.9 | 250,000 | 0.903 |
-| optimal | 5 | **111.3** | **211,235** | **0.912** |
+| fixed | 12 | 30,722 | 750,000 | **0.815** |
+| optimal | 13 | **30,487** | **717,789** | 0.813 |
 
-Putting boundaries in the valleys discards **less true between-block LD**, needs
-**~16% less** per-block storage, and predicts slightly better — all from cutting
-where the LD is already weak rather than through the middle of a haplotype block.
+On realistic LD the gain is **modest**: putting boundaries in the recombination
+valleys discards slightly less true between-block LD and needs **~4% less**
+per-block storage, at essentially equal accuracy (0.813 vs 0.815). Unlike the
+engineered, hard-edged blocks of an AR(1) toy, real LD decays smoothly with no
+deep valleys to exploit — so optimal splitting is a small, safe win here, not a
+large one.
 
 ## Numba JIT speed-up
 
@@ -537,27 +576,30 @@ toggles `NUMBA_DISABLE_JIT` in a subprocess). Regenerate with
 
 | mode | fit time (s) |
 |------|-------------:|
-| pure Python | 3.70 |
+| pure Python | 19.24 |
 | Numba JIT | 0.03 |
 
-A **~130×** speed-up (machine-dependent) — this is why `pip install numba` is
-strongly recommended. Without it everything still runs, just far slower.
+A **large** speed-up (here ~680×; strongly machine-dependent — the pure-Python
+inner loop is especially slow on this laptop's CPython) — this is why
+`pip install numba` is strongly recommended. Without it everything still runs,
+just far slower.
 
 ## Multi-core scaling (`--ncores`)
 
 The packed auto sampler parallelises its per-sweep block loop with Numba
 `prange`. Parallel speed-up and efficiency of one fixed kernel (m=20,000 = 40×500
-blocks, burn-in 100 / 200 sweeps, 4-CPU box). Regenerate with
+blocks, burn-in 100 / 200 sweeps, Apple-Silicon laptop). Regenerate with
 `benchmarks/cores_scaling.py`.
 
 | ncores | fit (s) | speed-up | efficiency |
 |-------:|--------:|---------:|-----------:|
-| 1 | 5.29 | 1.00× | 100% |
-| 2 | 2.48 | 2.13× | 107% |
-| 4 | 1.36 | 3.88× | 97% |
+| 1 | 2.37 | 1.00× | 100% |
+| 2 | 1.43 | 1.65× | 83% |
+| 4 | 0.78 | 3.04× | 76% |
 
-Near-linear scaling (~97% efficiency on 4 cores) when there is enough per-block
-work. Note `--ncores 1` uses the low-memory *streaming* sampler while
+Solid scaling (~3× on 4 cores, ~76% efficiency) when there is enough per-block
+work; efficiency is hardware-dependent (memory bandwidth and core contention vary
+by machine). Note `--ncores 1` uses the low-memory *streaming* sampler while
 `--ncores > 1` switches to this packed parallel kernel (more memory, parallel
 sweeps); for small problems the single-core streaming path can already be fast
 enough that the packed kernel's setup isn't worth it.

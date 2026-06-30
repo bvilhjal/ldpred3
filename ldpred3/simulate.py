@@ -310,8 +310,9 @@ def run_one(n_train, h2, p, *, m=1000, block_size=100, n_test=2000,
 
 
 def _peak_mem_gb():
-    """Peak resident set size of this process, in GB (Linux ru_maxrss is KB)."""
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 ** 2)
+    """Peak resident set size of this process, in GB (Linux ru_maxrss is KB, macOS bytes)."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss / (1024.0 ** 3) if sys.platform == "darwin" else rss / (1024.0 ** 2)
 
 
 def _warmup():

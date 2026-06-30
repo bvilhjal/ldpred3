@@ -106,7 +106,8 @@ fit("auto")  # warm JIT (not timed)
 out={}; betas={}
 for m in ("inf","grid","auto"):
     t0=time.perf_counter(); be=fit(m); out[m]=time.perf_counter()-t0; betas[m]=np.asarray(be)
-mem=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e6  # KB->GB
+_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+mem=_rss/1e9 if sys.platform=="darwin" else _rss/1e6  # macOS bytes / Linux KB -> GB
 np.savez(os.path.join(%r,"ld_betas.npz"), **betas)
 print("RESULT "+json.dumps({"time":out,"mem_gb":mem}))
 """
@@ -129,7 +130,9 @@ def run_ldpred3(blocks, bhat):
 
 def run_bigsnpr(beta, blocks):
     env = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1")
-    cmd = ["/usr/bin/time", "-v", RSCRIPT, os.path.join(HERE, "bench_bigsnpr_blocks.R"),
+    # GNU time (-v, KB) on Linux; BSD time (-l, bytes) on macOS.
+    time_flag = "-l" if sys.platform == "darwin" else "-v"
+    cmd = ["/usr/bin/time", time_flag, RSCRIPT, os.path.join(HERE, "bench_bigsnpr_blocks.R"),
            str(H2), str(P), str(BURN_IN), str(NUM_ITER), WORK]
     r = subprocess.run(cmd, env=env, capture_output=True, text=True)
     if r.returncode != 0:
@@ -138,8 +141,10 @@ def run_bigsnpr(beta, blocks):
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("TIME "):
             _, m, t = line.split(); times[m] = float(t)
-        if "Maximum resident set size" in line:
-            mem_gb = float(line.rsplit(" ", 1)[1]) / 1e6   # KB -> GB
+        if "Maximum resident set size" in line:           # GNU: "...: <KB>"
+            mem_gb = float(line.rsplit(" ", 1)[1]) / 1e6
+        elif "maximum resident set size" in line:         # BSD/macOS: "<bytes>  maximum ..."
+            mem_gb = float(line.split()[0]) / 1e9
     rb = np.genfromtxt(os.path.join(WORK, "r_betas.csv"), delimiter=",", names=True)
     betas = {m: np.asarray(rb[m], float) for m in ("inf", "grid", "auto")}
     return {"time": times, "mem_gb": mem_gb}, betas

@@ -134,26 +134,27 @@ N₁=50000, N₂=20000, 5 reps; Numba warmed up). `benchmarks/inference_benchmar
 
 | quantity | method | estimate (truth) | time / run |
 |----------|--------|-----------------:|-----------:|
-| h² = 0.50 | marginal — no LD | 9.60 ± 1.01 | **0.0001 s** |
-| h² = 0.50 | LDSC (`ldsc_h2`) | 0.65 ± 0.16 | 0.03 s |
-| h² = 0.50 | LDpred3-auto (`ldpred3_auto_infer`) | 0.54 ± 0.01 | 4.8 s |
-| r_g = 0.60 | marginal — no LD | 0.62 ± 0.10 | **0.0001 s** |
-| r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.57 ± 0.17 | 0.07 s |
-| r_g = 0.60 | bivariate LDpred3 (`ldpred3_auto_bivariate`) | 0.63 ± 0.08 | 0.4 s |
+| h² = 0.50 | marginal — no LD | 8.52 ± 0.44 | **0.0001 s** |
+| h² = 0.50 | LDSC (`ldsc_h2`) | 0.58 ± 0.13 | 0.03 s |
+| h² = 0.50 | LDpred3-auto (`ldpred3_auto_infer`) | 0.52 ± 0.01 | 1.7 s |
+| r_g = 0.60 | marginal — no LD | 0.58 ± 0.12 | **0.0001 s** |
+| r_g = 0.60 | bivariate LDSC (`ldsc_rg`) | 0.61 ± 0.15 | 0.06 s |
+| r_g = 0.60 | bivariate LDpred3 (`ldpred3_auto_bivariate`) | 0.58 ± 0.11 | 0.2 s |
 
 ("marginal — no LD" is the naive moment estimator that assumes SNPs are
 independent, `h² = (mean χ² − 1)·M/N` and the analogous `r_g`; essentially free.)
 
-- **For h², the LD adjustment is the whole game.** The no-LD estimate is ~19×
-  too large (9.6 vs 0.5) because LD makes every causal variant's signal show up
+- **For h², the LD adjustment is the whole game.** The no-LD estimate is ~17×
+  too large (8.5 vs 0.5) because LD makes every causal variant's signal show up
   in its correlated neighbours, which the naive sum double-counts. LDSC (the LD
   scores) removes this for ~0.03 s; LDpred3-auto refines the point estimate
   further at a real time cost.
-- **For r_g, LD matters far less.** The no-LD estimate (0.62 ± 0.10) is already
-  good — even tighter than LDSC — because LD inflates the cross-covariance and
+- **For r_g, LD matters far less.** The no-LD estimate (0.58 ± 0.12) is already
+  good — about as tight as LDSC — because LD inflates the cross-covariance and
   both heritabilities *proportionally* and largely cancels in the ratio. So a
   fast marginal r_g is a reasonable first pass, where a marginal h² is useless.
-- **The LDpred3 estimators are the most precise** (≈5–15× smaller SD than LDSC)
+- **The LDpred3 estimators are the most precise** (several-fold smaller SD than
+  LDSC — up to ~13× for h²; the r_g gap is smaller)
   at a time cost: in this timing both run many MCMC chains, so they are slower
   than the moment regressions. (The h² timing above used the dense path; passing
   per-block LD makes `ldpred3_auto_infer` **stream** like the bivariate sampler,
@@ -172,14 +173,14 @@ The dense path is `O(m²)` per sweep; the streaming (blocks) path is
 
 | m | dense (s) | streaming (s) | speed-up |
 |------:|----------:|--------------:|---------:|
-| 2000  | 0.50 | 0.18 | 2.8× |
-| 4000  | 2.00 | 0.32 | 6.2× |
-| 8000  | 6.14 | 0.54 | 11.5× |
-| 16000 | 21.75 | 1.15 | **19×** |
+| 2000  | 0.29 | 0.11 | 2.6× |
+| 4000  | 0.62 | 0.17 | 3.7× |
+| 8000  | 1.91 | 0.30 | 6.4× |
+| 16000 | 8.33 | 0.57 | **14.6×** |
 
 Dense roughly **quadruples per doubling** of `m` (quadratic); streaming roughly
-**doubles** (linear). The two agree on h² (≈0.52–0.57 here). By 16k SNPs dense is
-already 22 s and a dense genome-wide matrix is infeasible (memory and time),
+**doubles** (linear). The two agree on h² (≈0.52–0.55 here). By 16k SNPs dense is
+already 8 s and a dense genome-wide matrix is infeasible (memory and time),
 whereas streaming stays linear — so prefer the blocks form (which the pipeline's
 `--infer` now uses by default) at any non-trivial size.
 
