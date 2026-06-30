@@ -1,19 +1,24 @@
 # Benchmarks
 
 All benchmarks are single-core unless noted. Regenerate the bigsnpr comparison
-with `benchmarks/plot_methods_1core.py` (data in
-`benchmarks/cores_1core_benchmark.csv`, R side in
-`benchmarks/bench_bigsnpr_blocks.R`).
+with `benchmarks/bench_vs_bigsnpr.py` (the from-scratch driver: shared
+simulation → both tools → `benchmarks/cores_1core_benchmark.csv`; R side in
+`benchmarks/bench_bigsnpr_blocks.R`; plot with `benchmarks/plot_methods_1core.py`).
 
 ## vs bigsnpr (realistic LD, 200k–2M SNPs, single core)
 
 The benchmark uses **realistic LD** — each block is a `k`-SNP correlation matrix
 from a coalescent-with-recombination simulation (msprime: haplotype plateaus,
 recombination valleys, a heavy decay tail and perfect-LD duplicates), not
-idealized AR(1). Every method runs on a **single core** for both tools (NumPy
-BLAS and R BLAS pinned to one thread); bigsnpr's on-disk SFBM is assembled
-**incrementally** block-by-block (`as_SFBM` + `$add_columns()`, as in the
-LDpred2 vignette) so the full correlation never sits in RAM.
+idealized AR(1). Both tools see the **same** simulation, sumstats and
+hyper-parameters at each size (h²=0.5, p=0.01, N=50,000, burn-in 100 / 200
+iterations); each runs on a **single core** (NumPy BLAS and R BLAS pinned to one
+thread); bigsnpr's on-disk SFBM is assembled **incrementally** block-by-block
+(`as_SFBM` + `$add_columns()`, as in the LDpred2 vignette) so the full
+correlation never sits in RAM. To be apples-to-apples, **both** `auto` runs are
+warm-started at the oracle hyper-parameters (LDpred3 `h2_init`/`p_init`,
+bigsnpr `h2_init`/`vec_p_init`) — otherwise bigsnpr's auto gets the truth while
+LDpred3's cold-starts and under-converges at scale.
 
 ![1-core method comparison vs bigsnpr](../benchmarks/cores_1core_benchmark.png)
 
@@ -21,32 +26,35 @@ Wall-clock time (s), single core:
 
 | #SNPs | inf py / big | grid py / big | auto py / big |
 |-------|-------------:|--------------:|--------------:|
-| 200k  | **3.1** / 5.0 | 3.4 / **1.5** | **1.8** / 2.5 |
-| 500k  | **5.2** / 8.9 | 8.1 / **3.5** | **4.2** / 6.2 |
-| 1M    | **10.4** / 13.3 | 16.0 / **6.9** | **9.1** / 12.4 |
-| 2M    | 20.7 / **18.2** | 32.0 / **13.9** | **21.7** / 25.0 |
+| 200k  | **2.7** / 3.0 | 5.6 / **2.6** | **2.6** / 3.9 |
+| 500k  | **4.9** / 6.1 | 13.9 / **7.5** | **7.1** / 11.3 |
+| 1M    | 9.8 / **8.7** | 27.7 / **15.2** | **14.1** / 21.8 |
+| 2M    | 19.7 / **15.2** | 55.2 / **31.0** | **28.0** / 44.5 |
 
 Peak memory (GB) — LD-dominated, so ~equal across the three methods:
 
-| #SNPs | LDpred3 | bigsnpr |
-|-------|----------:|--------:|
-| 200k  | **0.73** | 1.06 |
-| 500k  | **1.33** | 2.24 |
-| 1M    | **2.31** | 4.24 |
-| 2M    | **4.28** | 8.24 |
+| #SNPs | LDpred3 | bigsnpr | ratio |
+|-------|----------:|--------:|------:|
+| 200k  | **0.60** | 1.05 | 1.8× |
+| 500k  | **1.20** | 2.29 | 1.9× |
+| 1M    | **2.23** | 4.39 | 2.0× |
+| 2M    | **4.28** | 8.57 | 2.0× |
 
-**Prediction accuracy is identical** between the two at every size and method
-(e.g. auto R²_pheno 0.493/0.492 at 200k → 0.421/0.421 at 2M; h²=0.5).
+**Prediction accuracy is identical** between the two at every size and method —
+e.g. auto phenotype-scale R² 0.388/0.388 at 200k → 0.103/0.102 at 2M (the level
+falls with #SNPs because the GWAS power N is fixed; R²_pheno = genetic-R² × h²,
+h²=0.5).
 
 The picture is method-dependent — there is no blanket "N× faster":
 
-- **Memory:** LDpred3 is **~2× leaner** everywhere (`float32` LD + one block
-  resident; bigsnpr's SFBM stores `float64` values plus per-entry indices).
-- **`-auto`:** LDpred3 is **~1.1–1.4× faster** — its streaming global-hyper
-  sampler is the strongest path.
-- **`-inf`:** roughly on par — LDpred3 faster up to 1M, bigsnpr slightly faster
-  at 2M.
-- **`-grid`:** **bigsnpr is ~2× faster** here; its compiled C++ grid sampler
+- **Memory:** LDpred3 is **~2× leaner**, the gap widening from 1.8× at 200k to a
+  clean 2.0× at 2M (`float32` LD + one block resident; bigsnpr's SFBM stores
+  `float64` values plus per-entry indices).
+- **`-auto`:** LDpred3 is **~1.5–1.6× faster** at matched initialization — its
+  streaming global-hyper sampler is the strongest path.
+- **`-inf`:** roughly on par — LDpred3 faster up to 500k, bigsnpr faster at
+  1–2M (its compiled solve scales a little better on the largest blocks).
+- **`-grid`:** **bigsnpr is ~1.8–2× faster** here; its compiled C++ grid sampler
   beats LDpred3's per-block Python-orchestrated one. This is LDpred3's weak
   spot at fixed hyper-parameters.
 
@@ -55,7 +63,7 @@ The picture is method-dependent — there is no blanket "N× faster":
 Beyond the per-block accuracy check above, the **whole pipeline** was validated
 against bigsnpr: the same simulated PLINK target + GWAS sumstats + in-sample LD
 were run through LDpred3's complete pipeline (QC → harmonise → per-block LD →
-`-auto` → scoring) and through bigsnpr's `snp_ldpred3_auto`, and the
+`-auto` → scoring) and through bigsnpr's `snp_ldpred2_auto`, and the
 per-individual polygenic scores compared.
 
 | metric | result |

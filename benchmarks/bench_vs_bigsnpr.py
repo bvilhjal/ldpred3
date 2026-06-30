@@ -87,8 +87,14 @@ from ldpred3 import ldpred3_by_blocks
 d = np.load(os.path.join(%r, "ld_blocks.npz"))
 nb = int(d["nb"]); K = int(d["K"]); H2 = float(d["h2"]); P = float(d["p"])
 N = float(d["n"]); BURN = int(d["burn"]); IT = int(d["it"])
-lib = d["lib"]
-blocks = [(lib[b], np.arange(b*K,(b+1)*K)) for b in range(nb)]  # float32 views, no copy
+# Rebuild the LD in-process from the small library (no multi-GB serialization
+# round-trip), so peak RSS reflects LDpred3's real float32 LD footprint.
+src = np.load(str(d["libpath"]))["R"].astype(np.float32)   # ~100 blocks
+full = np.empty((nb, K, K), np.float32)
+for b in range(nb):
+    full[b] = src[b %% src.shape[0]]
+del src
+blocks = [(full[b], np.arange(b*K,(b+1)*K)) for b in range(nb)]
 bhat = d["bhat"]; n = np.full(nb*K, N)
 def fit(m):
     if m=="inf":  return ldpred3_by_blocks(blocks,bhat,n,method="inf",h2=H2)
@@ -107,9 +113,9 @@ print("RESULT "+json.dumps({"time":out,"mem_gb":mem}))
 
 
 def run_ldpred3(blocks, bhat):
-    lib = np.stack([b for b in blocks]).astype(np.float32)
-    np.savez(os.path.join(WORK, "ld_blocks.npz"), lib=lib, nb=len(blocks), K=K,
-             h2=H2, p=P, n=float(N), burn=BURN_IN, it=NUM_ITER, bhat=bhat)
+    np.savez(os.path.join(WORK, "ld_blocks.npz"), nb=len(blocks), K=K,
+             h2=H2, p=P, n=float(N), burn=BURN_IN, it=NUM_ITER, bhat=bhat,
+             libpath=LIBPATH)
     env = dict(os.environ, NUMBA_NUM_THREADS="1", OMP_NUM_THREADS="1",
                OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1", NUMEXPR_NUM_THREADS="1")
     code = LDPRED3_WORKER % (ROOT, WORK, WORK)
