@@ -203,6 +203,45 @@ annotations raise `theta_every` to amortise it. (Persisting the running `R@β`
 residual across chunks — rather than rebuilding it each θ-update — keeps the
 default cheap; without it `annot` was ~3× `auto` instead of ~1.7×.)
 
+## MAF-dependent effect-size prior (`alpha`)
+
+The standard point-normal prior gives every variant the same *standardised*
+effect variance — i.e. per-allele effect variance `∝ 1/[2f(1-f)]`, the `alpha =
+-1` special case. The `--alpha` knob relaxes this, scaling each variant's slab
+variance by `[2f(1-f)]^(1+alpha)` (the LDpred2-auto `alpha`/`use_MLE` prior of
+Privé et al. 2023). Does matching it to a real effect–frequency coupling help?
+
+This simulates a realistic genome (coalescent LD + genuine allele frequencies,
+m=10,000), draws causal **standardised** effects with variance
+`∝ [2f(1-f)]^(1+alpha_true)`, and fits `auto` (per-block, so the *only* thing
+that changes across a row is the prior `alpha`) over a grid of prior `alpha`.
+Genetic R² at the **low-power** N=5,000 (where the prior shape matters; h²=0.5,
+p=0.1, 8 reps). Regenerate with `benchmarks/maf_alpha_prior.py`.
+
+| true `alpha` | fit −1.0 | fit −0.75 | fit −0.5 | fit −0.25 | fit 0.0 | best |
+|--------------|---------:|----------:|---------:|----------:|--------:|-----:|
+| −1.0 (standard) | **0.680** | 0.670 | 0.657 | 0.641 | 0.626 | −1.0 |
+| −0.5            | 0.714 | **0.717** | 0.715 | 0.710 | 0.704 | −0.75 |
+|  0.0            | 0.740 | 0.747 | 0.751 | **0.752** | **0.752** | −0.25 |
+
+Takeaways:
+
+- **The best-fit `alpha` tracks the truth.** Each row peaks at (or next to) its
+  own `alpha_true` and falls off monotonically away from it — the prior is doing
+  exactly what it claims, reallocating slab variance across the frequency
+  spectrum.
+- **The default (`alpha = -1`) is safe.** When the data really follow the
+  standard model (top row) the default is the single best choice, and a
+  *mis-set* positive `alpha` there is the worst cell in the table (0.680 →
+  0.626). So the bit-for-bit-unchanged default costs nothing when you have no
+  reason to move it.
+- **The gain from matching is real but modest** (~0.01–0.02 genetic R² here),
+  in line with Privé et al.'s real-data findings: it is a refinement, not a
+  first-order win like the LD adjustment or the spike-and-slab. Privé's
+  `use_MLE` selects `alpha` by the model's own likelihood; here it is a user
+  knob (`--alpha`), so set it from external knowledge of the trait's
+  architecture (or leave it at `-1`).
+
 ## Methods: accuracy vs scalability
 
 The architecture table above fixes the genome at m=50,000; this sweeps **every
