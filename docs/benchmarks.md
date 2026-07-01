@@ -252,33 +252,50 @@ method on the same realistic-LD genome from 50k to 1M SNPs at once**, reporting
 accuracy *and* cost together. One sparse architecture (h²=0.5, p=0.01), GWAS
 N=50,000 held fixed (so power dilutes as variants multiply), realistic coalescent
 LD, single core; `grid` gets the oracle `(h²,p)`, `auto` self-tunes, `annot` gets
-one uninformative annotation. Each size runs in its own process for a clean peak
-RSS. Regenerate with `benchmarks/method_scaling.py`.
+one uninformative annotation, and `lassosum2` is the L1 / pseudo-validation
+predictor. Each size runs in its own process for a clean peak RSS. Regenerate
+with `benchmarks/method_scaling.py`.
+
+> **Hardware.** This table (and the [genome-scale](#genome-scale-scalability-200k4m-snps)
+> one below) was **re-measured on a 4-core Linux Xeon @2.8 GHz / 15 GB**; the
+> earlier tables in this file that pair against bigsnpr stay on the 16 GB
+> Apple-Silicon laptop. Absolute *timings* are not comparable across the two
+> machines (this Xeon is ~1.5–2.5× slower), but genetic R² and the `float32` LD
+> memory are hardware-independent — and both **reproduce the earlier numbers**,
+> confirming the internal refactors (the shared `_pn_step` sampler core, the new
+> methods) changed neither accuracy nor footprint.
 
 ![Methods: accuracy, time and memory vs genome size](../benchmarks/method_scaling.png)
 
 Genetic R² by method (accuracy falls with #SNPs because N is fixed):
 
-| #SNPs | marginal | inf | grid | auto | annot |
-|-------|---------:|----:|-----:|-----:|------:|
-| 50k   | 0.277 | 0.396 | 0.471 | **0.471** | 0.472 |
-| 100k  | 0.272 | 0.348 | 0.439 | 0.441 | 0.441 |
-| 200k  | 0.240 | 0.290 | 0.396 | 0.395 | 0.395 |
-| 500k  | 0.186 | 0.200 | **0.284** | 0.284 | 0.283 |
-| 1M    | 0.130 | 0.135 | **0.190** | 0.154 | 0.155 |
+| #SNPs | marginal | inf | grid | auto | annot | lassosum2 |
+|-------|---------:|----:|-----:|-----:|------:|----------:|
+| 50k   | 0.277 | 0.396 | 0.470 | **0.472** | 0.471 | 0.400 |
+| 100k  | 0.272 | 0.348 | 0.440 | **0.441** | 0.440 | 0.322 |
+| 200k  | 0.240 | 0.290 | **0.396** | 0.395 | 0.395 | 0.244 |
+| 500k  | 0.186 | 0.200 | **0.284** | 0.284 | 0.284 | 0.127 |
+| 1M    | 0.130 | 0.135 | **0.190** | 0.154 | 0.155 | 0.075 |
 
-Fit time (s), single core:
+Fit time (s), single core (Linux Xeon):
 
-| #SNPs | inf | grid | auto | annot |
-|-------|----:|-----:|-----:|------:|
-| 50k   | 0.3 | 0.6 | 0.4 | 1.3 |
-| 200k  | 1.1 | 2.4 | 1.7 | 5.5 |
-| 500k  | 2.6 | 5.9 | 5.7 | 15.1 |
-| 1M    | 5.3 | 11.9 | 20.8 | 39.8 |
+| #SNPs | inf | grid | auto | annot | lassosum2 |
+|-------|----:|-----:|-----:|------:|----------:|
+| 50k   | 0.6 | 1.6 | 0.8 | 2.6 | 2.5 |
+| 100k  | 1.1 | 3.3 | 1.6 | 6.0 | 6.8 |
+| 200k  | 2.1 | 6.3 | 3.3 | 11.9 | 13.8 |
+| 500k  | 5.2 | 15.6 | 10.7 | 33.1 | 41.0 |
+| 1M    | 10.2 | 31.0 | 34.7 | 77.4 | 79.7 |
 
-Peak memory is **LD-dominated and method-independent** — 0.48 GB at 50k →
-**2.9 GB at 1M**, ~linear in #SNPs (the `float32` block-diagonal LD), the same for
-every method (the sampler state is O(m) and negligible beside the LD).
+Peak memory is **LD-dominated** — the resident `float32` block-diagonal LD is
+~2.2 GB at 1M and grows ~linearly (the clean, contiguous measurement is in the
+[genome-scale table](#genome-scale-scalability-200k4m-snps)). The peak RSS this
+per-size worker reports runs somewhat higher (0.56 GB at 50k → 6.2 GB at 1M)
+because it holds the LD as a Python *list* of 2,000 separate block arrays and
+`lassosum2` allocates coordinate-descent temporaries — churn that the Linux
+glibc allocator retains rather than returns to the OS. The sampler *state* is
+O(m) and negligible beside the LD, so accuracy aside the methods are
+memory-equivalent.
 
 Takeaways:
 
@@ -291,6 +308,14 @@ Takeaways:
   more iterations / chains (or warm-start the hyper-parameters) to recover the
   oracle-`grid` accuracy — this is the same convergence effect as the
   [cold-start table](#auto-from-a-cold-start-no-oracle-hyper-parameters).
+- **`lassosum2` is competitive at 50k (0.400) but falls behind the Bayesian
+  methods as the genome grows** (0.075 vs `grid` 0.190 at 1M) *on this clean,
+  well-specified simulation* — the L1 penalty is a blunter instrument than the
+  spike-and-slab when the model is correct and power dilutes. Its value is
+  complementarity and robustness on real data (misspecified LD, heavier-tailed
+  effects), which is why the bigsnpr workflow keeps whichever of `auto` /
+  `lassosum2` pseudo-validates better rather than trusting one blindly. It costs
+  ~2–4× `auto` (a full (s, λ) grid of coordinate-descent sweeps).
 - **`annot` tracks `auto`** when the annotation is uninformative, at **~2–3× the
   time** (the logistic θ-update) — the cost is worth it only when the annotation
   carries signal (see the architecture table).
@@ -396,32 +421,37 @@ motivates the banded / sparse-LD backend (see [algorithm.md](algorithm.md)).
 
 ### Genome-scale scalability (200k–4M SNPs)
 
-How far does LDpred3 scale on a commodity laptop? This pushes the **fitting**
+How far does LDpred3 scale on a commodity machine? This pushes the **fitting**
 step alone (LD already constructed, the realistic-LD library cycled to the target
-size, single core, 16 GB Apple-Silicon) from 200k up to **4M SNPs** — past a fully
-imputed genome. Regenerate with `benchmarks/bench_ldpred3_scaling.py`.
+size, single core) from 200k up to **4M SNPs** — past a fully imputed genome.
+Re-measured here on the **4-core Linux Xeon @2.8 GHz / 15 GB** (see the hardware
+note [above](#methods-accuracy-vs-scalability)); regenerate with
+`benchmarks/bench_ldpred3_scaling.py`.
 
 ![LDpred3 scalability to 4M SNPs](../benchmarks/ldpred3_scaling.png)
 
 | #SNPs | peak RAM | inf (s) | grid (s) | auto (s) | auto R² |
 |-------|---------:|--------:|---------:|---------:|--------:|
-| 200k  | 0.80 GB | 1.2 | 2.4 | 1.5 | 0.395 |
-| 500k  | 1.46 GB | 3.0 | 5.8 | 3.6 | 0.284 |
-| 1M    | 2.41 GB | 5.9 | 12.0 | 8.1 | 0.190 |
-| 2M    | 4.46 GB | 12.0 | 24.1 | 15.6 | 0.103 |
-| 3M    | 6.43 GB | 19.0 | 37.8 | 25.6 | 0.069 |
-| 4M    | 8.52 GB | 28.6 | 50.1 | 42.8 | 0.052 |
+| 200k  | 0.60 GB | 2.8 | 6.6 | 3.2 | 0.395 |
+| 500k  | 1.19 GB | 5.3 | 15.9 | 7.7 | 0.284 |
+| 1M    | 2.21 GB | 10.5 | 30.9 | 16.4 | 0.190 |
+| 2M    | 4.26 GB | 21.2 | 62.0 | 32.3 | 0.103 |
+| 3M    | 6.31 GB | 31.3 | 93.8 | 47.3 | 0.069 |
+| 4M    | 8.36 GB | 41.9 | 125.8 | 62.3 | 0.052 |
 
-Both axes are **linear in #SNPs**. Fit time runs ~8–10 µs/SNP (4M `auto` in well
-under a minute; `grid` ~50 s). Peak memory grows at **~2.1 GB per million SNPs** —
-the `float32` dense LD held resident during the fit — so **4M fits in 8.5 GB**, and
-the practical dense-in-RAM ceiling on a 16 GB machine is **~6–7M SNPs**. (The auto
-R² falls with #SNPs only because GWAS power N=50,000 is held fixed while variants
-multiply — it is not a scaling limit.)
+Both axes are **linear in #SNPs**, and the **auto R² is bit-for-bit the same as
+the earlier Apple-Silicon run** at every size (0.395 → 0.052) — the refactors
+left the fit unchanged. Fit time runs ~15 µs/SNP for `auto` on this Xeon (4M in
+~1 minute; `grid` ~2 min), a constant factor above the faster laptop. Peak memory
+grows at **~2.1 GB per million SNPs** — the `float32` dense LD held resident
+during the fit — so **4M fits in 8.4 GB**, and the practical dense-in-RAM ceiling
+on a 16 GB machine is **~6–7M SNPs**. (The auto R² falls with #SNPs only because
+GWAS power N=50,000 is held fixed while variants multiply — it is not a scaling
+limit.)
 
 The contrast with bigsnpr is the headline: bigsnpr's `float64` on-disk SFBM
-already thrashed at 2M on this 16 GB machine, whereas LDpred3's `float32` LD sails
-to 4M. And to go **past** the dense-RAM ceiling, the low-rank / on-disk
+already thrashed at 2M on the 16 GB laptop, whereas LDpred3's `float32` LD sails
+to 4M in 8.4 GB. And to go **past** the dense-RAM ceiling, the low-rank / on-disk
 `--ld-stream` backend keeps resident memory at O(one block) regardless of genome
 size (see [LD representations at scale](#ld-representations-at-scale-memory-vs-running-time)) —
 so LDpred3 is not capped at 6–7M; that is just the dense-in-RAM limit.
