@@ -84,6 +84,48 @@ def test_laplace_by_blocks_and_guards():
         ldpred3_by_blocks(sp, beta_hat[idx0], n[idx0], method="laplace")
 
 
+def test_laplace_plugin_is_the_default():
+    # lambda is now a plug-in from h2 by default (stable); the EM self-tuning is
+    # opt-in via sample_lambda=True and must actually change the fit.
+    blocks, R, beta, beta_hat = _sim(seed=5)
+    default = _fit_blocks(blocks, beta_hat, 10000, burn_in=60, num_iter=150, seed=3)
+    plugin = _fit_blocks(blocks, beta_hat, 10000, burn_in=60, num_iter=150, seed=3,
+                         sample_lambda=False)
+    em = _fit_blocks(blocks, beta_hat, 10000, burn_in=60, num_iter=150, seed=3,
+                     sample_lambda=True)
+    np.testing.assert_array_equal(default, plugin)       # default == plug-in
+    assert not np.array_equal(default, em)               # EM is a different path
+
+
+def test_laplace_by_blocks_estimates_h2_and_stays_bounded():
+    # With no h2 given, ldpred3_by_blocks(method="laplace") seeds lambda from a
+    # global LD-Score-regression h2. Even at low power the fit must recover signal
+    # and its genetic variance must stay bounded (the EM's low-SNR overfit — a
+    # runaway genetic variance — is what this replaced).
+    rng = np.random.default_rng(0)
+    m, nblk, N = 2000, 10, 400                # N/M = 0.2 (low power)
+    k = m // nblk
+    i = np.arange(k)
+    Rb = 0.6 ** np.abs(i[:, None] - i[None, :])
+    blocks, R = [], np.zeros((m, m))
+    for b in range(nblk):
+        blocks.append((Rb.astype(np.float32), np.arange(b * k, (b + 1) * k)))
+        R[b * k:(b + 1) * k, b * k:(b + 1) * k] = Rb
+    causal = rng.random(m) < 0.02
+    beta = np.zeros(m); beta[causal] = rng.normal(0, 1, causal.sum())
+    beta *= np.sqrt(0.5 / (beta @ (R @ beta)))
+    L = np.linalg.cholesky(R + 1e-6 * np.eye(m))
+    beta_hat = R @ beta + (L @ rng.standard_normal(m)) / np.sqrt(N)
+    n = np.full(m, float(N))
+
+    be = ldpred3_by_blocks(blocks, beta_hat, n, method="laplace",   # no h2 -> LDSC
+                           burn_in=80, num_iter=200, seed=1)
+    assert np.all(np.isfinite(be))
+    assert _genetic_corr(be, beta, R) > 0.35                       # recovers signal
+    gv_ratio = (be @ (R @ be)) / (beta @ (R @ beta))
+    assert 0.05 < gv_ratio < 1.6, f"genetic variance not sanely bounded: {gv_ratio:.2f}"
+
+
 def test_laplace_empty_block():
     out = ldpred3_laplace(np.zeros((0, 0)), np.zeros(0), 1000.0)
     assert out.shape == (0,)

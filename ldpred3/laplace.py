@@ -14,16 +14,15 @@ per-SNP latent scale ``τ_j²``,
 
 so the Gibbs sweep is the *same* Gaussian per-SNP conditional the point-normal
 sampler already uses (prior variance ``τ_j²`` in place of the slab), plus an
-Inverse-Gaussian draw for ``1/τ_j²`` (Michael, Schucany & Haas 1976).
-
-The global shrinkage ``λ`` self-tunes — no penalty grid, the "auto" analogue —
-by **marginal maximisation** (empirical Bayes / MCEM), ``λ² = 2k / Σ τ_j²``,
-which converges to the value matching the fitted total variance. This is *not*
-fully hierarchical Bayes: ``λ`` is a point estimate and the returned mean is
-conditional on it. (A conditional Gamma-Gibbs draw for ``λ`` — the textbook
-fully-Bayes step — was tried first and fails here: with the extra scale-mixture
-layer it drifts to the hyper-prior's mean independently of the data and
-systematically mis-shrinks. See ``docs/benchmarks.md``.)
+Inverse-Gaussian draw for ``1/τ_j²`` (Michael, Schucany & Haas 1976). The global
+shrinkage ``λ`` is a **plug-in** from the heritability (``λ = √(2k/h2)`` — the
+value matching the Laplace prior's total variance to ``h2``); genome-wide that
+``h2`` is estimated once by LD Score regression, robust across power. This
+replaced a per-sweep marginal-maximisation (empirical Bayes / MCEM) update
+``λ² = 2k / Σ τ_j²`` that self-tunes well at high power but overfits at low
+signal-to-noise (see ``sample_lambda`` and ``docs/benchmarks.md``); the fully
+hierarchical alternative (a conditional Gamma-Gibbs draw for ``λ``) drifts to the
+hyper-prior's mean independently of the data and was rejected first.
 
 Unlike the spike-and-slab there is no point mass at zero: the posterior mean is
 dense, with heavier-tailed (less uniform) shrinkage than the infinitesimal
@@ -113,7 +112,7 @@ _seed = _jit(_seed)
 
 
 def ldpred3_laplace(corr, beta_hat, n_eff, *, h2=0.1, burn_in=100, num_iter=400,
-                    seed=None, sample_lambda=True, lam=None):
+                    seed=None, sample_lambda=False, lam=None):
     """Fit the Bayesian-lasso (Laplace-prior) model to one dense LD block.
 
     Parameters
@@ -125,21 +124,25 @@ def ldpred3_laplace(corr, beta_hat, n_eff, *, h2=0.1, burn_in=100, num_iter=400,
     n_eff : array_like or float
         GWAS sample size (per variant or scalar).
     h2 : float, default 0.1
-        Heritability *of this block*. Sets the scale of ``λ`` (via
-        ``λ = √(2k/h2)``, the value that makes the Laplace prior's total variance
-        equal ``h2``): the initial value, and — when ``sample_lambda`` — the seed
-        the self-tuning refines.
+        Heritability *of this block*. Sets the **plug-in** ``λ = √(2k/h2)`` — the
+        value that makes the Laplace prior's total variance equal ``h2``. This is
+        the shrinkage scale, so it must be a sensible block heritability;
+        genome-wide, seed it from a global estimate (``ldpred3_by_blocks`` /
+        ``--method laplace`` derive it by LD Score regression — far more robust
+        than a per-block guess).
     burn_in, num_iter : int
         Discarded warm-up sweeps, then averaged sweeps.
     seed : int, optional
         RNG seed (reproducible fit).
-    sample_lambda : bool, default True
-        Self-tune the global shrinkage each sweep by the marginal-maximisation
-        (EM) update ``λ² = 2k / Σ τ_j²`` (Park & Casella 2008), which converges to
-        the value matching the fitted total variance. If False, ``λ`` is held at
-        ``lam`` (or its ``h2`` init). (A naïve Gamma-Gibbs update on ``λ`` is
-        *not* used: with a scale mixture it drifts to the hyper-prior's mean
-        independently of the data and systematically mis-shrinks.)
+    sample_lambda : bool, default False
+        If False (default), hold ``λ`` at the ``h2`` plug-in — the stable choice.
+        If True, self-tune ``λ`` each sweep by the marginal-maximisation (EM)
+        update ``λ² = 2k / Σ τ_j²`` (Park & Casella 2008). The EM has a
+        positive-feedback failure mode at **low signal-to-noise** (large genome,
+        fixed N): the fitted ``τ_j²`` inflate on noise, so ``Σ τ_j²`` grows,
+        ``λ`` shrinks, shrinkage weakens and the fit overfits further (its genetic
+        variance ran ~1.8× the truth at N/M≈0.1). The plug-in avoids this by
+        anchoring the total prior variance to ``h2`` regardless of the fit.
     lam : float, optional
         Fixed / initial Laplace rate. Defaults to ``√(2k/h2)``.
 
