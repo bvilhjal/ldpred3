@@ -1,7 +1,9 @@
 """lassosum2: penalised-regression PRS from summary statistics + LD.
 
-A complement to the Bayesian LDpred3 models (Mak et al. 2017; the lassosum2
-variant in bigsnpr, Privé et al.). It minimises, over the standardized joint
+A complement to the Bayesian LDpred3 models. The penalised-regression PRS on
+summary statistics is due to Mak et al. (*Genet Epidemiol* 2017, "lassosum");
+``lassosum2`` is the re-parameterisation shipped in ``bigsnpr`` alongside LDpred2
+(Privé et al., *Bioinformatics* 2020). It minimises, over the standardized joint
 effects ``β``::
 
     ½ βᵀ((1−s)R + sI)β  −  βᵀ r  +  λ‖β‖₁

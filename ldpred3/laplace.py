@@ -14,8 +14,16 @@ per-SNP latent scale ``τ_j²``,
 
 so the Gibbs sweep is the *same* Gaussian per-SNP conditional the point-normal
 sampler already uses (prior variance ``τ_j²`` in place of the slab), plus an
-Inverse-Gaussian draw for ``1/τ_j²`` and a conjugate Gamma draw for the global
-shrinkage ``λ²`` (so ``λ`` self-tunes, no penalty grid — the "auto" analogue).
+Inverse-Gaussian draw for ``1/τ_j²`` (Michael, Schucany & Haas 1976).
+
+The global shrinkage ``λ`` self-tunes — no penalty grid, the "auto" analogue —
+by **marginal maximisation** (empirical Bayes / MCEM), ``λ² = 2k / Σ τ_j²``,
+which converges to the value matching the fitted total variance. This is *not*
+fully hierarchical Bayes: ``λ`` is a point estimate and the returned mean is
+conditional on it. (A conditional Gamma-Gibbs draw for ``λ`` — the textbook
+fully-Bayes step — was tried first and fails here: with the extra scale-mixture
+layer it drifts to the hyper-prior's mean independently of the data and
+systematically mis-shrinks. See ``docs/benchmarks.md``.)
 
 Unlike the spike-and-slab there is no point mass at zero: the posterior mean is
 dense, with heavier-tailed (less uniform) shrinkage than the infinitesimal

@@ -1,19 +1,33 @@
 """
 A basic, self-contained Python implementation of LDpred3.
 
-LDpred2 (Privé, Arbel & Vilhjálmsson, *Bioinformatics* 2020) is a Bayesian
-polygenic-score method that re-weights GWAS marginal effect sizes using an LD
-(linkage-disequilibrium) correlation matrix. The original reference
-implementation ships with the R package ``bigsnpr``; this module ports the core
-algorithms to NumPy so they can be used and inspected from Python.
+LDpred re-weights GWAS marginal effect sizes using an LD (linkage-disequilibrium)
+correlation matrix to recover the *joint* effects that drive a polygenic score.
+The Bayesian point-normal model is due to Vilhjálmsson *et al.* (*AJHG* 2015);
+the faster, better-behaved grid / auto samplers used here are LDpred2 (Privé,
+Arbel & Vilhjálmsson, *Bioinformatics* 2020), whose reference implementation
+ships with the R package ``bigsnpr``. This module ports the core algorithms to
+NumPy so they can be used and inspected from Python. See
+``docs/algorithm.md`` (References) for the full bibliography.
 
-Three models are implemented here:
+Effect-size models implemented here:
 
-* ``ldpred3_inf``  -- the infinitesimal model (closed-form solution).
-* ``ldpred3_grid`` -- the point-normal / spike-and-slab model fitted with a
-  Gibbs sampler for fixed hyper-parameters ``(h2, p)``.
-* ``ldpred3_auto`` -- the same Gibbs sampler, but ``h2`` (SNP heritability) and
-  ``p`` (proportion of causal variants) are estimated on the fly.
+* ``ldpred3_inf``  -- infinitesimal (all variants causal, Gaussian prior); the
+  posterior mean is a closed-form ridge/BLUP solve (Vilhjálmsson 2015).
+* ``ldpred3_grid`` -- point-normal / spike-and-slab prior fitted with a Gibbs
+  sampler at fixed hyper-parameters ``(h2, p)`` (LDpred2, Privé 2020).
+* ``ldpred3_auto`` -- the same sampler, but ``h2`` (SNP heritability) and ``p``
+  (proportion of causal variants) are estimated on the fly, needing no
+  validation set (LDpred2-auto; the robust multi-chain estimator and the
+  disease-architecture inference are Privé *et al.* *AJHG* 2023).
+* ``ldpred3_laplace`` -- the Bayesian lasso: the posterior *mean* of a Laplace
+  prior (Park & Casella 2008), the Bayesian counterpart of ``lassosum2`` (in
+  ``lassosum.py``), which is that prior's *mode* (Mak *et al.* 2017).
+
+The prior can be further shaped per variant: ``prior_weights`` re-weights the
+*inclusion* probability from functional annotations (SBayesR/RC), and ``alpha``
+scales the slab *variance* by allele frequency (the ``use_MLE`` prior of
+LDpred2-auto; Speed *et al.* 2017, Zeng *et al.* 2018).
 
 Notation
 --------
@@ -24,6 +38,9 @@ relate to the true joint effects ``beta`` through the LD matrix ``R``::
     beta_hat = R @ beta + noise,   noise ~ N(0, R / N)
 
 where ``N`` is the GWAS sample size and ``R`` is the SNP correlation matrix.
+This is the LDpred2 sampling model; the per-SNP Gibbs conditional is exact
+under it (``R_jj = 1``), so the approximations are the choice of model, the
+reference-panel estimate of ``R``, and the block-diagonal split below.
 
 The functions operate on a single LD block (a dense correlation matrix). Real
 analyses run genome-wide by applying the model to each (approximately
@@ -129,9 +146,9 @@ def maf_slab_weights(af, alpha):
     """Per-SNP slab-variance weights for a MAF-dependent effect architecture.
 
     Scales the causal-effect variance by ``[2f(1−f)]^(1+α)`` (the MAF-coupling /
-    "S" / α parameter — Speed et al., Zeng et al., and the ``use_MLE`` extension of
-    LDpred2-auto, Privé et al. 2023), normalised to **mean 1** so the total ``h2``
-    budget is preserved. The default LDpred model is ``α = −1`` → ``[2f(1−f)]^0 = 1``
+    "S" / α parameter — Speed et al. 2017, Zeng et al. 2018, and the ``use_MLE``
+    extension of LDpred2-auto, Privé et al. 2023), normalised to **mean 1** so the
+    total ``h2`` budget is preserved. The default LDpred model is ``α = −1`` → ``[2f(1−f)]^0 = 1``
     → uniform weights (no MAF dependence); ``α < −1`` up-weights rarer variants
     (per-standardized-effect larger for rare alleles, the signature of negative
     selection). Pass the result as ``slab_weights`` to scale the prior.
@@ -167,10 +184,12 @@ def _check_h2_p(h2=None, p=None):
 
 
 def ldpred3_inf(corr, beta_hat, n_eff, h2):
-    """LDpred3 infinitesimal model (closed form).
+    """LDpred3 infinitesimal model (closed form; Vilhjálmsson et al. 2015).
 
     Assumes every variant is causal with effects drawn from
-    ``beta ~ N(0, h2 / m)``. The posterior mean then has the closed form::
+    ``beta ~ N(0, h2 / m)``. Under the ``beta_hat = R beta + N(0, R/N)`` model
+    this Gaussian prior is conjugate, so the posterior mean (the ridge/BLUP
+    solution) has the closed form::
 
         beta_inf = (R + (m / (N * h2)) I)^{-1} beta_hat
 
@@ -1385,9 +1404,13 @@ def ldpred3_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
                  af=None, alpha=-1.0, seed=None):
     """LDpred3 grid model: point-normal prior, fixed hyper-parameters.
 
-    The prior is spike-and-slab: with probability ``p`` a variant is causal
-    with effect ``N(0, h2 / (m * p))``, otherwise its effect is exactly zero.
-    Posterior-mean effects are obtained by averaging a Gibbs sampler.
+    The point-normal (spike-and-slab) prior of LDpred (Vilhjálmsson et al.,
+    *AJHG* 2015), sampled with the LDpred2 Gibbs sampler (Privé et al.,
+    *Bioinformatics* 2020): with probability ``p`` a variant is causal with
+    effect ``N(0, h2 / (m * p))``, otherwise its effect is exactly zero. The
+    per-SNP full conditional is the standard point-normal update (a Gaussian
+    posterior gated by its Bayes factor); the returned effects are the
+    Rao-Blackwellised posterior mean averaged over the sampler.
 
     In practice LDpred3-grid is run over a grid of ``(h2, p, sparse)`` values
     and the best combination is chosen with a validation set; this function
@@ -1419,6 +1442,17 @@ def ldpred3_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
         keep the expected causal count and ``h2`` coherent. ``None`` (default)
         gives the uniform-``p`` point-normal model. Informative weights raise
         accuracy; misleading ones lower it, so supply trustworthy annotations.
+        (The SBayesR/RC idea; see :func:`ldpred3_auto_annot` to *learn* the map.)
+    af : array_like, shape (m,), optional
+        Per-variant allele frequency, enabling the MAF-dependent slab-variance
+        prior together with ``alpha`` (the ``use_MLE`` prior of LDpred2-auto,
+        Privé et al. 2023; the ``S``/``α`` model of Speed et al. 2017, Zeng et
+        al. 2018). ``None`` (default) leaves the slab variance uniform.
+    alpha : float, default -1.0
+        Exponent of the MAF-dependent prior: the slab variance is scaled by
+        ``[2f(1-f)]^(1+alpha)`` (mean-normalised, so ``h2`` is preserved).
+        ``-1`` is the flat prior and reproduces the uniform model exactly; more
+        negative concentrates variance on common variants. Needs ``af``.
     seed : int or None
         Seed for the random number generator.
 
@@ -1471,9 +1505,13 @@ def ldpred3_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
                  af=None, alpha=-1.0, seed=None):
     """LDpred3-auto: fit the point-normal model and estimate ``h2`` and ``p``.
 
-    Unlike :func:`ldpred3_grid`, no validation set is needed: the proportion of
-    causal variants ``p`` and the SNP heritability ``h2`` are updated within the
-    Gibbs sampler and their posterior means are returned alongside the effects.
+    LDpred2-auto (Privé, Arbel & Vilhjálmsson, *Bioinformatics* 2020). Unlike
+    :func:`ldpred3_grid`, no validation set is needed: the proportion of causal
+    variants ``p`` and the SNP heritability ``h2`` are updated within the Gibbs
+    sampler (each from its conjugate conditional) and their posterior means are
+    returned alongside the effects. For the robust multi-chain estimator and the
+    predictive-``r2`` / architecture inference built on the same chains
+    (Privé et al., *AJHG* 2023), see :func:`ldpred3_auto_infer`.
 
     Parameters
     ----------
@@ -1491,6 +1529,10 @@ def ldpred3_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
         Off-diagonal LD shrinkage (1.0 = off).
     h2_bounds : (float, float)
         Clamp the per-iteration ``h2`` estimate to this range for stability.
+    prior_weights : array_like, shape (m,), optional
+        Per-variant inclusion-probability weights (see :func:`ldpred3_grid`).
+    af, alpha :
+        MAF-dependent slab-variance prior (see :func:`ldpred3_grid`).
     seed : int or None
         RNG seed.
 
