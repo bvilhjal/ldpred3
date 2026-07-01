@@ -331,18 +331,27 @@ Inverse-Gaussian draw for `1/τ_j² ~ InvGauss(λ/|β_j|, λ²)`. The estimate i
 Rao-Blackwellised average of the per-SNP conditional means over the post-burn-in
 sweeps.
 
-**Self-tuning `λ`.** The global shrinkage is set by marginal maximisation (an EM
-step), `λ² = 2k / Σ τ_j²`, which converges to the value matching the fitted total
-variance — no penalty grid, no validation cohort. A naïve fully-Bayesian `λ` (a
-conditional Gamma draw) does *not* work here: with the extra scale-mixture layer
-it drifts to the hyper-prior's mean independently of the data and mis-shrinks
-(see [benchmarks](benchmarks.md#laplace-prior-the-bayesian-lasso-methodlaplace)).
+**Setting `λ` (a plug-in, not EM).** The global shrinkage is a plug-in from the
+heritability, `λ = √(2k/h²)` — the value that makes the Laplace prior's total
+variance equal `h²`. Genome-wide, `h²` is estimated **once** by LD Score
+regression (`ldpred3_by_blocks` / `--method laplace` do this when no `h²` is
+given), which is robust across power regimes. Two data-adaptive schemes were
+tried and rejected: a fully-Bayesian conditional Gamma draw drifts to the
+hyper-prior's mean independently of the data; and a marginal-maximisation (EM)
+update `λ² = 2k/Στ_j²` works at high power but has a positive-feedback failure at
+low signal-to-noise — the `τ_j²` inflate on noise, so `λ` shrinks and the fit
+overfits (`laplace` fell *below* the raw marginal at 1M SNPs). The plug-in
+anchors the total prior variance to `h²` regardless of the fit, so it is stable.
+`sample_lambda=True` still exposes the EM for the high-power regime. (See
+[benchmarks](benchmarks.md#laplace-prior-the-bayesian-lasso-methodlaplace).)
 
 Unlike the spike-and-slab there is no point mass at zero, so the posterior mean
 is **dense** — heavier-tailed shrinkage than the infinitesimal Gaussian, but it
 cannot concentrate on a few causals the way the point-normal does. It matches
-`inf` on a truly infinitesimal trait, beats `lassosum2` across architectures
-(the mean over the mode), and trails `auto`/`grid` on sparse traits. Dense LD
+`inf` on a truly infinitesimal trait and beats `lassosum2` **at moderate/high
+power** (the mean over the mode) — but the ordering flips at low power
+(genome-scale, fixed N), where `lassosum2`'s sparsity wins because the dense mean
+cannot zero the null SNPs; and it trails `auto`/`grid` on sparse traits. Dense LD
 blocks only (per-block, like `inf`/`grid`). CLI: `--method laplace`.
 
 ## Bivariate (two-trait) LDpred3

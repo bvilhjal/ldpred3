@@ -1681,6 +1681,20 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
     # Total h2 (if given) is split across blocks proportionally to block size.
     total_h2 = kwargs.pop("h2", None)
 
+    # laplace sets its shrinkage lambda from h2 (plug-in); a good genome-wide h2
+    # matters, and per-block guesses are far too noisy. When the caller gives no
+    # h2, estimate it once by LD Score regression (robust across power regimes)
+    # rather than falling back to a fixed per-block default.
+    if method == "laplace" and total_h2 is None:
+        from .ldsc import ld_scores, ldsc_h2
+        try:
+            ell = ld_scores(blocks)
+            total_h2 = float(ldsc_h2(n * beta_hat ** 2, ell, n, m_snps=m).h2)
+        except Exception:
+            total_h2 = None                          # fall back to the default
+        if total_h2 is not None:
+            total_h2 = min(max(total_h2, 1e-4), 1.0)
+
     for corr_block, idx in blocks:
         idx = np.asarray(idx)
         k = idx.shape[0]

@@ -272,21 +272,21 @@ Genetic R² by method (accuracy falls with #SNPs because N is fixed):
 
 | #SNPs | marginal | inf | grid | auto | annot | lassosum2 | laplace |
 |-------|---------:|----:|-----:|-----:|------:|----------:|--------:|
-| 50k   | 0.287 | 0.396 | 0.469 | **0.470** | 0.469 | 0.399 | 0.414 |
-| 100k  | 0.261 | 0.343 | 0.436 | 0.438 | **0.438** | 0.324 | 0.357 |
-| 200k  | 0.237 | 0.284 | **0.388** | 0.388 | 0.387 | 0.313 | 0.282 |
-| 500k  | 0.176 | 0.194 | **0.280** | 0.279 | 0.279 | 0.262 | 0.174 |
-| 1M    | 0.130 | 0.134 | **0.185** | 0.155 | 0.155 | 0.164 | 0.106 |
+| 50k   | 0.287 | 0.396 | 0.468 | **0.470** | 0.469 | 0.399 | 0.416 |
+| 100k  | 0.261 | 0.343 | 0.438 | 0.438 | **0.438** | 0.324 | 0.366 |
+| 200k  | 0.237 | 0.284 | **0.388** | 0.388 | 0.387 | 0.313 | 0.297 |
+| 500k  | 0.176 | 0.194 | **0.280** | 0.279 | 0.279 | 0.262 | 0.195 |
+| 1M    | 0.130 | 0.134 | **0.185** | 0.155 | 0.155 | 0.164 | 0.131 |
 
 Fit time (s), single core:
 
 | #SNPs | inf | grid | auto | annot | lassosum2 | laplace |
 |-------|----:|-----:|-----:|------:|----------:|--------:|
-| 50k   | 0.6 | 1.6 | 0.8 | 2.5 | 2.8 | 3.7 |
-| 100k  | 1.0 | 3.2 | 1.5 | 5.3 | 6.7 | 7.1 |
-| 200k  | 2.0 | 6.2 | 3.1 | 11.3 | 14.7 | 14.2 |
-| 500k  | 4.9 | 15.3 | 9.9 | 31.1 | 41.4 | 36.2 |
-| 1M    | 9.9 | 30.8 | 29.3 | 70.1 | 80.4 | 76.4 |
+| 50k   | 0.6 | 1.5 | 0.8 | 2.5 | 2.5 | 3.6 |
+| 100k  | 1.0 | 3.1 | 1.5 | 5.3 | 6.3 | 6.8 |
+| 200k  | 2.0 | 6.1 | 3.2 | 11.3 | 14.0 | 15.1 |
+| 500k  | 4.9 | 15.5 | 10.9 | 33.2 | 40.8 | 36.1 |
+| 1M    | 10.0 | 31.3 | 34.8 | 77.3 | 82.4 | 72.9 |
 
 Peak memory is **LD-dominated** — the resident `float32` block-diagonal LD is
 ~2.2 GB at 1M and grows ~linearly (the clean, contiguous measurement is in the
@@ -322,14 +322,21 @@ Takeaways:
   keeps whichever of `auto` / `lassosum2` pseudo-validates better rather than
   trusting one blindly. It costs ~2× `auto` (a full (s, λ) grid of
   coordinate-descent sweeps).
-- **`laplace` shadows `lassosum2`** — as theory predicts, the Bayesian-lasso
-  posterior *mean* and the lasso *mode* of the same Laplace prior track each other
-  closely (0.41/0.40 at 50k, 0.28/0.31 at 200k), both a band below the
-  spike-and-slab on this sparse trait: a dense heavy-tailed prior cannot
-  concentrate on the few causals the way the point mass does. Cost is `annot`-like
-  (a full per-block Gibbs with the extra scale-mixture draw), ~3.7→76 s across
-  50k–1M. It is the self-tuning dense alternative; use it (or `lassosum2`) as a
-  cross-check on `auto`, not as a default for sparse traits.
+- **`laplace` vs `lassosum2` is power-dependent — they are the *mean* and the
+  *mode* of the same Laplace prior.** At moderate/high per-SNP power `laplace`
+  (the posterior mean, the better estimator under squared loss) edges `lassosum2`
+  (the MAP/mode): 0.416 vs 0.399 at 50k, 0.366 vs 0.324 at 100k, and likewise in
+  the high-power [architecture check](#laplace-prior-the-bayesian-lasso-methodlaplace).
+  But as power drops (`N/M` ≤ 0.25 here) **`lassosum2` pulls clearly ahead** —
+  0.262 vs 0.195 at 500k, 0.164 vs 0.131 at 1M. The reason is structural: the
+  posterior mean is **dense** (no point mass at zero), so genome-wide it spreads
+  nonzero weight over ~1M mostly-null SNPs and cannot escape their noise, whereas
+  `lassosum2`'s L1 mode zeros them out and its pseudo-validation adapts the
+  shrinkage to the data. Both cost `annot`-like (~3.6→73 s across 50k–1M). So
+  `laplace` recovers to the `inf`/`marginal` band at scale (it no longer *under*performs
+  a raw ridge — the earlier collapse was an EM artefact, now fixed with an
+  LDSC-plug-in `λ`); but for a *single* sparse method at genome scale `lassosum2`
+  is the more robust choice.
 - **`annot` tracks `auto`** when the annotation is uninformative, at **~2–3× the
   time** (the logistic θ-update) — the cost is worth it only when the annotation
   carries signal (see the architecture table).
@@ -373,9 +380,12 @@ Bayesian shrinkage estimator, which should predict at least as well. It is a
 Gibbs sampler over the normal / exponential scale-mixture of the Laplace (Park &
 Casella 2008): a per-SNP latent variance `τ_j²` with `β_j | τ_j² ~ N(0, τ_j²)`
 and `τ_j² ~ Exp(λ²/2)`, so each sweep is the usual Gaussian per-SNP conditional
-plus an Inverse-Gaussian draw for `1/τ_j²`; the global shrinkage `λ` self-tunes
-by the marginal-maximisation update `λ² = 2k/Στ_j²`. Unlike the spike-and-slab it
-has no point mass at zero — the posterior mean is dense.
+plus an Inverse-Gaussian draw for `1/τ_j²`. The global shrinkage is a **plug-in**
+`λ = √(2k/h²)` from a heritability estimated once by LD Score regression — this
+replaced a per-sweep EM update (`λ² = 2k/Στ_j²`) that overfit at low
+signal-to-noise (its genetic variance ran ~1.8× the truth at `N/M ≈ 0.1`, so
+`laplace` dropped *below* the raw marginal at 1M SNPs). Unlike the spike-and-slab
+it has no point mass at zero — the posterior mean is dense.
 
 Genetic R² by architecture (realistic coalescent LD, m=10,000, N=20,000, h²=0.5,
 5 reps; `grid` gets the oracle `(h²,p)`). Regenerate with
@@ -383,29 +393,37 @@ Genetic R² by architecture (realistic coalescent LD, m=10,000, N=20,000, h²=0.
 
 | architecture | inf | grid | auto | lassosum2 | **laplace** |
 |--------------|----:|-----:|-----:|----------:|------------:|
-| infinitesimal     | 0.862 | 0.861 | 0.858 | 0.854 | **0.860** |
+| infinitesimal     | 0.862 | 0.861 | 0.858 | 0.854 | **0.861** |
 | polygenic (p=0.1) | 0.859 | 0.879 | 0.879 | 0.860 | **0.866** |
-| sparse (p=0.01)   | 0.864 | 0.970 | 0.970 | 0.889 | **0.906** |
+| sparse (p=0.01)   | 0.864 | 0.969 | 0.970 | 0.889 | **0.897** |
 
-- **The posterior mean beats the mode.** `laplace` edges out `lassosum2` at every
-  architecture (0.860 vs 0.854, 0.866 vs 0.860, 0.906 vs 0.889) — the expected
-  reward for averaging the posterior rather than taking its peak, and a direct
-  confirmation that the two are the same prior seen two ways.
-- **It matches `inf` on the infinitesimal trait** (0.860 vs 0.862): with a truly
+- **At this (high) power the posterior mean beats the mode.** `laplace` edges out
+  `lassosum2` at every architecture (0.861 vs 0.854, 0.866 vs 0.860, 0.897 vs
+  0.889) — the expected reward for averaging the posterior rather than taking its
+  peak, and a direct confirmation that the two are the same prior seen two ways.
+  **This ordering flips at low power** (the fixed-N [scaling table](#methods-accuracy-vs-scalability)):
+  once `N/M` ≲ 0.25 `lassosum2`'s sparsity + pseudo-validation pull ahead, because
+  the dense posterior mean can't zero the genome's many null SNPs. Mean-beats-mode
+  holds *per SNP*; sparsity wins *across a genome of nulls*.
+- **It matches `inf` on the infinitesimal trait** (0.861 vs 0.862): with a truly
   Gaussian architecture the Laplace mean reproduces the optimal ridge/BLUP.
-- **It trails the spike-and-slab on the sparse trait** (0.906 vs `auto` 0.970):
+- **It trails the spike-and-slab on the sparse trait** (0.897 vs `auto` 0.970):
   the Laplace has heavier tails than a Gaussian but no spike, so it cannot
   concentrate on a handful of causals the way the point-normal does. That gap is
   the price of the continuous prior — `auto` remains the default for sparse
-  traits; `laplace` is the robust, self-tuning dense alternative (and the
-  Bayesian sibling of `lassosum2`).
+  traits; `laplace` is the self-tuning dense alternative (and the Bayesian sibling
+  of `lassosum2`), best used as a cross-check rather than a genome-scale default.
 
-> A naïve fully-Bayesian `λ` (a Gamma-Gibbs draw) was tried first and **failed**:
-> with the scale mixture it drifts to the hyper-prior's mean *independently of the
-> data*, mis-shrinking every architecture to ~0.76. The marginal-maximisation
-> (EM) `λ` update above is what makes it track — a good reminder that the extra
-> latent layer of a scale-mixture prior needs its hyper-parameter tuned by
-> marginal likelihood, not by a conditional draw.
+> **Tuning `λ`.** Two self-tuning schemes were tried before the current plug-in.
+> A naïve fully-Bayesian `λ` (a Gamma-Gibbs draw) drifts to the hyper-prior's mean
+> *independently of the data*, mis-shrinking every architecture to ~0.76. A
+> marginal-maximisation (EM) update `λ² = 2k/Στ_j²` fixed that at high power but
+> has a positive-feedback failure at **low** signal-to-noise — the fitted `τ_j²`
+> inflate on noise, so `λ` shrinks and the fit overfits (genetic variance ~1.8×
+> the truth; `laplace` fell *below* the raw marginal at 1M SNPs). The current
+> default is a **plug-in** `λ = √(2k/h²)` from an LD-Score-regression `h²`
+> (estimated once, robust across power) — stable everywhere, and what lifted the
+> low-power rows above (0.174→0.195 at 500k, 0.106→0.131 at 1M).
 
 ## Genotype-level simulation
 
