@@ -1,4 +1,131 @@
-# Algorithm internals & LD options
+# Theory & algorithm internals
+
+How LDpred3 turns GWAS summary statistics into polygenic-score weights — the
+statistical **model and its samplers first**, then the LD representations, priors
+and performance levers layered on top. For a task-oriented walkthrough see
+[guide.md](guide.md); for the measured behaviour, [benchmarks.md](benchmarks.md).
+
+**Theory:** [the model](#the-model) · [infinitesimal](#the-infinitesimal-model) ·
+[point-normal & the Gibbs sampler](#the-point-normal-model-and-its-gibbs-sampler)
+· [auto: estimating h²/p](#ldpred3-auto-estimating-h-and-p). Everything after that
+is internals (LD options, priors, the other methods, performance) built on this
+core.
+
+## The model
+
+LDpred3 works entirely from **summary statistics** — each variant's marginal GWAS
+effect and an LD (correlation) matrix — never individual genotypes. All effects
+are on the **standardized scale**: genotypes are mean-centred and scaled to unit
+variance and the phenotype likewise, so a marginal effect `β̂_j` is the
+correlation between standardized SNP `j` and the trait (`standardize_betas` maps
+reported per-allele effects onto this scale, `β̂ ≈ z/√N`, and returns the
+back-transform).
+
+The generative model tying the reported marginal effects `β̂` (length `m`) to the
+true **joint** effects `β` is the LDpred2 sampling model:
+
+    β̂ = R β + ε,        ε ~ N(0, R / N)
+
+`R` is the `m×m` SNP correlation matrix (`R_jj = 1`) and `N` the GWAS sample size
+(per-variant `N_j` allowed). Read it as: each marginal effect is the true effect
+**plus the LD-weighted spillover from every correlated variant** (`Rβ`), inside
+noise whose covariance is itself `R/N`. Recovering `β` from `β̂` — undoing that
+spillover — is the whole task; the naive PRS uses `β̂` directly and so counts
+every causal signal once for each variant in LD with it.
+
+**Bayesian PRS: one likelihood, different priors.** Given a prior on `β`, the
+posterior mean `E[β | β̂]` is the minimum-MSE set of PRS weights. Every LDpred3
+model shares the likelihood above and differs *only* in the **prior** on the
+effects — that single choice is what separates the methods:
+
+| model | prior on `β_j` | estimator | function |
+|-------|----------------|-----------|----------|
+| infinitesimal (`inf`) | `N(0, h²/m)` — every variant causal | closed-form ridge | `ldpred3_inf` |
+| point-normal (`grid`/`auto`) | `p·N(0, h²/mp) + (1−p)·δ₀` — spike-and-slab | Gibbs posterior mean | `ldpred3_grid` / `ldpred3_auto` |
+| Bayesian lasso (`laplace`) | `Laplace(λ)` — heavy tail, no spike | Gibbs posterior mean | `ldpred3_laplace` |
+| lasso (`lassosum2`) | `Laplace(λ)` | posterior **mode** (L1) | `lassosum2` |
+
+`h²` is the SNP heritability and `p` the causal fraction. The spike-and-slab is
+the workhorse — a point mass at zero (most variants do nothing) plus a Gaussian
+slab for the causal few; `inf` is its `p=1` limit, and `laplace`/`lassosum2`
+replace the spike with a continuous heavy tail (the **mean** vs the **mode** of
+the same Laplace prior).
+
+## The infinitesimal model
+
+With a Gaussian prior `β ~ N(0, (h²/m) I)` the prior and likelihood are conjugate,
+so the posterior mean is closed-form — the ridge / BLUP solution:
+
+    β_inf = ( R + (m / (N h²)) I )⁻¹ β̂
+
+The ridge `m/(Nh²)` is the prior-to-noise variance ratio: more variants or lower
+heritability → stronger shrinkage toward zero. Dense `R` is solved directly
+(`O(m³)`); a banded `SparseLD` is solved by conjugate gradient (matrix–vector
+products only), and a `LowRankLD` by the Woodbury identity (`O(m·r + r³)`) — no
+dense factorisation. It has no sampler and is the cheapest, most robust baseline,
+but an all-variants-causal prior leaves accuracy on the table for any trait with
+concentrated signal.
+
+## The point-normal model and its Gibbs sampler
+
+The spike-and-slab prior — with probability `p` a variant is causal with effect
+`N(0, c)`, slab variance `c = h²/(mp)`; otherwise exactly zero — has no
+closed-form posterior, so it is fit with a **Gibbs sampler** that resamples one
+SNP at a time from its *exact* full conditional.
+
+Hold every other effect fixed and form SNP `j`'s **residualised** marginal effect
+— its `β̂_j` with the LD spillover from all the *other* current effects removed:
+
+    r_j = β̂_j − (Rβ)_j + β_j = β̂_j − Σ_{k≠j} R_jk β_k
+
+(the `+β_j` adds its own term back, since `R_jj = 1`). Under the model `r_j` is
+then a clean noisy read of `β_j` alone, `r_j | β_j ~ N(β_j, 1/N_j)`. Combining
+that with the slab gives, **for a causal effect**, a Gaussian conditional
+posterior
+
+    posterior variance   v = c / (N_j c + 1)
+    posterior mean       μ = N_j · v · r_j
+
+and the **probability the SNP is causal** is its Bayes factor against the null
+(effect ≡ 0):
+
+    log-odds(null : causal) = log((1−p)/p) + ½·log(1 + N_j c) − ½·μ²/v
+    postp = P(causal | ·) = 1 / (1 + exp(log-odds))
+
+Each sweep draws every SNP: with probability `postp` set `β_j ← μ + √v · z`
+(`z ~ N(0,1)`), else `β_j ← 0`; when the effect changes it does a rank-1 update of
+the maintained `Rβ`, so the next SNP's `r_j` is an `O(1)` lookup rather than a
+fresh matrix–vector product. That `postp` **is** a posterior inclusion
+probability — the exact quantity fine-mapping reports as a PIP (`ldpred3_pip`).
+
+**Rao–Blackwellised estimate.** The returned weight for SNP `j` is not the average
+*sampled* effect but the average of its conditional expectation
+`E[β_j | rest] = postp · μ` over the post-burn-in sweeps (as in the original
+LDpred). Same target, much lower Monte-Carlo variance, so far fewer iterations
+reach a given accuracy (see [Performance](#performance--numba)). `sparse=True`
+instead averages the hard-thresholded sampled effects to keep the result sparse.
+`ldpred3_grid` runs this at **fixed** `(h², p)` — exact for the model, but you
+must supply the hyper-parameters (or grid-search them on a validation cohort).
+
+## LDpred3-auto: estimating h² and p
+
+`ldpred3_auto` removes the tuning cohort by resampling `h²` and `p` **inside** the
+sampler, each from its own conditional (LDpred2-auto), so the whole fit needs no
+held-out data:
+
+- **`p`** — with a `Beta(1, 1)` prior, its conditional given the current causal
+  count `k` is `p ~ Beta(1 + k, 1 + m − k)`, drawn once per sweep.
+- **`h²`** — the genetic variance of the current effects, `h² = βᵀRβ`, read
+  straight off the maintained `Rβ` (no extra matrix product) and clamped to
+  `h2_bounds` for stability.
+
+Their post-burn-in means are the reported `h²`/`p`; the effects are the same
+Rao–Blackwellised average as `grid`. Because the `p` update assumes a *single*
+shared inclusion probability, non-uniform `prior_weights` are rejected here (use
+`grid`, or the learned map in
+[Learning the annotation map](#learning-the-annotation-map-sbayesrc)). Estimating
+`h²`/`p` **globally** across all blocks rather than per block is what keeps auto
+accurate at genome scale — the subject of the next section.
 
 ## Global hyper-parameters for `-auto`
 
@@ -466,14 +593,13 @@ effects change per sweep the O(m) rank-1 update is mostly skipped, so the per-SN
 scalars would otherwise dominate the sweep (see
 [benchmarks](benchmarks.md#constant-n-sampler-fast-path)).
 
-The posterior-mean estimate is **Rao-Blackwellized** (as in the original
-LDpred): each sweep accumulates the conditional expectation
-`E[beta_j | rest] = P(causal) · posterior_mean` rather than the sampled draw.
-The sampled value still drives the Markov chain; only the *estimate* uses the
-expectation, which has much lower Monte-Carlo variance (≈6–13× in fast-mixing
-regimes), so fewer iterations are needed for the same accuracy. In extreme-LD
-regions the benefit is smaller because chain mixing, not sampling noise, is the
-bottleneck.
+The [Rao–Blackwellised estimate](#the-point-normal-model-and-its-gibbs-sampler)
+(accumulating `E[beta_j | rest] = P(causal) · posterior_mean` each sweep instead
+of the sampled draw) is also where the sampler earns its efficiency: the sampled
+value still drives the Markov chain, but the *estimate* uses the expectation,
+which has much lower Monte-Carlo variance (≈6–13× in fast-mixing regimes), so
+fewer iterations reach the same accuracy. In extreme-LD regions the benefit is
+smaller because chain mixing, not sampling noise, is the bottleneck.
 
 [Numba](https://numba.pydata.org/) is strongly recommended: when installed, the
 inner sampler is JIT-compiled (and cached) for a large speed-up. Without it the

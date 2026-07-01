@@ -129,7 +129,7 @@ python -m pytest tests/        # full suite
 - [docs/inference.md](docs/inference.md) — h² / polygenicity / r² / genetic-correlation inference
 - [docs/finemap.md](docs/finemap.md) — fine-mapping: PIPs, credible sets, genome-wide & file-based
 - [docs/impute.md](docs/impute.md) — LD-based summary-statistic imputation (experimental)
-- [docs/algorithm.md](docs/algorithm.md) — sampler internals, sparse LD, LD splitting, bivariate model
+- [docs/algorithm.md](docs/algorithm.md) — **theory** (the model, the Gibbs sampler, how `auto` estimates h²/p) then the internals: sparse/low-rank LD, LD splitting, priors, bivariate model
 - [docs/benchmarks.md](docs/benchmarks.md) — accuracy, speed, scaling and robustness benchmarks
 - [CHANGELOG.md](CHANGELOG.md) — release history
 

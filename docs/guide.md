@@ -2,10 +2,10 @@
 
 A task-oriented walkthrough: from a GWAS + a target dataset to a polygenic
 score, how to pick a model, and how to read the output. For the maths and
-internals see [algorithm.md](algorithm.md); for the full benchmarks see
+internals see [algorithm.md](algorithm.md#the-model); for the full benchmarks see
 [benchmarks.md](benchmarks.md).
 
-**Jump to:** [what you need](#1-what-you-need) ·
+**Jump to:** [use cases](#use-cases) · [what you need](#1-what-you-need) ·
 [run it](#2-the-one-command-path-recommended) ·
 [is it any good?](#3-is-the-prs-any-good-evaluating) ·
 [choose a model](#4-choosing-a-model) ·
@@ -21,6 +21,18 @@ internals see [algorithm.md](algorithm.md); for the full benchmarks see
 > (`auto` is the default model). Everything below is detail on the inputs, the
 > model choice, and reading the output.
 
+**How it works, in one paragraph.** A GWAS reports each variant's *marginal*
+effect, which is inflated by linkage disequilibrium (LD): every variant in a
+correlated block carries a shadow of its neighbours' signal, so the raw
+sum-of-effects score double-counts. LDpred3 models the marginals as
+`β̂ = Rβ + noise` (`R` = the LD matrix) and infers the **joint** effects `β`
+behind them under a Bayesian prior — spike-and-slab by default, so most variants
+are shrunk to zero and the causal few are kept. `auto` estimates the two
+quantities that set the shrinkage — heritability `h²` and the causal fraction
+`p` — as it samples, so **no tuning cohort is needed**. That is the entire idea;
+the model and its derivations are in
+[algorithm.md → Theory](algorithm.md#the-model).
+
 **Common recipes** — find your task, copy the command, read the linked section for
 detail. All build on the base command `ldpred3 --sumstats gwas.txt.gz --plink target`:
 
@@ -35,6 +47,100 @@ detail. All build on the base command `ldpred3 --sumstats gwas.txt.gz --plink ta
 | Make scores comparable **across** cohorts | `--weights w.txt --scaling frozen` | [§9](#9-re-using-work-saved-weights--cached-ld) |
 | Cache LD to speed up re-runs | `--ld-out ld.npz` once, then `--ld-cache ld.npz` | [§9](#9-re-using-work-saved-weights--cached-ld) |
 | Scale to millions of SNPs (sequencing) | `--ld-lowrank --ld-lowrank-min-size 1000 --ld-stream` | [§10](#10-scaling--performance) |
+
+## Use cases
+
+Realistic, end-to-end scenarios — the recipes above are single-flag tweaks, these
+**chain** the features toward a concrete goal. Each links to the section with the
+full detail.
+
+**Predict a trait in a biobank from a published GWAS.** The standard case: take a
+downloaded GWAS + your genotypes and run the default `auto`.
+
+```bash
+ldpred3 --sumstats gwas.txt.gz --plink biobank --out prs.txt
+```
+
+Read `harmonize_log`/`qc_log`, then evaluate against a held-out phenotype
+([§2](#2-the-one-command-path-recommended),
+[§3](#3-is-the-prs-any-good-evaluating)).
+
+**Build a disease (case/control) risk score.** Pass the *effective* N (not the raw
+total) and emit each person's percentile for risk stratification; convert the
+reported h² to the liability scale for a comparable number.
+
+```bash
+ldpred3 --sumstats gwas.txt.gz --plink target \
+        --n-cases 12000 --n-controls 45000 --prs-percentiles --out prs.txt
+```
+
+([§2 → binary traits](#binary-casecontrol-traits)).
+
+**Score several cohorts on one comparable scale.** Fit once, reuse the weights,
+and freeze the standardization so a given PRS value means the same thing in every
+cohort (not just rank-within-cohort).
+
+```bash
+ldpred3 --sumstats gwas.txt.gz --plink discovery --save-weights w.txt --out d.txt
+ldpred3 --plink cohortB --weights w.txt --scaling frozen --out b.txt
+```
+
+([§9](#9-re-using-work-saved-weights--cached-ld)).
+
+**Judge a PRS before you have any outcomes.** Estimate heritability, polygenicity
+and the expected out-of-sample r² — each with a credible interval, no validation
+cohort.
+
+```bash
+ldpred3 --sumstats gwas.txt.gz --plink target --infer --out prs.txt
+```
+
+([§7](#7-inferring-h-polygenicity-and-predictive-r-no-validation-set)).
+
+**Localise the causal variants at a GWAS locus.** Fine-map around
+genome-wide-significant hits into calibrated 95% credible sets.
+
+```bash
+ldpred3 --finemap --sumstats gwas.txt.gz --plink target \
+        --finemap-only-significant 5e-8 --out fm
+```
+
+([§8](#8-fine-mapping-which-variants-are-causal)).
+
+**Use functional annotations.** Let the sampler *learn* which annotations enrich
+for causal variants and fold that into the prior (an uninformative one harmlessly
+collapses to zero).
+
+```bash
+ldpred3 --method annot --annotations annot.tsv \
+        --sumstats gwas.txt.gz --plink target --out prs.txt
+```
+
+([§6](#6-annotation-informed-prs-annot)).
+
+**Boost an under-powered trait with a correlated one.** Jointly fit a weak trait
+alongside a well-powered, genetically-correlated trait so the strong one sharpens
+the weak (Python; both GWAS must share the LD/ancestry).
+
+```python
+from ldpred3 import ldpred3_auto_bivariate
+res = ldpred3_auto_bivariate(corr, beta_hat_weak, beta_hat_strong, n_weak, n_strong)
+res.beta1_est          # improved weights for the weak trait; res.rg is the learned r_g
+```
+
+([§5](#5-working-from-your-own-ld-blocks-library-path),
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3)).
+
+**Scale to a sequencing-density panel (millions of SNPs).** Compress the big LD
+blocks low-rank and stream the LD from disk so it need not fit in RAM.
+
+```bash
+ldpred3 --sumstats gwas.txt.gz --plink target \
+        --ld-lowrank --ld-lowrank-min-size 1000 --ld-stream --out prs.txt
+```
+
+([§10](#10-scaling--performance),
+[pipeline.md → Scaling](pipeline.md#scaling-to-millions-of-snps)).
 
 ## 1. What you need
 
