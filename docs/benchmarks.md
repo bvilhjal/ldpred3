@@ -271,21 +271,21 @@ Genetic R² by method (accuracy falls with #SNPs because N is fixed):
 
 | #SNPs | marginal | inf | grid | auto | annot | lassosum2 |
 |-------|---------:|----:|-----:|-----:|------:|----------:|
-| 50k   | 0.277 | 0.396 | 0.470 | **0.472** | 0.471 | 0.400 |
+| 50k   | 0.277 | 0.396 | 0.471 | **0.472** | 0.471 | 0.400 |
 | 100k  | 0.272 | 0.348 | 0.440 | **0.441** | 0.440 | 0.322 |
-| 200k  | 0.240 | 0.290 | **0.396** | 0.395 | 0.395 | 0.244 |
-| 500k  | 0.186 | 0.200 | **0.284** | 0.284 | 0.284 | 0.127 |
-| 1M    | 0.130 | 0.135 | **0.190** | 0.154 | 0.155 | 0.075 |
+| 200k  | 0.240 | 0.290 | **0.395** | 0.395 | 0.395 | 0.327 |
+| 500k  | 0.186 | 0.200 | **0.284** | 0.284 | 0.284 | 0.243 |
+| 1M    | 0.130 | 0.135 | **0.190** | 0.154 | 0.155 | 0.168 |
 
 Fit time (s), single core (Linux Xeon):
 
 | #SNPs | inf | grid | auto | annot | lassosum2 |
 |-------|----:|-----:|-----:|------:|----------:|
-| 50k   | 0.6 | 1.6 | 0.8 | 2.6 | 2.5 |
-| 100k  | 1.1 | 3.3 | 1.6 | 6.0 | 6.8 |
-| 200k  | 2.1 | 6.3 | 3.3 | 11.9 | 13.8 |
-| 500k  | 5.2 | 15.6 | 10.7 | 33.1 | 41.0 |
-| 1M    | 10.2 | 31.0 | 34.7 | 77.4 | 79.7 |
+| 50k   | 0.6 | 1.6 | 0.8 | 2.6 | 2.1 |
+| 100k  | 1.0 | 3.1 | 1.5 | 5.2 | 4.9 |
+| 200k  | 2.0 | 6.2 | 3.0 | 11.3 | 10.4 |
+| 500k  | 5.0 | 15.5 | 9.4 | 31.0 | 29.3 |
+| 1M    | 9.9 | 31.3 | 30.3 | 70.1 | 60.0 |
 
 Peak memory is **LD-dominated** — the resident `float32` block-diagonal LD is
 ~2.2 GB at 1M and grows ~linearly (the clean, contiguous measurement is in the
@@ -308,20 +308,52 @@ Takeaways:
   more iterations / chains (or warm-start the hyper-parameters) to recover the
   oracle-`grid` accuracy — this is the same convergence effect as the
   [cold-start table](#auto-from-a-cold-start-no-oracle-hyper-parameters).
-- **`lassosum2` is competitive at 50k (0.400) but falls behind the Bayesian
-  methods as the genome grows** (0.075 vs `grid` 0.190 at 1M) *on this clean,
-  well-specified simulation* — the L1 penalty is a blunter instrument than the
-  spike-and-slab when the model is correct and power dilutes. Its value is
-  complementarity and robustness on real data (misspecified LD, heavier-tailed
-  effects), which is why the bigsnpr workflow keeps whichever of `auto` /
-  `lassosum2` pseudo-validates better rather than trusting one blindly. It costs
-  ~2–4× `auto` (a full (s, λ) grid of coordinate-descent sweeps).
+- **`lassosum2` is a genuine peer of the Bayesian methods** — trailing `grid`/
+  `auto` at small genomes (0.40 vs 0.47 at 50k) but closing the gap as #SNPs
+  grows and, at 1M, **beating both `inf` (0.135) and the under-converged `auto`
+  (0.154) at 0.168**. This is the expected behaviour: the L1 penalty is the MAP
+  under a Laplace prior, a legitimate shrinkage model, so its prediction sits in
+  the same band as the spike-and-slab rather than collapsing. (It took a fixed
+  [pseudo-validation guard](#a-note-on-lassosum2s-pseudo-validation) to see this
+  — the raw criterion had been selecting overfit models and dragging the score to
+  0.075 at 1M.) Its value is complementarity and robustness on real data
+  (misspecified LD, heavier-tailed effects), which is why the bigsnpr workflow
+  keeps whichever of `auto` / `lassosum2` pseudo-validates better rather than
+  trusting one blindly. It costs ~2× `auto` (a full (s, λ) grid of
+  coordinate-descent sweeps).
 - **`annot` tracks `auto`** when the annotation is uninformative, at **~2–3× the
   time** (the logistic θ-update) — the cost is worth it only when the annotation
   carries signal (see the architecture table).
 - **Time is roughly linear in #SNPs** for `inf` (cheapest — a per-block solve, no
   sampling) and `grid`; `auto`'s per-sweep hyper-parameter update makes it the
   steepest of the samplers at 1M. `marginal` is free.
+
+### A note on lassosum2's pseudo-validation
+
+With no validation cohort, `lassosum2` picks its `(s, λ)` by pseudo-validation —
+the summary-statistic estimate of the PRS–trait correlation `βᵀr / √(βᵀRβ)`.
+That estimate is **in-sample**, and on a well-conditioned LD the smallest
+penalties drive `β` toward the `R⁻¹r` (OLS) fit, whose pseudo-validation score
+runs *past 1* — an impossible correlation, and the fingerprint of overfitting.
+Selecting on the raw criterion therefore chose the densest, most-overfit model:
+at genome scale its score climbed to 1.2–2.4 while the true accuracy collapsed
+(genetic R² 0.49 at 200k → 0.15 at 1M).
+
+The fix is to **restrict the selection to physically valid models (score ≤ 1)**.
+The sparse end of the path always qualifies, so a valid model is always
+available, and dropping the overfit tail recovers essentially all of the
+accuracy an actual held-out cohort would find:
+
+| #SNPs | raw argmax | **guarded (score ≤ 1)** | oracle (held-out) |
+|-------|-----------:|------------------------:|------------------:|
+| 200k  | 0.488 | **0.654** | 0.759 |
+| 500k  | 0.254 | **0.487** | 0.535 |
+| 1M    | 0.150 | **0.335** | 0.350 |
+
+(genetic R²; the guarded pick lands within a few percent of the oracle at 1M).
+This is what lifts `lassosum2` from an apparent also-ran to the peer of `auto`
+in the table above. A real validation cohort is still preferable when available
+— the guard is the best that pure summary statistics allow.
 
 ## Genotype-level simulation
 
