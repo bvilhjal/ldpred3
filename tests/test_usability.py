@@ -5,7 +5,7 @@ import numpy as np
 from ldpred3.pipeline import (run_ldpred3_prs, preflight_prs,
                                 score_from_weights)
 
-from test_pipeline import _simulate
+from _helpers import simulate_prs_dataset as _simulate
 
 
 def test_preflight_reports_columns_and_match(tmp_path):

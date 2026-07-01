@@ -225,10 +225,10 @@ def test_run_finemap_end_to_end(tmp_path):
 
 
 def test_run_finemap_cli(tmp_path):
-    from ldpred3.pipeline import _main
+    from ldpred3.cli import main
     prefix, ss_path, causal_id = _write_locus(tmp_path, seed=2)
     out = str(tmp_path / "cli")
-    _main(["--sumstats", ss_path, "--plink", prefix, "--finemap",
-           "--block-size", "200", "--out", out])
+    main(["--sumstats", ss_path, "--plink", prefix, "--finemap",
+          "--block-size", "200", "--out", out])
     assert os.path.exists(out + ".pip.tsv") and os.path.exists(out + ".cs.tsv")
     assert _top_pip_variant(out + ".pip.tsv") == causal_id
