@@ -253,7 +253,10 @@ def _update_theta(A, pip, theta, learn, ridge, pen, rng):
         grad = A.T @ (pip - s) - ridge * pen * theta
         H = A.T @ (W[:, None] * A) + ridge * np.diag(pen) + 1e-6 * np.eye(K)
         return theta + np.linalg.solve(H, grad)
-    gamma = (pip > 0.5).astype(float)
+    # Albert-Chib data augmentation: sample the latent causal indicator from its
+    # Bernoulli(pip_j) — NOT a hard pip>0.5 threshold, which discards the
+    # inclusion uncertainty and biases theta toward the confidently-called SNPs.
+    gamma = (rng.random(pip.shape[0]) < pip).astype(float)
     z = _truncnorm(A @ theta, gamma, rng)
     V = np.linalg.inv(A.T @ A + ridge * np.diag(pen) + 1e-6 * np.eye(K))
     return V @ (A.T @ z) + np.linalg.cholesky(V) @ rng.standard_normal(K)

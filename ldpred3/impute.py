@@ -83,8 +83,11 @@ def impute_sumstats_blocks(beta_hat, blocks, typed_mask, n_eff, *, ridge=1e-3,
     ridge : float, default 1e-3
         Tikhonov ridge added to ``R_tt`` before the solve (numerical stability).
     min_imp_r2 : float, default 0.0
-        Untyped variants imputed below this quality keep ``beta_hat=0`` and
-        ``n_eff=0`` (effectively excluded) — they cannot be imputed reliably.
+        Untyped variants imputed below this quality (and any untyped variant with
+        no typed neighbour) keep ``beta_hat=0`` and a **negligible** ``n_eff=1``
+        so they contribute nothing yet the augmented arrays remain directly
+        samplable (``_as_n_vector`` rejects ``n_eff <= 0``). Use ``typed_mask`` /
+        ``imp_r2`` to drop them entirely if you prefer.
 
     Returns
     -------
@@ -122,6 +125,10 @@ def impute_sumstats_blocks(beta_hat, blocks, typed_mask, n_eff, *, ridge=1e-3,
         beta_hat[gu] = np.where(keep, bhat_u, 0.0)
         imp_r2[gu] = np.where(keep, r2_u, 0.0)
         out_n[gu] = np.where(keep, n_t * r2_u, 0.0)
+
+    # Excluded / unimputable variants (beta_hat=0) get a negligible n_eff=1 so the
+    # augmented arrays feed the sampler directly (which requires n_eff > 0).
+    out_n = np.where(out_n > 0.0, out_n, 1.0)
 
     return ImputeResult(beta_hat=beta_hat, n_eff=out_n, imp_r2=imp_r2,
                         typed_mask=typed_mask, n_typed=int(typed_mask.sum()),

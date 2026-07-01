@@ -291,9 +291,10 @@ def ldpred3_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
         s = samples[c]
         if s.shape[0] == 0:
             continue
-        prod = apply_R(s.astype(float))            # (n_saved, m) = R b
-        if blocks is None and shrink_corr != 1.0:
-            prod = shrink_corr * prod + (1.0 - shrink_corr) * s
+        # apply_R already uses the shrunk LD (_prep_corr / _prep_blocks applied
+        # shrink_corr once); do NOT shrink again here, or the dense path would
+        # use shrink^2*R + (1-shrink^2)*I and disagree with the block path.
+        prod = apply_R(s.astype(float))            # (n_saved, m) = R_shrunk b
         Rb[c] = prod
     r2_vals = []
     kept_with_samples = [c for c in keep if c in Rb]

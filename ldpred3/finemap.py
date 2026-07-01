@@ -19,6 +19,15 @@ This module turns those PIPs into the standard fine-mapping outputs:
   factor (ABF) baseline, exact when a locus has one signal and a useful oracle in
   tests.
 
+**These are heuristic LDpred3-PIP credible sets, not SuSiE-RSS.** LDpred3 yields
+one *marginal* PIP per SNP, not SuSiE's per-effect assignment vectors, so a
+credible set here is built by clustering LD neighbours around a lead SNP — a
+useful localisation heuristic, but for **multiple signals overlapping in the same
+LD block the marginal PIP cannot say which signal a SNP belongs to**, and set
+coverage is not guaranteed calibrated (a tie-expansion step mitigates but does
+not fully fix this; see ``docs/finemap.md``). Use SuSiE-RSS / FINEMAP for
+calibrated multi-signal credible sets.
+
 NumPy-only, consistent with the rest of LDpred3.
 """
 from __future__ import annotations
@@ -282,9 +291,14 @@ def single_signal_finemap(corr, beta_hat, n_eff, *, prior_var=0.04,
     pip = w / w.sum()
     post_var = 1.0 / (1.0 / V + 1.0 / shat2)
     mu = post_var * (beta_hat / shat2)
+    # Posterior is a spike-and-slab mixture: 0 w.p. (1-pip), N(mu, post_var) w.p.
+    # pip. Its variance includes the between-component term, not just pip*post_var.
+    post_mean = pip * mu
+    post_second = pip * (post_var + mu * mu)
+    post_sd = np.sqrt(np.maximum(post_second - post_mean * post_mean, 0.0))
     cs = _credible_sets(pip, R, coverage, 0.0, 1, variant_ids)  # one signal, no purity drop
     return FineMapResult(
-        pip=pip, posterior_mean=pip * mu, posterior_sd=np.sqrt(pip * post_var),
+        pip=pip, posterior_mean=post_mean, posterior_sd=post_sd,
         credible_sets=cs, n_signals_est=1.0, converged=True, n_iter=0,
         diagnostics={"method": "abf", "prior_var": V, "m": int(m)})
 

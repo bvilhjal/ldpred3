@@ -85,3 +85,21 @@ def test_informative_priors_help_held_out():
         a, b = _one(s)
         rp += a; ra += b
     assert ra / 4 > rp / 4, (rp / 4, ra / 4)
+
+
+def test_auto_rejects_nonuniform_prior_weights():
+    # auto estimates p from a Beta full-conditional that is only valid for a
+    # shared inclusion probability; non-uniform prior_weights must be rejected
+    # (use grid or annot instead). Uniform weights are fine (checked above).
+    import pytest
+    rng = np.random.default_rng(3)
+    m = 120
+    R = _ar1(m, 0.4)
+    beta = np.zeros(m); beta[::10] = 0.3
+    bhat = R @ beta + rng.standard_normal(m) / np.sqrt(5000)
+    w = np.ones(m); w[:10] = 3.0                      # non-uniform
+    with pytest.raises(ValueError, match="non-uniform prior_weights"):
+        ldpred3_auto(R, bhat, 5000, burn_in=10, num_iter=10, prior_weights=w)
+    # grid (fixed p) accepts the same weights
+    ldpred3_grid(R, bhat, 5000, h2=0.5, p=0.05, burn_in=10, num_iter=10,
+                 prior_weights=w)
