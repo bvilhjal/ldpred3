@@ -74,17 +74,18 @@ N=100k, 80 loci/cell) measures coverage, power and resolution vs signal strength
 
 Credible-set **coverage is ~0.95+** across signal strengths; **power and
 resolution improve as the signal strengthens** (median set size shrinks to ~2).
-The headline is resolution at matched coverage — against the single-signal ABF
-baseline (z=8, 1 causal):
+On a **single-causal** locus LDpred3-PIP matches the single-signal ABF baseline
+(z=8, 1 causal) — both localise to ~2 variants at full coverage:
 
 | method | coverage | power | median \|CS\| |
 |--------|---------:|------:|-------------:|
-| LDpred3-PIP | 1.00 | 0.99 | **2** |
-| ABF (single signal) | 1.00 | 1.00 | 380 |
+| LDpred3-PIP | 1.00 | 0.99 | 2 |
+| ABF (single signal) | 1.00 | 1.00 | 2 |
 
-ABF "covers" only by dumping the whole locus into one set; LDpred3-PIP localizes
-to a handful of variants at the same coverage. Coverage is also robust to a finite
-LD reference panel (1.00 clean → 0.95 at Nref=500).
+The distinction appears on **multi-signal** loci (next section): ABF's
+single-effect model can only report one signal, whereas LDpred3-PIP recovers
+several. Coverage is also robust to a finite LD reference panel (1.00 clean →
+0.95 at Nref=500).
 
 ### Across genetic architectures and methods
 
@@ -95,23 +96,30 @@ with `benchmarks/finemap_architectures.py`.
 
 | architecture | method | coverage | power | median \|CS\| |
 |--------------|--------|---------:|------:|-------------:|
-| single | LDpred3-PIP | 0.97 | 0.93 | **2** |
-| single | ABF | 1.00 | 1.00 | 380 |
+| single | LDpred3-PIP | 0.97 | 0.93 | 2 |
+| single | ABF | 1.00 | 1.00 | 2 |
 | single | marginal-top | 0.72 | 0.72 | 1 |
 | two-independent | LDpred3-PIP | 0.93 | **0.90** | 2 |
-| two-independent | ABF | 1.00 | 1.00 | 380 |
+| two-independent | ABF | 0.98 | 0.68 | 3 |
 | two-independent | marginal-top | 0.60 | 0.30 | 1 |
-| two-linked | LDpred3-PIP | 0.93 | 0.82 | 2 |
+| two-linked | LDpred3-PIP | 0.93 | **0.82** | 2 |
+| two-linked | ABF | 0.82 | 0.52 | 3 |
 | two-linked | marginal-top | 0.60 | 0.30 | 1 |
 | causal+background | LDpred3-PIP | 0.92 | 0.93 | 2 |
-| major+sparse | LDpred3-PIP | 0.93 | 0.45 | 3 |
+| causal+background | ABF | 1.00 | 1.00 | 2 |
+| major+sparse | LDpred3-PIP | 0.93 | **0.45** | 3 |
+| major+sparse | ABF | 0.98 | 0.33 | 2 |
+| major+sparse | marginal-top | 0.75 | 0.25 | 1 |
 
 - **LDpred3-PIP is the only method that both localizes and finds multiple
   signals.** It keeps ~0.92–0.97 coverage with **median set size 2–3** across all
   architectures, and on the two-signal architectures it recovers ~1.8 sets/locus
   (power 0.82–0.90) — allelic heterogeneity the single-signal methods cannot see.
-- **ABF covers (1.00) but never localizes** (median size 380 = the whole locus);
-  its single-signal model also reports one set even when there are two.
+- **ABF localises single signals well** (coverage 1.00, size 2 on `single` and
+  `causal+background`) but its **single-effect model misses secondary signals**:
+  power falls to 0.68 (two-independent), 0.52 (two-linked) and 0.33
+  (major+sparse), and its coverage drops on `two-linked` (0.82) where LD fools the
+  one-signal fit. A good single-signal fine-mapper, not a multi-signal one.
 - **marginal-top localizes (size 1) but misses signals**: power collapses to
   ~0.30 on two-signal architectures (it can only flag the lead variant) and its
   coverage is ~0.6–0.75 (the top SNP is often a proxy, not the causal).
