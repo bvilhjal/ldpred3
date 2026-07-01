@@ -10,15 +10,18 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/<script>.py
 
 **Publication figures.** `make_paper_figures.py` assembles the headline results
 into one multi-page PDF (`benchmarks/figures.pdf`): the bigsnpr time/memory
-comparison, the cold-init `auto` accuracy/time comparison, and
-accuracy-by-architecture (from the committed CSVs), plus h²/
-polygenicity inference recovery, inference cross-checks (h² LDSC-vs-LDpred3-auto
-and predictive-r² estimated-vs-realized), bivariate analysis (genetic-correlation
-recovery and weak-trait prediction gain), DENTIST recovery, sparse/banded LD,
-optimal block splitting, the Numba speed-up and multi-core scaling (computed from
-a self-contained simulation and cached to `figdata_*.csv`). Needs `matplotlib`;
-the LDSC/bivariate pages need realistic LD via `msprime`, and the performance
-page needs `numba` — each is skipped with a note if its dependency is absent.
+comparison, the cold-init `auto` accuracy/time comparison,
+accuracy-by-architecture, the **sparse-prior methods** (Bayesian-lasso `laplace`
+vs the lasso `lassosum2`) by architecture, **methods at scale** (accuracy & fit
+time vs #SNPs, incl. `lassosum2`) and the **MAF-dependent `alpha` prior** (all
+from the committed CSVs), plus h²/polygenicity inference recovery, inference
+cross-checks (h² LDSC-vs-LDpred3-auto and predictive-r² estimated-vs-realized),
+bivariate analysis (genetic-correlation recovery and weak-trait prediction gain),
+DENTIST recovery, sparse/banded LD, optimal block splitting, the Numba speed-up
+and multi-core scaling (computed from a self-contained simulation and cached to
+`figdata_*.csv`). Needs `matplotlib`; the LDSC/bivariate pages need realistic LD
+via `msprime`, and the performance page needs `numba` — each is skipped with a
+note if its dependency is absent.
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py

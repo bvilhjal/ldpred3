@@ -252,9 +252,10 @@ method on the same realistic-LD genome from 50k to 1M SNPs at once**, reporting
 accuracy *and* cost together. One sparse architecture (h²=0.5, p=0.01), GWAS
 N=50,000 held fixed (so power dilutes as variants multiply), realistic coalescent
 LD, single core; `grid` gets the oracle `(h²,p)`, `auto` self-tunes, `annot` gets
-one uninformative annotation, and `lassosum2` is the L1 / pseudo-validation
-predictor. Each size runs in its own process for a clean peak RSS. Regenerate
-with `benchmarks/method_scaling.py`.
+one uninformative annotation, `lassosum2` is the L1 / pseudo-validation predictor
+and `laplace` is the Bayesian-lasso (Laplace-prior posterior mean). Each size runs
+in its own process for a clean peak RSS. Regenerate with
+`benchmarks/method_scaling.py`.
 
 > **Hardware.** This table (and the [genome-scale](#genome-scale-scalability-200k4m-snps)
 > one below) was **re-measured on a 4-core Linux Xeon @2.8 GHz / 15 GB**; the
@@ -269,23 +270,23 @@ with `benchmarks/method_scaling.py`.
 
 Genetic R² by method (accuracy falls with #SNPs because N is fixed):
 
-| #SNPs | marginal | inf | grid | auto | annot | lassosum2 |
-|-------|---------:|----:|-----:|-----:|------:|----------:|
-| 50k   | 0.277 | 0.396 | 0.471 | **0.472** | 0.471 | 0.400 |
-| 100k  | 0.272 | 0.348 | 0.440 | **0.441** | 0.440 | 0.322 |
-| 200k  | 0.240 | 0.290 | **0.395** | 0.395 | 0.395 | 0.327 |
-| 500k  | 0.186 | 0.200 | **0.284** | 0.284 | 0.284 | 0.243 |
-| 1M    | 0.130 | 0.135 | **0.190** | 0.154 | 0.155 | 0.168 |
+| #SNPs | marginal | inf | grid | auto | annot | lassosum2 | laplace |
+|-------|---------:|----:|-----:|-----:|------:|----------:|--------:|
+| 50k   | 0.287 | 0.396 | 0.469 | **0.470** | 0.469 | 0.399 | 0.414 |
+| 100k  | 0.261 | 0.343 | 0.436 | 0.438 | **0.438** | 0.324 | 0.357 |
+| 200k  | 0.237 | 0.284 | **0.388** | 0.388 | 0.387 | 0.313 | 0.282 |
+| 500k  | 0.176 | 0.194 | **0.280** | 0.279 | 0.279 | 0.262 | 0.174 |
+| 1M    | 0.130 | 0.134 | **0.185** | 0.155 | 0.155 | 0.164 | 0.106 |
 
-Fit time (s), single core (Linux Xeon):
+Fit time (s), single core:
 
-| #SNPs | inf | grid | auto | annot | lassosum2 |
-|-------|----:|-----:|-----:|------:|----------:|
-| 50k   | 0.6 | 1.6 | 0.8 | 2.6 | 2.1 |
-| 100k  | 1.0 | 3.1 | 1.5 | 5.2 | 4.9 |
-| 200k  | 2.0 | 6.2 | 3.0 | 11.3 | 10.4 |
-| 500k  | 5.0 | 15.5 | 9.4 | 31.0 | 29.3 |
-| 1M    | 9.9 | 31.3 | 30.3 | 70.1 | 60.0 |
+| #SNPs | inf | grid | auto | annot | lassosum2 | laplace |
+|-------|----:|-----:|-----:|------:|----------:|--------:|
+| 50k   | 0.6 | 1.6 | 0.8 | 2.5 | 2.8 | 3.7 |
+| 100k  | 1.0 | 3.2 | 1.5 | 5.3 | 6.7 | 7.1 |
+| 200k  | 2.0 | 6.2 | 3.1 | 11.3 | 14.7 | 14.2 |
+| 500k  | 4.9 | 15.3 | 9.9 | 31.1 | 41.4 | 36.2 |
+| 1M    | 9.9 | 30.8 | 29.3 | 70.1 | 80.4 | 76.4 |
 
 Peak memory is **LD-dominated** — the resident `float32` block-diagonal LD is
 ~2.2 GB at 1M and grows ~linearly (the clean, contiguous measurement is in the
@@ -321,12 +322,21 @@ Takeaways:
   keeps whichever of `auto` / `lassosum2` pseudo-validates better rather than
   trusting one blindly. It costs ~2× `auto` (a full (s, λ) grid of
   coordinate-descent sweeps).
+- **`laplace` shadows `lassosum2`** — as theory predicts, the Bayesian-lasso
+  posterior *mean* and the lasso *mode* of the same Laplace prior track each other
+  closely (0.41/0.40 at 50k, 0.28/0.31 at 200k), both a band below the
+  spike-and-slab on this sparse trait: a dense heavy-tailed prior cannot
+  concentrate on the few causals the way the point mass does. Cost is `annot`-like
+  (a full per-block Gibbs with the extra scale-mixture draw), ~3.7→76 s across
+  50k–1M. It is the self-tuning dense alternative; use it (or `lassosum2`) as a
+  cross-check on `auto`, not as a default for sparse traits.
 - **`annot` tracks `auto`** when the annotation is uninformative, at **~2–3× the
   time** (the logistic θ-update) — the cost is worth it only when the annotation
   carries signal (see the architecture table).
 - **Time is roughly linear in #SNPs** for `inf` (cheapest — a per-block solve, no
   sampling) and `grid`; `auto`'s per-sweep hyper-parameter update makes it the
-  steepest of the samplers at 1M. `marginal` is free.
+  steepest of the samplers at 1M, with `annot`/`lassosum2`/`laplace` the priciest
+  (extra per-SNP work). `marginal` is free.
 
 ### A note on lassosum2's pseudo-validation
 

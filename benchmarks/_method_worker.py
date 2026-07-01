@@ -39,7 +39,7 @@ def main():
                       burn_in=5, num_iter=5)
 
     out = {"marginal": {"time": 0.0, "r2": B.pheno_r2(bhat, beta, lib_blocks)}}
-    for meth in ("inf", "grid", "auto", "annot", "lassosum2"):
+    for meth in ("inf", "grid", "auto", "annot", "lassosum2", "laplace"):
         t0 = time.perf_counter()
         if meth == "inf":
             be = ldpred3_by_blocks(blk, bhat, n, method="inf", h2=B.H2)
@@ -52,6 +52,9 @@ def main():
         elif meth == "annot":
             be = ldpred3_auto_annot_blocks(blk, bhat, n, A, burn_in=B.BURN_IN,
                                            num_iter=B.NUM_ITER, seed=1).beta_est
+        elif meth == "laplace":                                # Bayesian lasso (self-tuned lambda)
+            be = ldpred3_by_blocks(blk, bhat, n, method="laplace", h2=B.H2,
+                                   burn_in=B.BURN_IN, num_iter=B.NUM_ITER, seed=1)
         else:                                                  # lassosum2 (L1, pseudo-val)
             be = lassosum2(blk, bhat).beta_est
         dt = time.perf_counter() - t0
