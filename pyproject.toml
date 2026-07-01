@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ldpred3"
-version = "0.2.0"
+dynamic = ["version"]                # single-sourced from ldpred3.__version__
 description = "A NumPy-only implementation of LDpred3 with a full polygenic-score pipeline"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,10 +24,13 @@ test = ["pytest>=7"]
 lint = ["ruff>=0.5"]            # pyflakes-style lint gate (see [tool.ruff])
 
 [project.scripts]
-ldpred3 = "ldpred3.pipeline:_main"
+ldpred3 = "ldpred3.cli:main"
 
 [tool.setuptools]
 packages = ["ldpred3"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ldpred3.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,17 +1,10 @@
-# Core dependency
+# Dependencies are declared authoritatively in pyproject.toml; this file is a
+# convenience pointer. Prefer installing the package (which reads pyproject):
+#
+#   pip install -e .                    # core runtime (numpy only)
+#   pip install -e ".[fast]"            # + numba  (JIT sampler; recommended)
+#   pip install -e ".[fast,sim,test]"   # + msprime + pytest (development)
+#   pip install matplotlib              # only for benchmarks/*.py figure scripts
+#
+# The one hard runtime dependency:
 numpy>=1.20
-
-# Optional: enables ~10-16x faster Gibbs sampling in src/ldpred3.py.
-# The code runs in pure NumPy if numba is absent.
-# numba>=0.59
-
-# Used by the test suite / simulation harness only.
-# pytest
-
-# Optional: realistic LD simulation (coalescent-with-recombination) for
-# src/simulate.py --ld-model coalescent. The default ar1 model needs only numpy.
-# msprime>=1.3
-
-# Optional: only for the benchmark plot scripts (benchmarks/*.py, incl.
-# make_paper_figures.py which builds benchmarks/figures.pdf). Not needed at runtime.
-# matplotlib>=3.5
