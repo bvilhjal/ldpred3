@@ -554,36 +554,51 @@ follows ~1,700·(m/1M)^log10(1.2). Measured on the same machine as every table h
 
 ![LDpred3 scaling with SNP density](../benchmarks/ldpred3_scaling.png)
 
-Resident **LD memory (GB)** by representation, and single-core **fit time (s)**:
+You cannot judge an LD representation on memory alone — it trades memory for fit
+*time* and possibly *accuracy*. So for the `auto` fit (the per-*method*
+inf/grid/auto comparison is in [Methods: accuracy vs scalability](#methods-accuracy-vs-scalability))
+the table gives all three, for the representations that matter at scale — **dense**,
+**low-rank**, and on-disk **streaming**. R² is always scored on the true (dense)
+population LD, so a representation's loss of accuracy shows up honestly:
 
-| #SNPs | blocks | mean block | dense | banded | low-rank | streaming | inf | grid | auto | auto R² |
-|-------|-------:|-----------:|------:|-------:|---------:|----------:|----:|-----:|-----:|--------:|
-| 200k  | 1,526 | 131   | 0.12  | 0.07 | 0.10 | 0.000 | 0.7   | 6.3  | 4.3  | 0.374 |
-| 500k  | 1,631 | 307   | 0.72  | 0.40 | 0.41 | 0.001 | 4.1   | 15.6 | 9.7  | 0.251 |
-| 1M    | 1,724 | 580   | 2.73  | 1.52 | 1.05 | 0.005 | 20.9  | 32.7 | 19.7 | 0.162 |
-| 2M    | 1,839 | 1,088 | 10.19 | 5.65 | 2.51 | 0.017 | 111.6 | 73.3 | 43.1 | 0.115 |
+| #SNPs | blocks | mean k | dense GB | LR GB | stream GB | dense s | LR s | stream s | R² (all 3) |
+|-------|-------:|-------:|---------:|------:|----------:|--------:|-----:|---------:|-----------:|
+| 200k  | 1,526 | 131   | 0.12  | 0.10 | ~0    | 4.2  | 15.0  | 4.3  | 0.374 |
+| 500k  | 1,631 | 307   | 0.72  | 0.41 | ~0    | 9.2  | 54.7  | 9.6  | 0.251 |
+| 1M    | 1,724 | 580   | 2.73  | 1.05 | 0.005 | 19.0 | 138.3 | 20.1 | 0.162 |
+| 2M    | 1,839 | 1,088 | 10.19 | 2.51 | 0.017 | 40.0 | 325.2 | n/a  | 0.115 |
 
-**Memory is the binding constraint, and the LD representation decides where the
-wall is.** As you densify, blocks grow, so **dense** per-block LD grows
-~quadratically (∝ m^1.9) — 10.2 GB at 2M, hitting this box's 15 GB ceiling at
-**~2.4M SNPs**. A **banded** genetic-distance window is ~0.55× dense but still
-~quadratic (a fixed cM window packs more SNPs as you densify), so it only pushes
-the wall to ~3.4M. **Low-rank** is the one that changes the exponent: a block's
-effective rank is set by recombination, not SNP count, so redundant SNPs in tight
-LD collapse — its share of dense *falls* with density (0.83× → 0.25×), it grows
-only ~m^1.25, and it clears **~8M SNPs** before 15 GB. **Streaming** (one block
-resident) is effectively flat (17 MB at 2M) and unbounded. So the naive
-dense-in-RAM ceiling is **~2.4M**, not the ~6–7M a same-size-block model would
-imply — but low-rank / streaming lift it far past that (see [LD representations at
-scale](#ld-representations-at-scale-memory-vs-running-time)).
+**Memory — the binding constraint at scale.** As you densify, blocks grow, so
+**dense** per-block LD grows ~quadratically (∝ m^1.9) — 10.2 GB at 2M, hitting
+this box's 15 GB ceiling at **~2.4M SNPs** (not the ~6–7M a same-size-block model
+would imply). **Low-rank** changes the exponent: a block's effective rank is set
+by recombination, not SNP count, so redundant SNPs in tight LD collapse — its
+share of dense *falls* with density (0.83× → 0.25×), it grows only ~m^1.25 (2.5 GB
+at 2M), and it clears **~8M SNPs** before 15 GB. **Streaming** keeps one block
+resident, so it is effectively **flat** (17 MB at 2M) and unbounded.
 
-**Fit time grows super-linearly, and which method is cheapest inverts with
-density.** Per-block Gibbs work is O(k²), so `grid`/`auto` grow ~quadratically;
-`inf`'s per-block dense solve is O(k³), so it *starts* cheapest (0.7 s at 200k)
-but **explodes to 111.6 s at 2M**, overtaking `grid` and `auto` around ~1.2M. On
-dense LD at genome scale, prefer the Gibbs samplers over `inf`, or drop to a
-compact LD representation. (The auto R² falls with #SNPs only because GWAS power
-N=50,000 is held fixed while variants multiply — it is not a scaling limit.)
+**But memory is not free — you pay in time (or hardware).** **Low-rank** is
+essentially **lossless** (R² matches dense to <0.001 at every size — the eigenspace
+keeps 99.5 % of each block's variance) but its fit **recomputes (R·β) per SNP in
+O(rank)**, so it costs **4–8× the dense fit time** and the ratio *worsens* with
+density (15 s vs 4 s at 200k → 325 s vs 40 s at 2M). **Streaming** is **exact**
+(same LD, just on disk) and its compute equals dense, but its *time depends on
+storage/RAM/filesystem*: the numbers above are the page-cached, compute-bound case
+(cache fits in RAM, so ≈ dense); once the genome exceeds RAM it is disk-I/O-bound
+and its wall-clock varies by orders of magnitude across machines — treat streaming
+*time* as illustrative, not portable. (Its memory and accuracy are hardware-
+independent.) 2M streaming is left `n/a`: a 10 GB cache re-read ~300× would thrash
+this box for far longer than the point is worth.
+
+**Bottom line.** Dense LD is fine to ~2.4M on 15 GB. Past the wall, the price of
+scale is not accuracy — low-rank and streaming both reproduce dense's R² — but
+either fit *time* (low-rank, ~5–8×) or *hardware* (streaming, fast local disk).
+Banded / windowed LD is **not** on the table: within recombination-limited blocks
+any window narrow enough to save memory (w≲0.15·k) drops the within-block LD the
+adjustment needs and roughly *halves* R², while a window wide enough to keep
+accuracy already costs more than dense — so it is dominated. (The R² falls with
+#SNPs only because GWAS power N=50,000 is fixed while variants multiply — not a
+scaling limit.)
 
 ## Robustness: LD reference quality & sample size
 
