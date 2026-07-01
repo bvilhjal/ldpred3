@@ -15,9 +15,14 @@ update is a soft-threshold of the per-variant residual — reusing the same runn
 
 lassosum2 fits a **grid** of ``(s, λ)`` and, with no validation cohort, picks the
 best by **pseudo-validation** — the summary-statistic estimate of the PRS-trait
-correlation ``βᵀr / √(βᵀRβ)`` (Privé et al.). The bigsnpr workflow runs this
-alongside LDpred3-auto and keeps whichever predicts better; on some architectures
-(very sparse, or a poor LD reference) the lasso wins.
+correlation ``βᵀr / √(βᵀRβ)`` (Privé et al.), *restricted to models whose score
+is ≤ 1*. That guard matters: this estimate is in-sample, so on a well-conditioned
+LD the smallest penalties drive ``β`` toward the ``R⁻¹r`` (OLS) fit whose score
+runs past 1 — a correlation estimate above 1 is the fingerprint of that
+overfitting. Dropping those points recovers most of the accuracy a proper
+held-out validation cohort would find. The bigsnpr workflow runs this alongside
+LDpred3-auto and keeps whichever predicts better; on some architectures (very
+sparse, or a poor LD reference) the lasso wins.
 
 NumPy-only, optional Numba; per block, so it streams.
 """
@@ -148,7 +153,16 @@ def lassosum2(blocks, beta_hat, *, s_seq=(0.2, 0.5, 0.9), n_lambda=20,
             score = float(beta @ beta_hat) / np.sqrt(bRb) if bRb > 1e-12 else 0.0
             nnz = int(np.count_nonzero(beta))
             grid.append({"s": s, "lambda": lam, "pseudoval": score, "n_nonzero": nnz})
-            if best is None or score > best[0]:
+            # Guarded pseudo-validation. The score estimates cor(PRS, trait),
+            # which cannot exceed 1. On a well-conditioned LD the smallest
+            # lambdas push beta toward the OLS / R^-1 r solution, whose in-sample
+            # score explodes past 1 -- it is fitting the noise in r, not signal.
+            # Restricting the pick to physically valid (score <= 1) models drops
+            # those overfit points; the sparse end of the path always qualifies,
+            # so a valid model is always available. (Without this guard the
+            # criterion selects the densest, most overfit model and predicts far
+            # worse than the same lasso selected on a held-out cohort.)
+            if score <= 1.0 and (best is None or score > best[0]):
                 best = (score, s, lam, beta.copy(), nnz)
 
     score, s, lam, beta_est, nnz = best

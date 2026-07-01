@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import benchmarks.bench_vs_bigsnpr as B          # build / pheno_r2 / constants
-from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks
+from ldpred3 import ldpred3_by_blocks, ldpred3_auto_annot_blocks, lassosum2
 
 
 def main():
@@ -39,7 +39,7 @@ def main():
                       burn_in=5, num_iter=5)
 
     out = {"marginal": {"time": 0.0, "r2": B.pheno_r2(bhat, beta, lib_blocks)}}
-    for meth in ("inf", "grid", "auto", "annot"):
+    for meth in ("inf", "grid", "auto", "annot", "lassosum2"):
         t0 = time.perf_counter()
         if meth == "inf":
             be = ldpred3_by_blocks(blk, bhat, n, method="inf", h2=B.H2)
@@ -49,9 +49,11 @@ def main():
         elif meth == "auto":                                   # self-tuning (no oracle)
             be = ldpred3_by_blocks(blk, bhat, n, method="auto",
                                    burn_in=B.BURN_IN, num_iter=B.NUM_ITER, seed=1)
-        else:
+        elif meth == "annot":
             be = ldpred3_auto_annot_blocks(blk, bhat, n, A, burn_in=B.BURN_IN,
                                            num_iter=B.NUM_ITER, seed=1).beta_est
+        else:                                                  # lassosum2 (L1, pseudo-val)
+            be = lassosum2(blk, bhat).beta_est
         dt = time.perf_counter() - t0
         out[meth] = {"time": dt, "r2": B.pheno_r2(np.asarray(be), beta, lib_blocks)}
 

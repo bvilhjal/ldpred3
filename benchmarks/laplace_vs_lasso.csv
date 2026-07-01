@@ -1,0 +1,4 @@
+architecture,p_causal,inf,grid,auto,lassosum2,laplace
+infinitesimal,1.0,0.8623,0.8608,0.8585,0.8542,0.86
+polygenic (p=0.1),0.1,0.8591,0.8787,0.8786,0.8597,0.866
+sparse (p=0.01),0.01,0.8642,0.9695,0.9704,0.8889,0.9063

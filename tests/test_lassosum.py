@@ -52,6 +52,25 @@ def test_lassosum2_lambda_controls_sparsity():
     assert nnz[-1] <= 5          # heavy penalty -> very sparse / empty
 
 
+def test_lassosum2_pseudoval_guard_rejects_overfit():
+    # On a well-conditioned (near-exact) LD the smallest-lambda solutions overfit
+    # and their in-sample pseudo-validation score exceeds 1 (an impossible
+    # correlation). The selector must never pick such a model, and must instead
+    # land on a valid (score<=1) one that predicts far better than the raw argmax.
+    # Diluted signal (many SNPs, small N) is where the small-lambda fit chases
+    # noise and its in-sample score runs past 1.
+    blocks, R, beta, beta_hat = _sim(m=1500, nblk=15, p=0.1, N=500, seed=3)
+    res = lassosum2(blocks, beta_hat)
+    assert res.best_score <= 1.0 + 1e-9, "selected an overfit (score>1) model"
+    # some grid points DO overfit here (else the guard is untested)
+    assert max(g["pseudoval"] for g in res.grid) > 1.0
+    # the guarded pick's score never exceeds the unguarded whole-grid argmax
+    raw = max(res.grid, key=lambda g: g["pseudoval"])
+    assert res.best_score <= raw["pseudoval"]
+    gc = _genetic_corr(res.beta_est, beta, R)
+    assert gc > 0.4, f"guarded lasso genetic corr too low: {gc:.3f}"
+
+
 def test_lassosum2_empty_signal():
     blocks = [(np.eye(10, dtype=np.float32), np.arange(10))]
     res = lassosum2(blocks, np.zeros(10))

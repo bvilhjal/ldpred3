@@ -75,7 +75,7 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--bgen FILE` | — | Target genotypes as BGEN v1.2 (alternative to `--plink`). Streamed: only the requested variants are decoded/held, so it is memory-safe at biobank scale (v1.2/layout-2, none/zlib, biallelic diploid). |
 | `--sample FILE` | none | BGEN `.sample` file (sample IDs for `--bgen`). |
 | `--out FILE` | — | Output scores file (required for a run; see [Outputs](#outputs)). |
-| `--method {auto,grid,inf,annot}` | `auto` | LDpred3 model; see [Choosing a model](../README.md#choosing-a-model). |
+| `--method {auto,grid,inf,annot,lassosum2,laplace}` | `auto` | LDpred3 model; see [Choosing a model](../README.md#choosing-a-model). `lassosum2` = L1 (Laplace-prior mode); `laplace` = Bayesian lasso (Laplace-prior posterior mean). |
 | `--annotations FILE` | none | Per-SNP annotation table; switches `--method` to `annot`. |
 | `--alpha FLOAT` | `-1.0` | MAF-dependent slab-variance prior exponent (Privé 2023): slab variance scales as `[2f(1-f)]^(1+alpha)`. `-1` = flat (unchanged); `auto`/`grid` only (see [algorithm.md](algorithm.md#maf-dependent-slab-variance-alpha)). |
 | `--block-size N` | `500` | Maximum variants per LD block. |

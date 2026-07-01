@@ -211,6 +211,17 @@ def test_pipeline_method_lassosum2(tmp_path):
     assert r2 > 0.20, f"lassosum2 PRS R^2 too low: {r2:.3f}"
 
 
+def test_pipeline_method_laplace(tmp_path):
+    # method="laplace" (Bayesian lasso) runs end-to-end and predicts; the
+    # posterior mean is dense (no point mass at zero).
+    prefix, ss_path, g_te = _simulate(tmp_path, m=400, seed=2)
+    res = run_ldpred3_prs(ss_path, prefix, method="laplace", block_size=200,
+                          burn_in=60, num_iter=150, seed=1)
+    assert np.mean(np.abs(res.beta_adjusted) > 1e-10) > 0.9
+    r2 = np.corrcoef(res.scores, g_te)[0, 1] ** 2
+    assert r2 > 0.20, f"laplace PRS R^2 too low: {r2:.3f}"
+
+
 def test_pipeline_ldsc_init_seeds_h2(tmp_path):
     # --ldsc-init seeds the sampler's h2 from LD Score regression; it runs
     # end-to-end, logs the seed, and stays predictive.
