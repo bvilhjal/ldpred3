@@ -232,3 +232,24 @@ def test_run_finemap_cli(tmp_path):
           "--block-size", "200", "--out", out])
     assert os.path.exists(out + ".pip.tsv") and os.path.exists(out + ".cs.tsv")
     assert _top_pip_variant(out + ".pip.tsv") == causal_id
+
+
+def test_single_signal_posterior_sd_includes_mixture_term():
+    # The spike-and-slab posterior variance must obey the law of total variance:
+    # Var(beta) >= between-component variance = (1-pip)*mean^2/pip. The old
+    # formula sqrt(pip*post_var) dropped that term and violated this for strong,
+    # LD-split signals.
+    rng = np.random.default_rng(1)
+    m = 30
+    R = ar1(m, 0.99)                      # very tight LD -> signal splits across proxies
+    beta = np.zeros(m); beta[15] = 0.04
+    bhat = R @ beta + (np.linalg.cholesky(R + 1e-6 * np.eye(m))
+                       @ rng.standard_normal(m)) / np.sqrt(20000)
+    res = single_signal_finemap(R, bhat, 20000.0, prior_var=0.04)
+    pip, mean, sd = res.pip, res.posterior_mean, res.posterior_sd
+    mid = (pip > 0.02) & (pip < 0.98) & (np.abs(mean) > 1e-8)
+    assert mid.sum() > 0
+    between = (1.0 - pip[mid]) * mean[mid] ** 2 / pip[mid]
+    assert np.all(sd[mid] ** 2 + 1e-9 >= between)      # total-variance lower bound
+    # and the between term is actually active somewhere (not a degenerate pass)
+    assert np.any(sd[mid] ** 2 > between + 1e-6)

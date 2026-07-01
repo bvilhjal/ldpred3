@@ -1449,10 +1449,13 @@ def ldpred3_grid(corr, beta_hat, n_eff, h2, p, *, burn_in=100, num_iter=400,
         Privé et al. 2023; the ``S``/``α`` model of Speed et al. 2017, Zeng et
         al. 2018). ``None`` (default) leaves the slab variance uniform.
     alpha : float, default -1.0
-        Exponent of the MAF-dependent prior: the slab variance is scaled by
-        ``[2f(1-f)]^(1+alpha)`` (mean-normalised, so ``h2`` is preserved).
-        ``-1`` is the flat prior and reproduces the uniform model exactly; more
-        negative concentrates variance on common variants. Needs ``af``.
+        Exponent of the MAF-dependent prior: the **standardized-effect** slab
+        variance is scaled by ``[2f(1-f)]^(1+alpha)`` (mean-normalised, so ``h2``
+        is preserved). ``-1`` is the flat prior (uniform standardized effects) and
+        reproduces the uniform model exactly; ``alpha < -1`` up-weights **rarer**
+        variants (larger standardized effect for rare alleles — the negative-
+        selection signature), ``alpha > -1`` up-weights common variants. Needs
+        ``af``.
     seed : int or None
         Seed for the random number generator.
 
@@ -1551,6 +1554,19 @@ def ldpred3_auto(corr, beta_hat, n_eff, *, h2_init=0.1, p_init=0.1,
     beta_hat = np.asarray(beta_hat, dtype=float)
     m = beta_hat.shape[0]
     n = _as_n_vector(n_eff, m)
+    # `auto` estimates p from its Beta(1+#causal, 1+m-#causal) full conditional,
+    # which is only conjugate when every SNP shares the inclusion probability p.
+    # Non-uniform prior_weights make p_j = p*w_j, so that Beta draw is wrong. Use
+    # ldpred3_grid (fixed p) or ldpred3_auto_annot (a learned, proper p-map) for
+    # per-SNP inclusion priors. Uniform weights are fine (p_j = p).
+    if prior_weights is not None:
+        pw = np.asarray(prior_weights, dtype=float)
+        if pw.size and not np.allclose(pw, pw.flat[0]):
+            raise ValueError(
+                "non-uniform prior_weights are not supported with ldpred3_auto "
+                "(its p-update assumes a shared inclusion probability); use "
+                "ldpred3_grid with fixed p, or ldpred3_auto_annot for a learned "
+                "per-SNP inclusion prior")
     slab_w = maf_slab_weights(af, alpha) if af is not None and alpha != -1.0 else None
     avg_beta, h2_path, p_path, count = _gibbs_sampler(
         corr, beta_hat, n, h2_init, p_init,

@@ -63,7 +63,10 @@ def test_no_typed_in_block_excluded():
     res = impute_sumstats_blocks(np.zeros(10), [(R.astype(np.float32), np.arange(10))],
                                  typed, 1000.0)
     assert np.all(res.imp_r2 == 0.0)
-    assert np.all(res.n_eff == 0.0)
+    # excluded variants get a negligible positive n_eff (beta=0) so the result
+    # feeds the sampler directly (which requires n_eff > 0)
+    assert np.all(res.n_eff == 1.0)
+    assert np.all(res.beta_hat == 0.0)
 
 
 def test_min_imp_r2_excludes_poorly_tagged():
@@ -74,7 +77,9 @@ def test_min_imp_r2_excludes_poorly_tagged():
                                  typed, 1000.0, min_imp_r2=0.5)
     poorly = (~typed) & (res.imp_r2 == 0.0)
     assert poorly.sum() > 0               # some untyped fall below the threshold
-    assert np.all(res.n_eff[poorly] == 0.0)
+    # excluded -> beta 0 and a negligible n_eff=1 (positive, so it's samplable)
+    assert np.all(res.n_eff[poorly] == 1.0)
+    assert np.all(res.beta_hat[poorly] == 0.0)
 
 
 def test_two_blocks_independent():
