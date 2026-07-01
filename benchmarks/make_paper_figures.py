@@ -564,7 +564,8 @@ def page_method_scale(pdf):
         return note_page(pdf, "Methods at scale", "method_scaling.csv not found.")
     with open(path) as fh:
         rows = list(csv.DictReader(fh))
-    methods = ["marginal", "inf", "grid", "auto", "annot", "lassosum2"]
+    methods = ["marginal", "inf", "grid", "auto", "annot", "lassosum2", "laplace"]
+    methods = [me for me in methods if any(r["method"] == me for r in rows)]
     sizes = sorted({int(r["nsnps"]) for r in rows})
 
     def series(me, col):
