@@ -48,9 +48,11 @@ h²=0.5).
 > are mutually comparable. The **2M-SNP** point is omitted from the bigsnpr
 > comparison: bigsnpr's on-disk SFBM is ~4.4 GB at 1M, so ~8.5 GB at 2M would
 > thrash on 15 GB and its timing would be memory-bound, not a fair single-core
-> compute number. LDpred3's `float32` LD stays ~4.3 GB at 2M and runs fine — see
-> the [genome-scale table](#genome-scale-scalability-200k4m-snps), which goes to
-> 4M. Re-run `bench_vs_bigsnpr.py` on a larger-memory box for a full 2M pairing.
+> compute number. LDpred3's `float32` LD is ~2× leaner than bigsnpr's `float64`
+> SFBM at every matched size; how its own memory and time scale toward genome
+> scale — and where dense LD hits this box's 15 GB ceiling versus low-rank /
+> streaming — is the [SNP-density scaling section](#scaling-with-snp-density-realistic-recombination-limited-ld).
+> Re-run `bench_vs_bigsnpr.py` on a larger-memory box for a full 2M pairing.
 
 The picture is method-dependent — there is no blanket "N× faster":
 
@@ -291,8 +293,10 @@ Fit time (s), single core:
 | 1M    | 10.8 | 31.9 | 41.2 | 101.7 | 64.9 | 94.6 |
 
 Peak memory is **LD-dominated** — the resident `float32` block-diagonal LD is
-~2.2 GB at 1M and grows ~linearly (the clean, contiguous measurement is in the
-[genome-scale table](#genome-scale-scalability-200k4m-snps)). The peak RSS this
+~2.2 GB at 1M and grows ~linearly while the block *size* is held fixed (this
+scaling holds the LD library's 500-SNP blocks; densifying into *larger* blocks
+turns memory quadratic — see [SNP-density scaling](#scaling-with-snp-density-realistic-recombination-limited-ld)).
+The peak RSS this
 per-size worker reports (0.41 GB at 50k → 2.42 GB at 1M) is now close to that
 intrinsic footprint — the earlier `lassosum2` `float64`-LD copy and other
 temporaries that inflated it were trimmed (float32 LD, in-process build). The
@@ -526,41 +530,60 @@ Practical takeaway: for dense data with long-range / large LD blocks, the dense
 per-block LD storage and the infinitesimal solve become the bottleneck, which
 motivates the banded / sparse-LD backend (see [algorithm.md](algorithm.md)).
 
-### Genome-scale scalability (200k–4M SNPs)
+### Scaling with SNP density (realistic recombination-limited LD)
 
-How far does LDpred3 scale on a commodity machine? This pushes the **fitting**
-step alone (LD already constructed, the realistic-LD library cycled to the target
-size, single core) from 200k up to **4M SNPs** — past a fully imputed genome.
-Measured on the same machine as every table here (4-core Linux @2.8 GHz / 15 GB);
-regenerate with `benchmarks/bench_ldpred3_scaling.py`.
+How does LDpred3 scale as you *densify* a genome — array → imputed → whole-genome
+sequencing? The number of LD blocks is set by **recombination, not SNP count**:
+the human genome has ~1,700 approximately-independent, recombination-delimited
+blocks (Berisa & Pickrell 2016), and that count barely moves as you densify —
+going 1M → 10M SNPs adds only ~1.2× more blocks. So densifying makes each block
+**bigger** (more variants packed into the *same* recombination structure); it
+does **not** add proportionally more same-size blocks.
 
-![LDpred3 scalability to 4M SNPs](../benchmarks/ldpred3_scaling.png)
+This benchmark models that honestly. Each block is its own
+coalescent-with-recombination segment (msprime) of a **fixed physical length and
+recombination rate** — both varied across the genome (log-normal segment lengths,
+0.5–2× recombination) so block sizes and internal LD decay differ like real
+chromosomes — and SNP density is dialled with the **mutation rate**: raising it
+finds more variants in the same recombination backbone (the reusable
+`simulate_genotypes_by_mutation_rate` primitive; a fixed seed keeps the genealogy
+identical, so it is literally the same chromosome with more variants). Block count
+follows ~1,700·(m/1M)^log10(1.2). Measured on the same machine as every table here
+(4-core Linux @2.8 GHz / 15 GB, single core); regenerate with
+`benchmarks/bench_ldpred3_scaling.py`.
 
-| #SNPs | peak RAM | inf (s) | grid (s) | auto (s) | auto R² |
-|-------|---------:|--------:|---------:|---------:|--------:|
-| 200k  | 0.60 GB | 3.1 | 6.4 | 3.6 | 0.388 |
-| 500k  | 1.20 GB | 5.5 | 16.0 | 9.6 | 0.280 |
-| 1M    | 2.23 GB | 10.8 | 31.6 | 18.9 | 0.185 |
-| 2M    | 4.28 GB | 21.5 | 63.0 | 37.1 | 0.103 |
-| 3M    | 6.32 GB | 32.9 | 94.6 | 57.2 | 0.069 |
-| 4M    | 8.38 GB | 42.8 | 127.8 | 75.2 | 0.051 |
+![LDpred3 scaling with SNP density](../benchmarks/ldpred3_scaling.png)
 
-Both axes are **linear in #SNPs**, and the **auto R² reproduces the earlier runs
-bit-for-bit** at every size (0.388 → 0.051) — the refactors left the fit
-unchanged. Fit time runs ~19 µs/SNP for `auto` (4M in ~75 s; `grid` ~2 min); the
-1M row here (2.23 GB, auto 18.9 s) matches the [bigsnpr comparison](#vs-bigsnpr-realistic-ld-200k1m-snps-single-core)
-exactly, as it should. Peak memory grows at **~2.1 GB per million SNPs** — the
-`float32` dense LD held resident during the fit — so **4M fits in 8.4 GB**, and
-the practical dense-in-RAM ceiling on a 15 GB machine is **~6–7M SNPs**. (The auto
-R² falls with #SNPs only because GWAS power N=50,000 is held fixed while variants
-multiply — it is not a scaling limit.)
+Resident **LD memory (GB)** by representation, and single-core **fit time (s)**:
 
-The contrast with bigsnpr is the headline: bigsnpr's `float64` on-disk SFBM is
-~8.5 GB at 2M and would thrash on this 15 GB box, whereas LDpred3's `float32` LD
-sails to 4M in 8.4 GB. And to go **past** the dense-RAM ceiling, the low-rank / on-disk
-`--ld-stream` backend keeps resident memory at O(one block) regardless of genome
-size (see [LD representations at scale](#ld-representations-at-scale-memory-vs-running-time)) —
-so LDpred3 is not capped at 6–7M; that is just the dense-in-RAM limit.
+| #SNPs | blocks | mean block | dense | banded | low-rank | streaming | inf | grid | auto | auto R² |
+|-------|-------:|-----------:|------:|-------:|---------:|----------:|----:|-----:|-----:|--------:|
+| 200k  | 1,526 | 131   | 0.12  | 0.07 | 0.10 | 0.000 | 0.7   | 6.3  | 4.3  | 0.374 |
+| 500k  | 1,631 | 307   | 0.72  | 0.40 | 0.41 | 0.001 | 4.1   | 15.6 | 9.7  | 0.251 |
+| 1M    | 1,724 | 580   | 2.73  | 1.52 | 1.05 | 0.005 | 20.9  | 32.7 | 19.7 | 0.162 |
+| 2M    | 1,839 | 1,088 | 10.19 | 5.65 | 2.51 | 0.017 | 111.6 | 73.3 | 43.1 | 0.115 |
+
+**Memory is the binding constraint, and the LD representation decides where the
+wall is.** As you densify, blocks grow, so **dense** per-block LD grows
+~quadratically (∝ m^1.9) — 10.2 GB at 2M, hitting this box's 15 GB ceiling at
+**~2.4M SNPs**. A **banded** genetic-distance window is ~0.55× dense but still
+~quadratic (a fixed cM window packs more SNPs as you densify), so it only pushes
+the wall to ~3.4M. **Low-rank** is the one that changes the exponent: a block's
+effective rank is set by recombination, not SNP count, so redundant SNPs in tight
+LD collapse — its share of dense *falls* with density (0.83× → 0.25×), it grows
+only ~m^1.25, and it clears **~8M SNPs** before 15 GB. **Streaming** (one block
+resident) is effectively flat (17 MB at 2M) and unbounded. So the naive
+dense-in-RAM ceiling is **~2.4M**, not the ~6–7M a same-size-block model would
+imply — but low-rank / streaming lift it far past that (see [LD representations at
+scale](#ld-representations-at-scale-memory-vs-running-time)).
+
+**Fit time grows super-linearly, and which method is cheapest inverts with
+density.** Per-block Gibbs work is O(k²), so `grid`/`auto` grow ~quadratically;
+`inf`'s per-block dense solve is O(k³), so it *starts* cheapest (0.7 s at 200k)
+but **explodes to 111.6 s at 2M**, overtaking `grid` and `auto` around ~1.2M. On
+dense LD at genome scale, prefer the Gibbs samplers over `inf`, or drop to a
+compact LD representation. (The auto R² falls with #SNPs only because GWAS power
+N=50,000 is held fixed while variants multiply — it is not a scaling limit.)
 
 ## Robustness: LD reference quality & sample size
 
