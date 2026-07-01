@@ -1,26 +1,28 @@
 """Generate a multi-page, publication-quality PDF of the key LDpred3 results.
 
-One command -> ``benchmarks/figures.pdf`` with:
+One command -> ``benchmarks/figures.pdf`` with, in order:
 
-  p1  Running time & peak memory vs bigsnpr (1 core, realistic LD)
-  p2  Accuracy by genetic architecture (N = 10k and 50k)
-  p3  Inference evaluation: h² and polygenicity recovery vs truth (95% CIs)
-  p4  Inference cross-checks: h² LDSC vs LDpred3-auto; predictive r² est-vs-realized
-  p5  Bivariate analysis: genetic-correlation recovery; weak-trait prediction gain
-  p6  DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
-  p7  LD representation: sparse/banded storage-vs-accuracy; optimal block splitting
-  p8  LD at scale (realistic LD): dense vs banded vs low-rank — memory, time, accuracy
-  p9  Performance: Numba JIT speed-up; multi-core scaling
+  - Running time & peak memory vs bigsnpr (1 core, realistic LD); auto cold-start
+  - Accuracy by genetic architecture (N = 10k and 50k)
+  - Sparse-prior methods by architecture: Bayesian lasso (laplace) vs lasso (lassosum2)
+  - Methods at scale: accuracy & fit time vs #SNPs (incl. lassosum2)
+  - MAF-dependent slab-variance prior: genetic R² vs fitted α (peaks track the truth)
+  - Inference: h²/polygenicity recovery; LDSC-vs-auto h²; predictive r² est-vs-realized
+  - Bivariate: genetic-correlation recovery; weak-trait prediction gain
+  - DENTIST LD-consistency filter: accuracy recovery and error catch/false-drop
+  - LD representation & at-scale: sparse/banded/low-rank memory-vs-accuracy; splitting
+  - Performance: Numba JIT speed-up; multi-core scaling
 
 The inference / bivariate / LD-scale pages need realistic (coalescent) LD and
 are skipped with a note unless msprime is installed.
 
-The bigsnpr, cold-init and architecture pages read committed CSVs
-(``cores_1core_benchmark.csv`` / ``cold_init_auto.csv`` /
-``methods_arch_benchmark.csv``) and are skipped with a note if absent. The
-remaining pages compute their data from a self-contained simulation and cache it
-to ``benchmarks/figdata_*.csv`` so re-runs are fast and the underlying numbers
-are a reproducible artifact (delete the caches to recompute).
+The bigsnpr, cold-init, architecture, laplace/lasso, method-scaling and alpha
+pages read committed CSVs (``cores_1core_benchmark.csv`` / ``cold_init_auto.csv``
+/ ``methods_arch_benchmark.csv`` / ``laplace_vs_lasso.csv`` /
+``method_scaling.csv`` / ``maf_alpha_prior.csv``) and are skipped with a note if
+absent. The remaining pages compute their data from a self-contained simulation
+and cache it to ``benchmarks/figdata_*.csv`` so re-runs are fast and the
+underlying numbers are a reproducible artifact (delete the caches to recompute).
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_paper_figures.py
 
@@ -64,7 +66,8 @@ plt.rcParams.update({
     "axes.grid": True, "grid.alpha": 0.3, "legend.frameon": False,
 })
 MCOLOR = {"inf": "#9467bd", "grid": "#1f77b4", "auto": "#2ca02c",
-          "marginal": "#7f7f7f", "annot": "#d62728"}
+          "marginal": "#7f7f7f", "annot": "#d62728",
+          "lassosum2": "#ff7f0e", "laplace": "#17becf"}
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +537,86 @@ def page_arch(pdf):
     fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
 
 
+def page_laplace(pdf):
+    path = os.path.join(HERE, "laplace_vs_lasso.csv")
+    if not os.path.exists(path):
+        return note_page(pdf, "Laplace vs lasso", "laplace_vs_lasso.csv not found.")
+    with open(path) as fh:
+        rows = list(csv.DictReader(fh))
+    methods = ["inf", "grid", "auto", "lassosum2", "laplace"]
+    models = [r["architecture"] for r in rows]
+    labels = [m.replace("_", "\n") for m in models]
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = np.arange(len(models)); w = 0.16
+    for i, me in enumerate(methods):
+        ax.bar(x + (i - 2) * w, [float(r[me]) for r in rows], w,
+               color=MCOLOR[me], label=me)
+    ax.set(title="Sparse-prior methods by architecture — Bayesian lasso "
+                 "(laplace) vs the lasso (lassosum2)", xticks=x, ylabel="genetic R²")
+    ax.set_xticklabels(labels, fontsize=9); ax.legend(fontsize=8, ncol=5)
+    ax.set_ylim(min(float(r[m]) for r in rows for m in methods) - 0.03, None)
+    fig.tight_layout(); pdf.savefig(fig); plt.close(fig)
+
+
+def page_method_scale(pdf):
+    path = os.path.join(HERE, "method_scaling.csv")
+    if not os.path.exists(path):
+        return note_page(pdf, "Methods at scale", "method_scaling.csv not found.")
+    with open(path) as fh:
+        rows = list(csv.DictReader(fh))
+    methods = ["marginal", "inf", "grid", "auto", "annot", "lassosum2"]
+    sizes = sorted({int(r["nsnps"]) for r in rows})
+
+    def series(me, col):
+        d = {int(r["nsnps"]): float(r[col]) for r in rows if r["method"] == me}
+        return [s / 1e6 for s in sizes], [d[s] for s in sizes]
+
+    fig, (ax_r, ax_t) = plt.subplots(1, 2, figsize=(11, 4.8))
+    for me in methods:
+        x, y = series(me, "genetic_r2")
+        ax_r.plot(x, y, "-o", color=MCOLOR[me], lw=1.8, ms=5, label=me)
+    ax_r.set(title="Accuracy vs #SNPs (fixed N — power dilutes)",
+             xlabel="SNPs (millions)", ylabel="genetic R²")
+    ax_r.legend(fontsize=8, ncol=2)
+    for me in methods:
+        if me == "marginal":
+            continue                    # no fit time
+        x, y = series(me, "time_s")
+        ax_t.plot(x, y, "-o", color=MCOLOR[me], lw=1.8, ms=5, label=me)
+    ax_t.set(title="Fit time vs #SNPs (1 core)", xlabel="SNPs (millions)",
+             ylabel="fit time (s)")
+    ax_t.legend(fontsize=8, ncol=2)
+    fig.suptitle("Methods: accuracy & running time at scale (realistic LD)",
+                 fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); pdf.savefig(fig); plt.close(fig)
+
+
+def page_alpha(pdf):
+    path = os.path.join(HERE, "maf_alpha_prior.csv")
+    if not os.path.exists(path):
+        return note_page(pdf, "MAF-dependent prior (alpha)",
+                         "maf_alpha_prior.csv not found.")
+    with open(path) as fh:
+        rows = list(csv.DictReader(fh))
+    fit_cols = [c for c in rows[0] if c.startswith("fit_alpha_")]
+    fit_alphas = [float(c.replace("fit_alpha_", "")) for c in fit_cols]
+    fig, ax = plt.subplots(figsize=(11, 5))
+    cmap = plt.get_cmap("viridis")
+    for i, r in enumerate(rows):
+        ta = float(r["true_alpha"])
+        vals = [float(r[c]) for c in fit_cols]
+        ax.plot(fit_alphas, vals, "-o", ms=4, color=cmap(i / max(1, len(rows) - 1)),
+                label=f"true α={ta:g}")
+        jbest = int(np.argmax(vals))
+        ax.plot(fit_alphas[jbest], vals[jbest], "*", ms=13,
+                color=cmap(i / max(1, len(rows) - 1)))
+    ax.set(title="MAF-dependent slab-variance prior: genetic R² vs fitted α "
+                 "(★ = best; peaks track the true α)",
+           xlabel="fitted α", ylabel="genetic R²")
+    ax.legend(fontsize=8, ncol=2); ax.grid(alpha=0.3)
+    fig.tight_layout(); pdf.savefig(fig); plt.close(fig)
+
+
 def page_inference(pdf):
     rows = [{k: r[k] for k in r} for r in data_infer_rows]
     h2 = [r for r in rows if r["kind"] == "h2"]
@@ -757,6 +840,9 @@ if __name__ == "__main__":
         page_bigsnpr(pdf)
         page_cold(pdf)
         page_arch(pdf)
+        page_laplace(pdf)
+        page_method_scale(pdf)
+        page_alpha(pdf)
         page_inference(pdf)
         page_infer_ldsc(pdf)
         page_bivariate(pdf)
