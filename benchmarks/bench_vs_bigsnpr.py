@@ -114,6 +114,8 @@ print("RESULT "+json.dumps({"time":out,"mem_gb":mem}))
 
 
 def run_ldpred3(blocks, bhat):
+    os.makedirs(WORK, exist_ok=True)   # callers that skip write_r_inputs (e.g.
+                                       # bench_ldpred3_scaling) still need WORK
     np.savez(os.path.join(WORK, "ld_blocks.npz"), nb=len(blocks), K=K,
              h2=H2, p=P, n=float(N), burn=BURN_IN, it=NUM_ITER, bhat=bhat,
              libpath=LIBPATH)
