@@ -161,8 +161,10 @@ def run_ldpred3_prs(sumstats, plink, *, method="auto", block_size=500,
         Path to the GWAS summary-statistics file.
     plink : str
         PLINK fileset prefix for the **target** genotypes to be scored.
-    method : {"auto", "grid", "inf", "annot", "lassosum2"}, default "auto"
-        LDpred3 model. ``"lassosum2"`` is the penalised-regression (L1, sparse)
+    method : {"auto", "grid", "inf", "annot", "lassosum2", "laplace"}, default "auto"
+        LDpred3 model. ``"laplace"`` is the Bayesian-lasso (Laplace-prior)
+        posterior-mean sampler — the Bayesian counterpart of ``lassosum2`` (which
+        is the same prior's mode). ``"lassosum2"`` is the penalised-regression (L1, sparse)
         alternative, tuned by pseudo-validation (no validation cohort); the
         bigsnpr workflow keeps whichever of auto / lassosum2 predicts better.
     auto_chains : int, default 1
@@ -921,7 +923,8 @@ def _main(argv=None):
     g.add_argument("--bgen", help="target BGEN file (.bgen)")
     ap.add_argument("--sample", default=None, help="BGEN .sample file")
     ap.add_argument("--method", default="auto",
-                    choices=["auto", "grid", "inf", "annot", "lassosum2"],
+                    choices=["auto", "grid", "inf", "annot", "lassosum2",
+                             "laplace"],
                     help="LDpred3 model (default: auto; annot when "
                          "--annotations is given)")
     ap.add_argument("--annotations", default=None,

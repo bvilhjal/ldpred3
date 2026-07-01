@@ -355,6 +355,48 @@ This is what lifts `lassosum2` from an apparent also-ran to the peer of `auto`
 in the table above. A real validation cohort is still preferable when available
 — the guard is the best that pure summary statistics allow.
 
+## Laplace prior: the Bayesian lasso (`method="laplace"`)
+
+`lassosum2` is the posterior *mode* under a Laplace (double-exponential) prior;
+`ldpred3_laplace` samples the posterior **mean** of that same prior — the proper
+Bayesian shrinkage estimator, which should predict at least as well. It is a
+Gibbs sampler over the normal / exponential scale-mixture of the Laplace (Park &
+Casella 2008): a per-SNP latent variance `τ_j²` with `β_j | τ_j² ~ N(0, τ_j²)`
+and `τ_j² ~ Exp(λ²/2)`, so each sweep is the usual Gaussian per-SNP conditional
+plus an Inverse-Gaussian draw for `1/τ_j²`; the global shrinkage `λ` self-tunes
+by the marginal-maximisation update `λ² = 2k/Στ_j²`. Unlike the spike-and-slab it
+has no point mass at zero — the posterior mean is dense.
+
+Genetic R² by architecture (realistic coalescent LD, m=10,000, N=20,000, h²=0.5,
+5 reps; `grid` gets the oracle `(h²,p)`). Regenerate with
+`benchmarks/laplace_vs_lasso.py`.
+
+| architecture | inf | grid | auto | lassosum2 | **laplace** |
+|--------------|----:|-----:|-----:|----------:|------------:|
+| infinitesimal     | 0.862 | 0.861 | 0.858 | 0.854 | **0.860** |
+| polygenic (p=0.1) | 0.859 | 0.879 | 0.879 | 0.860 | **0.866** |
+| sparse (p=0.01)   | 0.864 | 0.970 | 0.970 | 0.889 | **0.906** |
+
+- **The posterior mean beats the mode.** `laplace` edges out `lassosum2` at every
+  architecture (0.860 vs 0.854, 0.866 vs 0.860, 0.906 vs 0.889) — the expected
+  reward for averaging the posterior rather than taking its peak, and a direct
+  confirmation that the two are the same prior seen two ways.
+- **It matches `inf` on the infinitesimal trait** (0.860 vs 0.862): with a truly
+  Gaussian architecture the Laplace mean reproduces the optimal ridge/BLUP.
+- **It trails the spike-and-slab on the sparse trait** (0.906 vs `auto` 0.970):
+  the Laplace has heavier tails than a Gaussian but no spike, so it cannot
+  concentrate on a handful of causals the way the point-normal does. That gap is
+  the price of the continuous prior — `auto` remains the default for sparse
+  traits; `laplace` is the robust, self-tuning dense alternative (and the
+  Bayesian sibling of `lassosum2`).
+
+> A naïve fully-Bayesian `λ` (a Gamma-Gibbs draw) was tried first and **failed**:
+> with the scale mixture it drifts to the hyper-prior's mean *independently of the
+> data*, mis-shrinking every architecture to ~0.76. The marginal-maximisation
+> (EM) `λ` update above is what makes it track — a good reminder that the extra
+> latent layer of a scale-mixture prior needs its hyper-parameter tuned by
+> marginal likelihood, not by a conditional draw.
+
 ## Genotype-level simulation
 
 `ldpred3/simulate.py` is a full end-to-end simulation: it generates genotypes with

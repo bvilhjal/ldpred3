@@ -287,6 +287,40 @@ Two further options complete the SBayesRC picture:
   genome-wide LD is never materialised (it matches the dense version on
   block-diagonal LD). This is what the pipeline's `--method annot` uses.
 
+## Laplace prior — the Bayesian lasso (`method="laplace"`)
+
+The lasso (`lassosum2`) is the posterior *mode* under a Laplace (double-
+exponential) prior on the effects; `ldpred3_laplace` samples the posterior
+**mean** of that same prior — the proper Bayesian shrinkage estimator, generally
+a better predictor than the mode. It is the Bayesian counterpart of `lassosum2`.
+
+It uses the normal / exponential scale-mixture representation of the Laplace
+(Park & Casella 2008): a per-SNP latent scale `τ_j²` with
+
+```
+β_j | τ_j²  ~  N(0, τ_j²)         τ_j²  ~  Exponential(λ²/2)   =>   β_j ~ Laplace(λ)
+```
+
+so each Gibbs sweep is the *same* Gaussian per-SNP conditional the point-normal
+sampler already runs (prior variance `τ_j²` instead of the slab), plus an
+Inverse-Gaussian draw for `1/τ_j² ~ InvGauss(λ/|β_j|, λ²)`. The estimate is the
+Rao-Blackwellised average of the per-SNP conditional means over the post-burn-in
+sweeps.
+
+**Self-tuning `λ`.** The global shrinkage is set by marginal maximisation (an EM
+step), `λ² = 2k / Σ τ_j²`, which converges to the value matching the fitted total
+variance — no penalty grid, no validation cohort. A naïve fully-Bayesian `λ` (a
+conditional Gamma draw) does *not* work here: with the extra scale-mixture layer
+it drifts to the hyper-prior's mean independently of the data and mis-shrinks
+(see [benchmarks](benchmarks.md#laplace-prior-the-bayesian-lasso-methodlaplace)).
+
+Unlike the spike-and-slab there is no point mass at zero, so the posterior mean
+is **dense** — heavier-tailed shrinkage than the infinitesimal Gaussian, but it
+cannot concentrate on a few causals the way the point-normal does. It matches
+`inf` on a truly infinitesimal trait, beats `lassosum2` across architectures
+(the mean over the mode), and trails `auto`/`grid` on sparse traits. Dense LD
+blocks only (per-block, like `inf`/`grid`). CLI: `--method laplace`.
+
 ## Bivariate (two-trait) LDpred3
 
 `ldpred3_auto_bivariate` jointly fits **two traits that share one LD reference**.

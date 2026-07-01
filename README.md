@@ -60,6 +60,8 @@ Handy flags (full [CLI reference](docs/pipeline.md#cli-reference) and
 | `ldpred3_inf` | infinitesimal (all variants causal) | a truly infinitesimal trait, or a cheap baseline |
 | `ldpred3_grid` | point-normal at fixed `h²`, `p` | you already know the hyper-parameters |
 | `ldpred3_auto_annot` | `auto` + a learned annotation prior | you have per-SNP functional annotations |
+| `lassosum2` | L1 penalised regression (Laplace-prior mode) | a sparse complement to `auto`; keep whichever pseudo-validates better |
+| `ldpred3_laplace` | Bayesian lasso (Laplace-prior posterior **mean**) | a robust, self-tuning dense shrinkage model; the Bayesian counterpart of `lassosum2` |
 
 `auto` is the right choice for most traits; the
 [guide's decision tree](docs/guide.md#4-choosing-a-model) covers the rest.

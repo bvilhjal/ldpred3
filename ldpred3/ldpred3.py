@@ -44,6 +44,7 @@ from ._numba import HAVE_NUMBA, _jit, _jit_parallel, _set_threads, prange  # noq
 from .ld_utils import (SparseLD, sparsify_ld, block_diagonal_ld,  # noqa: F401,E402
                        optimal_ld_blocks, shrink_ld_blocks,
                        LowRankLD, lowrank_ld)
+from .laplace import ldpred3_laplace  # noqa: E402
 
 
 def _stable_postp(log_odds):
@@ -67,6 +68,7 @@ __all__ = [
     "ldpred3_inf",
     "ldpred3_grid",
     "ldpred3_auto",
+    "ldpred3_laplace",
     "ldpred3_by_blocks",
     "maf_slab_weights",
     "AutoResult",
@@ -1543,8 +1545,9 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
         Standardized marginal effects for all variants.
     n_eff : array_like or float
         GWAS sample size (per variant or scalar).
-    method : {"inf", "grid", "auto"}
-        Which model to run per block.
+    method : {"inf", "grid", "auto", "laplace"}
+        Which model to run per block. ``"laplace"`` is the Bayesian-lasso
+        (Laplace-prior) posterior-mean sampler (dense blocks only).
     sparsify : bool
         If True, convert each dense block to a :class:`SparseLD` (via
         :func:`sparsify_ld` with ``ld_threshold`` / ``ld_max_dist``) before
@@ -1566,7 +1569,8 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
     n = _as_n_vector(n_eff, m)
     out = np.zeros(m)
 
-    funcs = {"inf": ldpred3_inf, "grid": ldpred3_grid, "auto": ldpred3_auto}
+    funcs = {"inf": ldpred3_inf, "grid": ldpred3_grid, "auto": ldpred3_auto,
+             "laplace": ldpred3_laplace}
     if method not in funcs:
         raise ValueError(f"method must be one of {sorted(funcs)}")
 
@@ -1642,8 +1646,11 @@ def ldpred3_by_blocks(blocks, beta_hat, n_eff, method="auto",
             corr_block = sparsify_ld(corr_block, threshold=ld_threshold,
                                      max_dist=ld_max_dist)
         block_kwargs = dict(kwargs)
-        if method in ("inf", "grid"):
+        if method in ("inf", "grid", "laplace"):
             block_kwargs["h2"] = (total_h2 * k / m) if total_h2 is not None else 0.1
+        if method == "laplace" and isinstance(corr_block, (SparseLD, LowRankLD)):
+            raise ValueError("method='laplace' needs dense LD blocks "
+                             "(not SparseLD / LowRankLD)")
         if af is not None and method in ("auto", "grid"):
             block_kwargs["af"] = af[idx]            # MAF-dependent slab, per block
             block_kwargs["alpha"] = alpha
