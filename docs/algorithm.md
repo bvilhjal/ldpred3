@@ -287,6 +287,30 @@ Two further options complete the SBayesRC picture:
   genome-wide LD is never materialised (it matches the dense version on
   block-diagonal LD). This is what the pipeline's `--method annot` uses.
 
+## lassosum2 — penalised regression (`method="lassosum2"`)
+
+`lassosum2` is not a Bayesian sampler: it minimises a **penalised least-squares**
+objective directly on the summary statistics (Mak 2017; Privé 2021),
+
+```
+argmin_β   (1−s)·βᵀRβ − 2·β̂ᵀβ + s·‖β‖² + 2λ·‖β‖₁
+```
+
+where `R` is the block LD, `β̂` the standardized marginal effects, `s ∈ (0,1]` is
+an LD-shrinkage that blends `R` toward the identity, and `λ` is the L1 penalty
+that drives a **sparse** solution (many exact zeros). It is solved by
+coordinate descent, warm-started down a log-spaced `λ` path from `λ_max = max|β̂|`
+(all-zero) so the whole path is cheap.
+
+**No validation cohort needed.** The `(s, λ)` grid is scored by
+**pseudo-validation** — a correlation between the candidate effects and the
+summary statistics that estimates out-of-sample fit from the sumstats + LD alone
+— and the best cell is returned (guarded so a degenerate over-fit score ≤ 1
+cannot win). It is a fast, MCMC-free, sparse complement to `auto`: no single
+method dominates every architecture, so fitting both and keeping the better
+pseudo-validation is cheap insurance. Dense LD blocks only. CLI:
+`--method lassosum2`; API: `lassosum2(blocks, beta_hat)` → `Lassosum2Result`.
+
 ## Laplace prior — the Bayesian lasso (`method="laplace"`)
 
 The lasso (`lassosum2`) is the posterior *mode* under a Laplace (double-
