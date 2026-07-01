@@ -86,6 +86,7 @@ they run anywhere `msprime` is installed (`pip install msprime`).
 | `sparse_ld_tradeoff.py` | Sparse / banded LD: storage (density) and fit time vs accuracy across thresholding / banding settings |
 | `block_splitting.py` | `optimal_ld_blocks` vs fixed-size blocks: discarded between-block LD², per-block storage and accuracy |
 | `numba_speedup.py` | Numba-JIT vs pure-Python fit time for the Gibbs sampler (runs itself twice, with/without JIT) |
+| `sampler_fastpath.py` | Constant-N Gibbs fast path: per-sweep vs per-SNP scalar hoist — fit-time saved by polygenicity for `grid`/`finemap`, with genetic-R² parity (→ `sampler_fastpath.csv`) |
 | `cores_scaling.py` | Multi-core (`--ncores`) speed-up and parallel efficiency of the packed auto sampler |
 
 ## Inference: h² / genetic correlation

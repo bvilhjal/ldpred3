@@ -305,6 +305,21 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
     np.random.seed(seed)
     m = beta_hat.shape[0]
 
+    # Hoist the constant-N / uniform-prior posterior scalars out of the per-SNP
+    # loop (as the batched/streaming kernels do): with a shared N and a uniform
+    # slab the point-normal variance / normaliser are identical for every SNP, so
+    # recomputing sqrt/log1p per SNP each sweep is pure overhead; a uniform
+    # prior_w likewise collapses the log prior-odds to a scalar (no length-m
+    # vector). Both fall back to the exact per-SNP path when N/slab/prior vary.
+    n_const = m > 0 and n.min() == n.max()
+    n0 = n[0] if m > 0 else 0.0
+    slab0 = slab_w[0] if m > 0 else 1.0
+    pw0 = prior_w[0] if m > 0 else 1.0
+    slab_uniform = m > 0 and np.all(slab_w == slab0)
+    prior_uniform = m > 0 and np.all(prior_w == pw0)
+    fast = n_const and slab_uniform
+    dummy = np.zeros(1)                           # placeholder when prior is uniform
+
     curr_beta = init_beta.copy()                 # warm start (zeros = cold start)
     avg_beta = np.zeros(m)
     # Per-sweep Rao-Blackwellized contribution E[beta_j | rest] = postp * post_mean.
@@ -324,9 +339,19 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
         # SNP for a MAF-dependent architecture (slab_w == 1 -> uniform); ``prior_w``
         # separately re-weights the *inclusion* probability.
         c1 = h2 / (m * p)
-        # Per-SNP prior log-odds of null vs causal: p_j = p * prior_w[j].
-        pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
-        log_prior_odds_v = np.log1p(-pj) - np.log(pj)
+        # Per-SNP prior log-odds of null vs causal: p_j = p * prior_w[j]. A uniform
+        # prior_w makes this a single scalar; only the non-uniform case builds the
+        # length-m vector (two transcendentals per SNP).
+        if prior_uniform:
+            pj0 = min(max(p * pw0, 1e-9), 1.0 - 1e-9)
+            lpo_scalar = np.log1p(-pj0) - np.log(pj0)
+            log_prior_odds_v = dummy
+        else:
+            pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
+            log_prior_odds_v = np.log1p(-pj) - np.log(pj)
+            lpo_scalar = 0.0
+        # Constant N + uniform slab -> precompute pv/sd/half-log/n·pv once a sweep.
+        pv0, psd0, half0, npv0 = _pn_const_scalars(fast, n0, c1 * slab0)
         nb_causal = 0
 
         # Resync Rb from scratch at it == 0 (initialises it from the warm-start
@@ -353,11 +378,18 @@ def _gibbs_kernel(corr, beta_hat, n, h2, p, burn_in, num_iter, sparse,
             res_beta_j = beta_hat[j] - Rb[j] + old
             # Shared per-SNP point-normal update; the Rao-Blackwellised post_means
             # (accumulated below) drive the dense estimate, the sampled value the
-            # chain. Per-variant N here -> n_const=False; the prior weights enter
-            # through the per-SNP log prior-odds; slab_w scales the slab variance.
-            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1 * slab_w[j], False,
-                                   0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
-                                   unif[j], gauss[j], sparse, allow_jump_sign)
+            # chain. The ``fast`` branch feeds the per-sweep constant-N scalars
+            # (bit-identical arithmetic); otherwise N/slab vary and _pn_step
+            # recomputes per SNP. prior_w enters through lpo_j (scalar if uniform).
+            lpo_j = lpo_scalar if prior_uniform else log_prior_odds_v[j]
+            if fast:
+                new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1 * slab0, True,
+                                       pv0, psd0, half0, npv0, lpo_j,
+                                       unif[j], gauss[j], sparse, allow_jump_sign)
+            else:
+                new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1 * slab_w[j], False,
+                                       0.0, 0.0, 0.0, 0.0, lpo_j,
+                                       unif[j], gauss[j], sparse, allow_jump_sign)
             post_means[j] = pm
             nb_causal += dc
 
@@ -437,6 +469,10 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
     """
     np.random.seed(seed)
     m = beta_hat.shape[0]
+    # Constant N (the usual scalar-N inference / fine-mapping case) lets the
+    # posterior scalars be computed once a sweep instead of per SNP.
+    n_const = m > 0 and n.min() == n.max()
+    n0 = n[0] if m > 0 else 0.0
     curr_beta = np.zeros(m)
     avg_beta = np.zeros(m)
     post_means = np.zeros(m)
@@ -454,6 +490,7 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
         log_prior_odds = np.log1p(-p) - np.log(p)
+        pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
         nb_causal = 0
         acc = it >= burn_in            # accumulate PIPs only post burn-in
 
@@ -472,8 +509,8 @@ def _gibbs_kernel_sample(corr, beta_hat, n, h2, p, burn_in, num_iter,
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
-            new, pm, dc, postp = _pn_step(res_beta_j, old, n[j], c1, False,
-                                          0.0, 0.0, 0.0, 0.0, log_prior_odds,
+            new, pm, dc, postp = _pn_step(res_beta_j, old, n[j], c1, n_const,
+                                          pv0, psd0, half0, npv0, log_prior_odds,
                                           unif[j], gauss[j], False, allow_jump_sign)
             post_means[j] = pm
             nb_causal += dc
@@ -531,6 +568,14 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
     np.random.seed(seed)
     m = beta_hat.shape[0]
 
+    # Same constant-N / uniform-prior hoisting as the dense kernel (there is no
+    # per-SNP slab here, so the fast path is just constant N).
+    n_const = m > 0 and n.min() == n.max()
+    n0 = n[0] if m > 0 else 0.0
+    pw0 = prior_w[0] if m > 0 else 1.0
+    prior_uniform = m > 0 and np.all(prior_w == pw0)
+    dummy = np.zeros(1)
+
     curr_beta = init_beta.copy()
     avg_beta = np.zeros(m)
     post_means = np.zeros(m)
@@ -544,8 +589,15 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
 
     for it in range(n_iter_total):
         c1 = h2 / (m * p)
-        pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
-        log_prior_odds_v = np.log1p(-pj) - np.log(pj)
+        if prior_uniform:
+            pj0 = min(max(p * pw0, 1e-9), 1.0 - 1e-9)
+            lpo_scalar = np.log1p(-pj0) - np.log(pj0)
+            log_prior_odds_v = dummy
+        else:
+            pj = np.minimum(np.maximum(p * prior_w, 1e-9), 1.0 - 1e-9)
+            log_prior_odds_v = np.log1p(-pj) - np.log(pj)
+            lpo_scalar = 0.0
+        pv0, psd0, half0, npv0 = _pn_const_scalars(n_const, n0, c1)
         nb_causal = 0
 
         # Resync Rb at it == 0 (from warm start) and periodically (non-zeros only).
@@ -563,8 +615,9 @@ def _gibbs_kernel_sparse(indptr, indices, data, beta_hat, n, h2, p, burn_in,
         for j in range(m):
             old = curr_beta[j]
             res_beta_j = beta_hat[j] - Rb[j] + old
-            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1, False,
-                                   0.0, 0.0, 0.0, 0.0, log_prior_odds_v[j],
+            lpo_j = lpo_scalar if prior_uniform else log_prior_odds_v[j]
+            new, pm, dc, _ = _pn_step(res_beta_j, old, n[j], c1, n_const,
+                                   pv0, psd0, half0, npv0, lpo_j,
                                    unif[j], gauss[j], sparse, allow_jump_sign)
             post_means[j] = pm
             nb_causal += dc

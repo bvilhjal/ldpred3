@@ -44,6 +44,21 @@ follow [Semantic Versioning](https://semver.org/).
   (`benchmarks/make_paper_figures.py`) now covers them.
 
 ### Changed
+- **Gibbs samplers: constant-N / uniform-prior fast path** in the dense
+  (`_gibbs_kernel`), sampling (`_gibbs_kernel_sample`) and sparse
+  (`_gibbs_kernel_sparse`) kernels, back-porting the hoist the batched/streaming
+  kernels already used. When N is shared across variants (scalar `n_eff`) and the
+  slab/prior are uniform, the per-SNP posterior scalars (`sqrt`/`log1p`) and the
+  log prior-odds are computed once per sweep instead of per SNP. Output is
+  **bit-identical** (same arithmetic, same RNG stream); ~1.3–1.5× faster in the
+  sparse-`p` regime that dominates fine-mapping (`ldpred3_pip`) and the auto
+  inference / r² chains (`ldpred3_auto_infer`). Falls back to the exact per-SNP
+  path for per-variant N, MAF slab weights or non-uniform `prior_weights`.
+- `prs._as_float_with_nan` copies the dosage matrix once (`np.array`) instead of
+  twice (`np.asarray().copy()` up-cast then duplicated integer dosages), halving
+  the transient memory of every standardization / scoring / LD-block build.
+- `finemap._credible_sets` finds a signal's out-of-set neighbours with a boolean
+  mask instead of `np.isin` (no internal sort); credible sets are unchanged.
 - **Project renamed pyLDpred2 → LDpred3** (package `ldpred3`, CLI `ldpred3`, API
   `ldpred3_*`); citations to the LDpred2 method are kept.
 - `qc.dentist_outlier_mask` skips blocks that have settled, avoiding redundant

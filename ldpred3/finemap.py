@@ -152,7 +152,11 @@ def _credible_sets(pip, R, coverage, min_abs_corr, max_signals, variant_ids,
         # near-perfect LD (|r| >= tie_r) with the lead -- the data genuinely cannot
         # tell them apart, so a calibrated set must contain them.
         lead = int(members[np.argmax(pip[members])])
-        pool = avail[~np.isin(avail, members)]
+        # Unclaimed variants outside this set, via a direct boolean mask (avoids
+        # np.isin's internal sort — members is a small subset of avail).
+        in_members = np.zeros(m, dtype=bool)
+        in_members[members] = True
+        pool = avail[~in_members[avail]]
         ties = pool[absR[lead, pool] >= tie_r]
         if ties.size:
             members = np.concatenate([members, ties])

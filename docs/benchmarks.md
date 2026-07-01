@@ -263,8 +263,9 @@ in its own process for a clean peak RSS. Regenerate with
 > Apple-Silicon laptop. Absolute *timings* are not comparable across the two
 > machines (this Xeon is ~1.5–2.5× slower), but genetic R² and the `float32` LD
 > memory are hardware-independent — and both **reproduce the earlier numbers**,
-> confirming the internal refactors (the shared `_pn_step` sampler core, the new
-> methods) changed neither accuracy nor footprint.
+> confirming the internal refactors (the shared `_pn_step` sampler core, the
+> [constant-N fast path](#constant-n-sampler-fast-path), the new methods) changed
+> neither accuracy nor footprint.
 
 ![Methods: accuracy, time and memory vs genome size](../benchmarks/method_scaling.png)
 
@@ -810,6 +811,43 @@ A **large** speed-up (here ~680×; strongly machine-dependent — the pure-Pytho
 inner loop is especially slow on this laptop's CPython) — this is why
 `pip install numba` is strongly recommended. Without it everything still runs,
 just far slower.
+
+## Constant-N sampler fast path
+
+The point-normal update needs, per SNP, a posterior variance/SD and a
+half-log-normaliser (a `sqrt` and a `log1p`) plus the log prior-odds. When the
+GWAS sample size `N` is **shared across variants** (a scalar `n_eff`) and the
+slab/prior are uniform, those are identical for every SNP, so the samplers
+compute them **once per sweep** instead of once per SNP — the hoist the
+batched/streaming kernels already used, now also in the dense (`_gibbs_kernel`),
+sampling (`_gibbs_kernel_sample`) and sparse (`_gibbs_kernel_sparse`) kernels. A
+per-variant `N`, a MAF slab (`alpha`) or non-uniform `prior_weights` fall back to
+the exact per-SNP path, **bit-for-bit unchanged** (verified across 13 grid/auto/
+sparse/infer/fine-map configs).
+
+The saving isolated on one realistic-LD block (m=2000, N=20,000, h²=0.5, burn-in
+100 / 300 sweeps, single core): the *identical* fit run through the fast path vs
+the per-SNP path (`N` perturbed by 1e-6 to select the latter). Regenerate with
+`benchmarks/sampler_fastpath.py`.
+
+| method | p (causal) | fast path (ms) | per-SNP path (ms) | saved | genetic R² |
+|--------|-----------:|---------------:|------------------:|------:|-----------:|
+| grid    | 0.001 | 23.0 | 28.2 | **18%** | 0.996 |
+| finemap | 0.001 | 44.9 | 54.6 | **18%** | 0.998 |
+| grid    | 0.01  | 26.0 | 31.1 | **16%** | 0.995 |
+| finemap | 0.01  | 53.1 | 62.4 | **15%** | 0.995 |
+| grid    | 0.1   | 54.1 | 59.7 | **9%**  | 0.971 |
+| finemap | 0.1   | 126.5 | 136.9 | **8%** | 0.972 |
+
+The genetic R² is the same to three decimals in both columns — the fast path
+changes only *when* the scalars are computed, not the result. The saving is
+**largest for sparse `p`** (~18%, tapering to ~8% as the trait gets denser):
+when few effects change per sweep the O(m) rank-1 residual update is mostly
+skipped, so the per-SNP `sqrt`/`log1p` is a larger share of the sweep — precisely
+the regime that fine-mapping (`ldpred3_pip`, sparse `p_init`) and the auto
+r²/inference chains (`ldpred3_auto_infer`, many chains) run in, so they benefit
+most. The `global_hyper=True` streaming/batched genome-wide path was already on
+this fast path and is unchanged.
 
 ## Multi-core scaling (`--ncores`)
 

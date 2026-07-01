@@ -452,6 +452,20 @@ the bandwidth-bound hot path, so it runs as a fused element loop over a
 no meaningful accuracy cost — and matches bigsnpr, which also stores LD in single
 precision). The effects and the `R @ beta` accumulator stay in float64.
 
+The per-SNP point-normal scalars are **hoisted out of the inner loop** when they
+are constant across variants. With a shared sample size `N` (a scalar `n_eff`)
+and a uniform slab/prior, the posterior variance, its `sqrt`, the
+half-log-normaliser and the log prior-odds are identical for every SNP, so they
+are computed **once per sweep** (`_pn_const_scalars`) rather than re-deriving a
+`sqrt`/`log1p` per SNP. This is the same hoist the batched/streaming kernels use;
+it is now in the dense, sampling and sparse single-block kernels too. It is
+**bit-identical** to the per-SNP path (same arithmetic, same RNG stream) and
+falls back to it whenever `N` varies per variant, a MAF slab (`alpha`) is set, or
+`prior_weights` are non-uniform. The win is largest for sparse traits — when few
+effects change per sweep the O(m) rank-1 update is mostly skipped, so the per-SNP
+scalars would otherwise dominate the sweep (see
+[benchmarks](benchmarks.md#constant-n-sampler-fast-path)).
+
 The posterior-mean estimate is **Rao-Blackwellized** (as in the original
 LDpred): each sweep accumulates the conditional expectation
 `E[beta_j | rest] = P(causal) · posterior_mean` rather than the sampled draw.

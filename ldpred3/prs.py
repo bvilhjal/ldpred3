@@ -27,11 +27,17 @@ __all__ = ["allele_frequency", "standardize_dosage", "dosage_stats", "prs_score"
 
 
 def _as_float_with_nan(dosage):
-    """Copy dosage to float, turning the ``-1`` missing sentinel into NaN."""
-    g = np.asarray(dosage, dtype=np.float64)
+    """Copy dosage to float, turning the ``-1`` missing sentinel into NaN.
+
+    ``np.array(..., dtype=float64)`` makes exactly one fresh copy whatever the
+    input dtype, so the in-place NaN fill never touches the caller's array. (The
+    old ``np.asarray(...).copy()`` copied the whole matrix twice for the common
+    integer-dosage input: ``asarray`` already up-casts to float, then ``.copy()``
+    duplicated that up-cast array.)
+    """
+    g = np.array(dosage, dtype=np.float64)
     if g.ndim != 2:
         raise ValueError("dosage must be a 2-D (n_samples, n_variants) array")
-    g = g.copy()
     g[g < 0] = np.nan
     return g
 
