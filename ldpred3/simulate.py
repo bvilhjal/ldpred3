@@ -171,6 +171,49 @@ def simulate_genotypes_coalescent(n, m, block_size, *, Ne=10000,
     return G, blocks
 
 
+def simulate_genotypes_by_mutation_rate(n, seq_len, *, recomb_rate=1e-8,
+                                        mut_rate=1e-8, Ne=10000, min_maf=0.01,
+                                        seed=None):
+    """Coalescent genotypes on a *fixed* segment; SNP density set by ``mut_rate``.
+
+    :func:`simulate_genotypes_coalescent` grows the sequence until it hits a
+    target #SNPs -- convenient, but it couples LD extent to SNP count. This
+    primitive instead fixes the segment's physical length (``seq_len``, bp) and
+    recombination rate, so the **LD structure is fixed**, and controls SNP
+    *density* with the **mutation rate**: raising ``mut_rate`` layers more
+    variants onto the *same* recombination structure -- exactly what denser
+    genotyping / sequencing does (array -> imputed -> WGS) -- while lowering it
+    thins them. With a fixed ``seed`` the underlying genealogy is identical
+    across mutation rates, so a higher rate is literally the same chromosome with
+    more variants discovered.
+
+    This is the density lever to prefer when simulating how cost / accuracy scale
+    with SNP density at a *fixed* genome architecture (see
+    ``benchmarks/bench_ldpred3_scaling.py``).
+
+    Returns ``G`` int8 of shape ``(n, k)``; ``k`` (the number of common SNPs,
+    MAF > ``min_maf``) emerges from the mutation rate and segment length. The
+    columns are in physical order, so contiguous slices are contiguous LD.
+    """
+    try:
+        import msprime
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("the coalescent LD model needs msprime "
+                          "(pip install msprime)") from e
+
+    ms_seed = None if seed is None else int(seed)
+    ts = msprime.sim_ancestry(
+        samples=n, ploidy=2, population_size=Ne, recombination_rate=recomb_rate,
+        sequence_length=int(seq_len), random_seed=ms_seed)
+    mts = msprime.sim_mutations(ts, rate=mut_rate, random_seed=ms_seed,
+                                model=msprime.BinaryMutationModel())
+    H = mts.genotype_matrix()                       # (sites, 2n), 0/1
+    dos = (H[:, 0::2] + H[:, 1::2]).T               # (n, sites), 0/1/2
+    af = dos.mean(axis=0) / 2.0
+    dos = dos[:, (af > min_maf) & (af < 1 - min_maf)]
+    return np.ascontiguousarray(dos.astype(np.int8))
+
+
 def _std_block(G, rows, idx, mean, sd):
     """Standardize a genotype sub-block to float64 (column z-scores)."""
     X = G[rows][:, idx].astype(np.float64)
