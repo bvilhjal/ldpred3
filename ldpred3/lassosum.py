@@ -94,10 +94,13 @@ class Lassosum2Result:
 
 
 def _fblocks(blocks):
+    # Keep the LD in float32 (the LD rows are the bandwidth-/memory-dominant part
+    # and float32 correlations are plenty precise); beta / Rb / the accumulators
+    # stay float64, so each product promotes to float64 anyway.
     out = []
     for R, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
         idx = np.asarray(idx)
-        out.append((np.ascontiguousarray(R, dtype=np.float64), idx))
+        out.append((np.ascontiguousarray(R, dtype=np.float32), idx))
     return out
 
 

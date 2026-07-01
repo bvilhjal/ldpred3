@@ -294,7 +294,10 @@ def ldpred3_auto_infer(corr, beta_hat, n_eff, *, n_chains=10,
         # apply_R already uses the shrunk LD (_prep_corr / _prep_blocks applied
         # shrink_corr once); do NOT shrink again here, or the dense path would
         # use shrink^2*R + (1-shrink^2)*I and disagree with the block path.
-        prod = apply_R(s.astype(float))            # (n_saved, m) = R_shrunk b
+        # Keep the products in float32 (the samples' dtype) — this Rb dict is the
+        # memory hog of the r² step (n_chains × n_saved × m), and the r² is a
+        # Monte-Carlo correlation estimate whose sampling noise dwarfs float32.
+        prod = apply_R(s)                          # (n_saved, m) float32 = R_shrunk b
         Rb[c] = prod
     r2_vals = []
     kept_with_samples = [c for c in keep if c in Rb]

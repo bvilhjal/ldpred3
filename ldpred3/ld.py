@@ -64,25 +64,39 @@ def save_ld_blocks(path, blocks, variant_ids, mmap=False):
 
 
 def _save_ld_blocks_mmap(path, blocks, variant_ids):
-    """Memmap layout: small metadata .npz + a concatenated float32 .dat.npy."""
+    """Memmap layout: small metadata .npz + a float32 .dat.npy payload.
+
+    The payload is streamed **one block at a time** straight into the memmap
+    sidecar (``np.lib.format.open_memmap``), so writing the cache never holds a
+    second full copy of the LD in RAM — important when the LD is many GB.
+    """
     ids = np.asarray(variant_ids, dtype=object).astype(str)
-    sizes, kinds, ranks, offsets, parts = [], [], [], [], []
+    # Pass 1: layout (block float counts) without materialising any payload.
+    sizes, kinds, ranks, offsets = [], [], [], []
     off = 0
     for R, _ in blocks:
         if isinstance(R, LowRankLD):
-            arr = np.asarray(R.U, dtype=np.float32).ravel()
-            kinds.append(2); sizes.append(R.m); ranks.append(R.rank)
+            kinds.append(2); sizes.append(R.m); ranks.append(R.rank); nfloat = R.U.size
         elif isinstance(R, SparseLD):
             raise ValueError("mmap on-disk streaming supports dense / LowRankLD "
                              "blocks (uniform float32 payload), not SparseLD")
         else:
-            R = np.asarray(R, dtype=np.float32)
-            arr = R.ravel(); kinds.append(0); sizes.append(R.shape[0]); ranks.append(0)
-        offsets.append(off); off += arr.size; parts.append(arr)
+            R = np.asarray(R)
+            kinds.append(0); sizes.append(R.shape[0]); ranks.append(0); nfloat = R.size
+        offsets.append(off); off += int(nfloat)
     if int(np.sum(sizes)) != len(ids):
         raise ValueError("variant_ids length does not match the blocks' columns")
-    payload = np.concatenate(parts) if parts else np.empty(0, np.float32)
-    np.save(str(path) + ".dat.npy", payload.astype(np.float32))
+    # Pass 2: write each block into its slice; peak extra RAM is one block.
+    payload = np.lib.format.open_memmap(str(path) + ".dat.npy", mode="w+",
+                                        dtype=np.float32, shape=(int(off),))
+    o = 0
+    for R, _ in blocks:
+        arr = (np.asarray(R.U, dtype=np.float32).ravel() if isinstance(R, LowRankLD)
+               else np.asarray(R, dtype=np.float32).ravel())
+        payload[o:o + arr.size] = arr
+        o += arr.size
+    payload.flush()
+    del payload
     np.savez(path, ids=ids, sizes=np.array(sizes, np.int64),
              kinds=np.array(kinds, np.int8), ranks=np.array(ranks, np.int64),
              offsets=np.array(offsets, np.int64), ondisk=np.array([1], np.int8))
