@@ -474,7 +474,8 @@ themselves are reproducible from the seed regardless.
 
 ## References
 
-Methods implemented in LDpred3 and the papers they come from.
+The methods implemented in LDpred3 and the papers they come from, followed by
+related summary-statistic PRS methods for context.
 
 **Core PRS models**
 
@@ -498,8 +499,12 @@ Methods implemented in LDpred3 and the papers they come from.
 - **lassosum.** Mak TSH, Porsch RM, Choi SW, Zhou X, Sham PC. "Polygenic scores
   via penalized regression on summary statistics." *Genet Epidemiol*
   41(6):469–480 (2017). doi:10.1002/gepi.22050 — the L1-penalised summary-statistic
-  objective and pseudo-validation; `lassosum2` is the `bigsnpr` re-parameterisation
-  (Privé *et al.* 2020).
+  objective and the `βᵀr/√(βᵀRβ)` pseudo-validation.
+- **lassosum2.** Privé F, Arbel J, Aschard H, Vilhjálmsson BJ (the `bigsnpr`
+  re-parameterisation of lassosum with the `(s, λ)` elastic-net grid, run
+  alongside LDpred2-auto). Introduced with the LDpred2 tooling (Privé *et al.*
+  2020, above) and detailed in the misspecification paper (Privé *et al.* 2022,
+  below) — `method="lassosum2"`.
 - **Bayesian lasso.** Park T, Casella G. "The Bayesian Lasso." *J Am Stat Assoc*
   103(482):681–686 (2008). doi:10.1198/016214508000000337 — the normal/exponential
   scale-mixture Gibbs sampler and the marginal-maximisation `λ` update behind
@@ -557,3 +562,41 @@ Methods implemented in LDpred3 and the papers they come from.
   genome-wide association studies: comparison with P-values." *Genet Epidemiol*
   33(1):79–86 (2009). doi:10.1002/gepi.20359 — the single-SNP ABF in
   `single_signal_finemap`.
+
+**Related / alternative summary-statistic PRS methods (not implemented here)**
+
+For context and comparison — other genome-wide PRS methods that, like LDpred3,
+re-weight GWAS effects with an LD reference:
+
+- **PRS-CS.** Ge T, Chen C-Y, Ni Y, Feng Y-CA, Smoller JW. "Polygenic prediction
+  via Bayesian regression and continuous shrinkage priors." *Nat Commun* 10:1776
+  (2019). doi:10.1038/s41467-019-09718-5 — a continuous-shrinkage (global-local,
+  horseshoe-like) prior; a close cousin of `laplace` with a heavier-tailed,
+  spike-free prior.
+- **SBayesR.** Lloyd-Jones LR, Zeng J, Sidorenko J, *et al.* "Improved polygenic
+  prediction by Bayesian multiple regression on summary statistics." *Nat Commun*
+  10:5086 (2019). doi:10.1038/s41467-019-12653-0 — a finite Gaussian-mixture prior
+  (the multi-component generalisation of the point-normal used by `grid`/`auto`).
+- **SBayesRC.** Zheng Z, Liu S, Sidorenko J, *et al.* "Leveraging functional
+  genomic annotations and genome coverage to improve polygenic prediction of
+  complex traits within and between ancestries." *Nat Genet* 56:767–777 (2024).
+  doi:10.1038/s41588-024-01704-4 — SBayesR plus low-rank/eigen LD and functional
+  annotations; the annotation idea behind `--method annot` and the low-rank LD of
+  `LowRankLD`.
+- **MegaPRS / LDAK.** Zhang Q, Privé F, Vilhjálmsson B, Speed D. "Improved genetic
+  prediction of complex traits from individual-level data or summary statistics."
+  *Nat Commun* 12:4192 (2021). doi:10.1038/s41467-021-24485-y — fits lasso, ridge,
+  BOLT and BayesR priors under the LDAK-BLD heritability model (an explicit
+  MAF/LD architecture, cf. the `--alpha` prior) and picks the best.
+- **VIPRS.** Zabad S, Gravel S, Li Y. "Fast and accurate Bayesian polygenic risk
+  modeling with variational inference." *Am J Hum Genet* 110(5):741–761 (2023).
+  doi:10.1016/j.ajhg.2023.03.009 — the spike-and-slab model fit by variational
+  inference rather than MCMC (a deterministic alternative to the `auto` sampler).
+- **SDPR.** Zhou G, Zhao H. "A fast and robust Bayesian nonparametric method for
+  prediction of complex traits using summary statistics." *PLoS Genet*
+  17(7):e1009697 (2021). doi:10.1371/journal.pgen.1009697 — a Dirichlet-process
+  (nonparametric) mixture prior on effects.
+- **DBSLMM.** Yang S, Zhou X. "Accurate and Scalable Construction of Polygenic
+  Scores in Large Biobank Data Sets." *Am J Hum Genet* 106(5):679–693 (2020).
+  doi:10.1016/j.ajhg.2020.03.013 — a deterministic Bayesian sparse LMM (a fast
+  large-effect / infinitesimal split).
