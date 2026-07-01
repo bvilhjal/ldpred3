@@ -78,8 +78,11 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--method {auto,grid,inf,annot,lassosum2,laplace}` | `auto` | LDpred3 model; see [Choosing a model](../README.md#choosing-a-model). `lassosum2` = L1 (Laplace-prior mode); `laplace` = Bayesian lasso (Laplace-prior posterior mean). |
 | `--annotations FILE` | none | Per-SNP annotation table; switches `--method` to `annot`. |
 | `--alpha FLOAT` | `-1.0` | MAF-dependent slab-variance prior exponent (Privé 2023): slab variance scales as `[2f(1-f)]^(1+alpha)`. `-1` = flat (unchanged); `auto`/`grid` only (see [algorithm.md](algorithm.md#maf-dependent-slab-variance-alpha)). |
+| `--auto-chains N` | `1` | With `--method auto`: run N chains, drop inconsistent ones and average the rest for a more robust PRS (Privé 2023). `>1` enables it (~10 typical); `1` = single chain. |
+| `--ldsc-init` | off | Seed the sampler's `h²` from LD Score regression (`h2_init` for `auto`; fixed `h²` for `inf`/`grid`). |
 | `--block-size N` | `500` | Maximum variants per LD block. |
 | `--n-eff FLOAT` | none | Effective sample size, used when the sumstats have no `N` column. |
+| `--n-cases FLOAT` / `--n-controls FLOAT` | none | Binary-trait GWAS: derive the effective N `4/(1/N_case + 1/N_control)` (overrides `--n-eff`). Give both together. |
 | `--ld-prefix PREFIX` | in-sample | External LD reference panel (PLINK prefix); default is the target itself. |
 | `--ld-ridge FLOAT` | `0.0` | Shrink each LD block towards the identity by this fraction (stabilises noisy panels). |
 | `--ld-shrink` | off | Size-aware shrinkage of large LD blocks toward the identity (`α = min(0.5, k/Nref)`); helps on a finite/noisy LD panel. |
@@ -101,6 +104,8 @@ Every `ldpred3` flag (run `ldpred3 --help` for the canonical list):
 | `--save-weights FILE` | none | Also write the fitted weights for reuse. |
 | `--weights FILE` | none | Score the target from a saved weights file (no sumstats / LD / refit). |
 | `--scaling target\|frozen` | `target` | With `--weights`: `target` standardizes by the scoring cohort; `frozen` reuses the fit cohort's `AF_REF`/`SD_REF` so different cohorts share one scale. |
+| `--score-chunk N` | `1000` | With `--weights` on PLINK: variants per streamed scoring chunk (lower = less memory at biobank scale). |
+| `--prs-percentiles` | off | Also write standardized `Z` and percentile `PCT` columns to the scores output. |
 
 ## Outputs
 

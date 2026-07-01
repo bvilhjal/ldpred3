@@ -156,25 +156,44 @@ mismatch, wrong `N`, or LD that doesn't match the target) rather than the model.
 Branch off it only for the cases below:
 
 ```
-start →  auto   (self-tuning; the right answer for most traits)
+start →  auto   (self-tuning point-normal; the right answer for most traits)
            │
            ├─ trait is truly infinitesimal, or you want a cheap baseline   →  inf
            ├─ you already know h² and p (e.g. from a previous fit)         →  grid
-           └─ you have trustworthy per-SNP functional annotations          →  annot
+           ├─ you have trustworthy per-SNP functional annotations          →  annot
+           └─ want a sparse / lasso-style alternative to compare against   →  lassosum2  or  laplace
 ```
 
-| Model | When to use | Hyper-parameters |
-|-------|-------------|------------------|
-| **`auto`** | **the default** — self-tunes `h²` and `p`, matches the oracle `grid`, robust across architectures | none |
-| **`inf`** | you believe the trait is truly infinitesimal, or you want the cheapest/most-robust baseline | `h2` |
-| **`grid`** | you already know `h²` and `p` (e.g. from a previous fit) and want a fixed-hyper sampler | `h2`, `p` |
-| **`annot`** | you have functional annotations (coding, conserved, enhancers, …) and want to exploit them | none (learns the map) |
+Every method takes standardized marginal effects + LD and returns adjusted
+(posterior) effects; they differ in the **prior** on the true effects.
+
+| Model | What it is | When to use | Tunes |
+|-------|------------|-------------|-------|
+| **`auto`** | point-normal (spike-and-slab) prior, `h²` & `p` self-tuned by the Gibbs sampler | **the default** — robust across architectures, no tuning cohort | `h²`, `p` |
+| **`inf`** | infinitesimal (Gaussian) prior — *all* variants causal | a truly infinitesimal trait, or the cheapest, most robust baseline | — (needs `h²`) |
+| **`grid`** | point-normal at **fixed** `h²`, `p` | you already know the hyper-parameters (e.g. from a previous `auto` fit) | — (needs `h²`, `p`) |
+| **`annot`** | `auto` + an SBayesRC-style **learned** functional prior `p_j = σ(aⱼᵀθ)` | you have per-SNP annotations (coding, conserved, enhancers, …) | `h²`, per-annotation `θ` |
+| **`lassosum2`** | L1-penalised regression (Laplace-prior *mode*); a `(shrink, λ)` grid picked by pseudo-validation | a sparse, no-MCMC complement — keep whichever of it / `auto` pseudo-validates better | `shrink`, `λ` (grid) |
+| **`laplace`** | Bayesian lasso — Laplace-prior posterior **mean** via Gibbs, self-tuning the shrinkage | a robust dense-shrinkage alternative; the Bayesian counterpart of `lassosum2` | `λ` |
 
 Empirically (see [benchmarks.md](benchmarks.md)): the raw marginal PRS is always
 far behind; `inf` is robust but flat and only wins under a truly infinitesimal
 architecture; `grid`/`auto` win decisively on sparse / major-locus traits; `auto`
 matches the oracle `grid` with no tuning; `annot` matches `auto` when the
-annotation is uninformative and beats it when it carries signal.
+annotation is uninformative and beats it when it carries signal; `lassosum2` and
+`laplace` are competitive sparse alternatives — no single method dominates every
+trait, so comparing `auto` against one of them (they need no validation cohort)
+is cheap insurance.
+
+**Two modifiers that layer on `auto`/`grid`** (not separate methods):
+
+- **`--auto-chains N`** (Privé 2023 robust auto): run `N` independent chains,
+  drop the ones that fail a consistency filter, and average the rest — a more
+  stable PRS at low power. `N≈10` is typical; the default `1` is a single chain.
+- **`--alpha A`** (MAF-dependent prior): let the causal-effect variance scale as
+  `[2f(1−f)]^(1+A)` instead of being flat. `A=−1` (default) is the standard
+  LDpred model; `A<−1` up-weights rarer variants (the signature of negative
+  selection). See [algorithm.md](algorithm.md#maf-dependent-slab-variance-alpha).
 
 ## 5. Working from your own LD blocks (library path)
 
