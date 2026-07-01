@@ -26,41 +26,45 @@ Wall-clock time (s), single core:
 
 | #SNPs | inf py / big | grid py / big | auto py / big |
 |-------|-------------:|--------------:|--------------:|
-| 200k  | 1.3 / **0.9** | 2.5 / **1.4** | **1.5** / 2.1 |
-| 500k  | **3.1** / 4.3 | 6.1 / **3.9** | **4.0** / 5.9 |
-| 1M    | **7.0** / 15.6 | 12.8 / **9.3** | **8.8** / 14.7 |
+| 200k  | **3.2** / 3.5 | 10.3 / **3.5** | **3.7** / 4.9 |
+| 500k  | **5.4** / 8.0 | 15.7 / **9.7** | **9.0** / 13.7 |
+| 1M    | 10.9 / 10.9 | 31.7 / **18.9** | **18.9** / 26.6 |
 
 Peak memory (GB) — LD-dominated, so ~equal across the three methods:
 
 | #SNPs | LDpred3 | bigsnpr | ratio |
 |-------|----------:|--------:|------:|
-| 200k  | **0.79** | 1.14 | 1.4× |
-| 500k  | **1.47** | 2.48 | 1.7× |
-| 1M    | **2.50** | 4.48 | 1.8× |
+| 200k  | **0.64** | 1.05 | 1.6× |
+| 500k  | **1.20** | 2.29 | 1.9× |
+| 1M    | **2.23** | 4.39 | 2.0× |
 
 **Prediction accuracy is identical** between the two at every size and method —
-e.g. auto phenotype-scale R² 0.395/0.395 at 200k → 0.190/0.190 at 1M (the level
+e.g. auto phenotype-scale R² 0.388/0.388 at 200k → 0.185/0.185 at 1M (the level
 falls with #SNPs because the GWAS power N is fixed; R²_pheno = genetic-R² × h²,
 h²=0.5).
 
-> Measured on a 16 GB Apple-Silicon laptop, single core. The **2M-SNP** point is
-> omitted here: bigsnpr's ~5.5 GB on-disk SFBM thrashes on 16 GB RAM, so its 2M
-> timing is memory-bound (minutes), not a representative single-core compute time;
-> LDpred3's `float32` LD stays ~4.4 GB and runs fine at 2M. Re-run
-> `bench_vs_bigsnpr.py` on a larger-memory box for the full 200k–2M sweep.
+> **Hardware.** Every timing/memory table in this file was (re-)measured on **one
+> machine — a 4-core Linux box @2.8 GHz / 15 GB, single core** — so the numbers
+> are mutually comparable. The **2M-SNP** point is omitted from the bigsnpr
+> comparison: bigsnpr's on-disk SFBM is ~4.4 GB at 1M, so ~8.5 GB at 2M would
+> thrash on 15 GB and its timing would be memory-bound, not a fair single-core
+> compute number. LDpred3's `float32` LD stays ~4.3 GB at 2M and runs fine — see
+> the [genome-scale table](#genome-scale-scalability-200k4m-snps), which goes to
+> 4M. Re-run `bench_vs_bigsnpr.py` on a larger-memory box for a full 2M pairing.
 
 The picture is method-dependent — there is no blanket "N× faster":
 
-- **Memory:** LDpred3 is **~1.4–1.8× leaner**, the gap widening with size
-  (`float32` LD + one block resident; bigsnpr's SFBM stores `float64` values
-  plus per-entry indices).
-- **`-auto`:** LDpred3 is **~1.4–1.7× faster** at matched initialization — its
+- **Memory:** LDpred3 is **~1.6–2.0× leaner**, the gap widening cleanly to a full
+  2× at 1M (`float32` LD + one block resident; bigsnpr's SFBM stores `float64`
+  values plus per-entry indices).
+- **`-auto`:** LDpred3 is **~1.3–1.5× faster** at matched initialization — its
   streaming global-hyper sampler is the strongest path.
-- **`-inf`:** on par at 200k (bigsnpr a hair faster) and **faster at 500k–1M** —
-  the per-block linear solve holds up well.
-- **`-grid`:** **bigsnpr is ~1.4–1.8× faster** here; its compiled C++ grid sampler
-  beats LDpred3's per-block Python-orchestrated one, though the gap narrows with
-  size. This is LDpred3's weak spot at fixed hyper-parameters.
+- **`-inf`:** LDpred3 faster at 200k–500k, level at 1M — the per-block linear
+  solve holds up well.
+- **`-grid`:** **bigsnpr is faster** here (its compiled C++ grid sampler beats
+  LDpred3's per-block Python-orchestrated one); the gap is widest at 200k (~3×)
+  and narrows to ~1.7× by 1M. This is LDpred3's weak spot at fixed
+  hyper-parameters.
 
 ### `auto` from a cold start (no oracle hyper-parameters)
 
@@ -71,12 +75,12 @@ same LD and sumstats; regenerate with `benchmarks/bench_cold_init.py`):
 
 | #SNPs | LDpred3 R² | bigsnpr R² | LDpred3 (s) | bigsnpr (s) |
 |-------|----------:|-----------:|------------:|------------:|
-| 200k  | 0.395 | 0.395 | **1.7** | 3.3 |
-| 500k  | **0.284** | 0.251 | **6.1** | 17.7 |
-| 1M    | **0.154** | 0.146 | **19.7** | 48.6 |
+| 200k  | 0.388 | 0.388 | **3.9** | 8.1 |
+| 500k  | **0.279** | 0.230 | **12.3** | 42.5 |
+| 1M    | **0.155** | 0.144 | **42.3** | 103.6 |
 
-From a cold start LDpred3's auto is **at least as accurate as bigsnpr's and 2–3×
-faster** — they tie at 200k, and LDpred3 leads by up to ~13% (500k) at the larger
+From a cold start LDpred3's auto is **at least as accurate as bigsnpr's and 2–3.4×
+faster** — they tie at 200k, and LDpred3 leads by up to ~21% (500k) at the larger
 sizes. Both fall a little short of their oracle-init numbers (the fixed 300-sweep
 budget doesn't fully converge the hyper-parameters at 1M+), but LDpred3 degrades
 less; the oracle warm-start in the main table is what lets bigsnpr's single chain
@@ -257,15 +261,12 @@ and `laplace` is the Bayesian-lasso (Laplace-prior posterior mean). Each size ru
 in its own process for a clean peak RSS. Regenerate with
 `benchmarks/method_scaling.py`.
 
-> **Hardware.** This table (and the [genome-scale](#genome-scale-scalability-200k4m-snps)
-> one below) was **re-measured on a 4-core Linux Xeon @2.8 GHz / 15 GB**; the
-> earlier tables in this file that pair against bigsnpr stay on the 16 GB
-> Apple-Silicon laptop. Absolute *timings* are not comparable across the two
-> machines (this Xeon is ~1.5–2.5× slower), but genetic R² and the `float32` LD
-> memory are hardware-independent — and both **reproduce the earlier numbers**,
-> confirming the internal refactors (the shared `_pn_step` sampler core, the
-> [constant-N fast path](#constant-n-sampler-fast-path), the new methods) changed
-> neither accuracy nor footprint.
+> **Hardware.** Measured on the same machine as every other table here (4-core
+> Linux @2.8 GHz / 15 GB, single core), so timings are mutually comparable.
+> Genetic R² and the `float32` LD memory are hardware-independent and reproduce
+> the earlier runs bit-for-bit — confirming the internal refactors (the shared
+> `_pn_step` sampler core, the [constant-N fast path](#constant-n-sampler-fast-path),
+> the new methods) changed neither accuracy nor footprint.
 
 ![Methods: accuracy, time and memory vs genome size](../benchmarks/method_scaling.png)
 
@@ -283,19 +284,19 @@ Fit time (s), single core:
 
 | #SNPs | inf | grid | auto | annot | lassosum2 | laplace |
 |-------|----:|-----:|-----:|------:|----------:|--------:|
-| 50k   | 0.6 | 1.5 | 0.8 | 2.5 | 2.5 | 3.6 |
-| 100k  | 1.0 | 3.1 | 1.5 | 5.3 | 6.3 | 6.8 |
-| 200k  | 2.0 | 6.1 | 3.2 | 11.3 | 14.0 | 15.1 |
-| 500k  | 4.9 | 15.5 | 10.9 | 33.2 | 40.8 | 36.1 |
-| 1M    | 10.0 | 31.3 | 34.8 | 77.3 | 82.4 | 72.9 |
+| 50k   | 0.7 | 1.6 | 0.9 | 5.2 | 2.2 | 5.3 |
+| 100k  | 1.1 | 3.3 | 1.8 | 7.6 | 5.0 | 9.4 |
+| 200k  | 2.2 | 6.4 | 4.1 | 16.2 | 11.3 | 19.5 |
+| 500k  | 5.4 | 16.1 | 13.0 | 44.4 | 28.5 | 45.3 |
+| 1M    | 10.8 | 31.9 | 41.2 | 101.7 | 64.9 | 94.6 |
 
 Peak memory is **LD-dominated** — the resident `float32` block-diagonal LD is
 ~2.2 GB at 1M and grows ~linearly (the clean, contiguous measurement is in the
 [genome-scale table](#genome-scale-scalability-200k4m-snps)). The peak RSS this
-per-size worker reports runs somewhat higher (0.56 GB at 50k → 6.2 GB at 1M)
-because it holds the LD as a Python *list* of 2,000 separate block arrays and
-`lassosum2` allocates coordinate-descent temporaries — churn that the Linux
-glibc allocator retains rather than returns to the OS. The sampler *state* is
+per-size worker reports (0.41 GB at 50k → 2.42 GB at 1M) is now close to that
+intrinsic footprint — the earlier `lassosum2` `float64`-LD copy and other
+temporaries that inflated it were trimmed (float32 LD, in-process build). The
+sampler *state* is
 O(m) and negligible beside the LD, so accuracy aside the methods are
 memory-equivalent.
 
@@ -482,7 +483,10 @@ The LDpred3 *algorithm* works from summary statistics + the LD matrix, so its
 cost is **independent of the GWAS sample size N** and is driven instead by the
 **LD structure (block size)**. The benchmarks below separate the algorithm's
 `fit` time from the simulation/GWAS/LD-construction `prep` time (which does scale
-with N). Measured on a 16 GB Apple-Silicon laptop, Numba on, h²=0.5, p=0.01.
+with N). Single core, Numba on, h²=0.5, p=0.01 — these tables illustrate the
+*dependence shape* (fit flat in N, driven by block size), which is
+hardware-independent; the absolute times are on the faster laptop referenced
+in earlier revisions, not the 15 GB box the other tables now use.
 
 **Independent of N** (`--n-independence`, m=10000, blocks of 200): fit time is
 flat while prep grows with N.
@@ -527,34 +531,33 @@ motivates the banded / sparse-LD backend (see [algorithm.md](algorithm.md)).
 How far does LDpred3 scale on a commodity machine? This pushes the **fitting**
 step alone (LD already constructed, the realistic-LD library cycled to the target
 size, single core) from 200k up to **4M SNPs** — past a fully imputed genome.
-Re-measured here on the **4-core Linux Xeon @2.8 GHz / 15 GB** (see the hardware
-note [above](#methods-accuracy-vs-scalability)); regenerate with
-`benchmarks/bench_ldpred3_scaling.py`.
+Measured on the same machine as every table here (4-core Linux @2.8 GHz / 15 GB);
+regenerate with `benchmarks/bench_ldpred3_scaling.py`.
 
 ![LDpred3 scalability to 4M SNPs](../benchmarks/ldpred3_scaling.png)
 
 | #SNPs | peak RAM | inf (s) | grid (s) | auto (s) | auto R² |
 |-------|---------:|--------:|---------:|---------:|--------:|
-| 200k  | 0.60 GB | 2.8 | 6.6 | 3.2 | 0.395 |
-| 500k  | 1.19 GB | 5.3 | 15.9 | 7.7 | 0.284 |
-| 1M    | 2.21 GB | 10.5 | 30.9 | 16.4 | 0.190 |
-| 2M    | 4.26 GB | 21.2 | 62.0 | 32.3 | 0.103 |
-| 3M    | 6.31 GB | 31.3 | 93.8 | 47.3 | 0.069 |
-| 4M    | 8.36 GB | 41.9 | 125.8 | 62.3 | 0.052 |
+| 200k  | 0.60 GB | 3.1 | 6.4 | 3.6 | 0.388 |
+| 500k  | 1.20 GB | 5.5 | 16.0 | 9.6 | 0.280 |
+| 1M    | 2.23 GB | 10.8 | 31.6 | 18.9 | 0.185 |
+| 2M    | 4.28 GB | 21.5 | 63.0 | 37.1 | 0.103 |
+| 3M    | 6.32 GB | 32.9 | 94.6 | 57.2 | 0.069 |
+| 4M    | 8.38 GB | 42.8 | 127.8 | 75.2 | 0.051 |
 
-Both axes are **linear in #SNPs**, and the **auto R² is bit-for-bit the same as
-the earlier Apple-Silicon run** at every size (0.395 → 0.052) — the refactors
-left the fit unchanged. Fit time runs ~15 µs/SNP for `auto` on this Xeon (4M in
-~1 minute; `grid` ~2 min), a constant factor above the faster laptop. Peak memory
-grows at **~2.1 GB per million SNPs** — the `float32` dense LD held resident
-during the fit — so **4M fits in 8.4 GB**, and the practical dense-in-RAM ceiling
-on a 16 GB machine is **~6–7M SNPs**. (The auto R² falls with #SNPs only because
-GWAS power N=50,000 is held fixed while variants multiply — it is not a scaling
-limit.)
+Both axes are **linear in #SNPs**, and the **auto R² reproduces the earlier runs
+bit-for-bit** at every size (0.388 → 0.051) — the refactors left the fit
+unchanged. Fit time runs ~19 µs/SNP for `auto` (4M in ~75 s; `grid` ~2 min); the
+1M row here (2.23 GB, auto 18.9 s) matches the [bigsnpr comparison](#vs-bigsnpr-realistic-ld-200k1m-snps-single-core)
+exactly, as it should. Peak memory grows at **~2.1 GB per million SNPs** — the
+`float32` dense LD held resident during the fit — so **4M fits in 8.4 GB**, and
+the practical dense-in-RAM ceiling on a 15 GB machine is **~6–7M SNPs**. (The auto
+R² falls with #SNPs only because GWAS power N=50,000 is held fixed while variants
+multiply — it is not a scaling limit.)
 
-The contrast with bigsnpr is the headline: bigsnpr's `float64` on-disk SFBM
-already thrashed at 2M on the 16 GB laptop, whereas LDpred3's `float32` LD sails
-to 4M in 8.4 GB. And to go **past** the dense-RAM ceiling, the low-rank / on-disk
+The contrast with bigsnpr is the headline: bigsnpr's `float64` on-disk SFBM is
+~8.5 GB at 2M and would thrash on this 15 GB box, whereas LDpred3's `float32` LD
+sails to 4M in 8.4 GB. And to go **past** the dense-RAM ceiling, the low-rank / on-disk
 `--ld-stream` backend keeps resident memory at O(one block) regardless of genome
 size (see [LD representations at scale](#ld-representations-at-scale-memory-vs-running-time)) —
 so LDpred3 is not capped at 6–7M; that is just the dense-in-RAM limit.
@@ -730,19 +733,19 @@ eigendecomposition), per-fit time, and genetic R². Regenerate with
 
 | representation | LD memory | build (s) | fit (s) | R² |
 |----------------|----------:|----------:|--------:|---:|
-| dense | 80 MB | 2.1 | **0.09** | 0.987 |
-| band w200 | 30 MB | 2.2 | 0.9 | 0.757 |
-| **low-rank 99.5%** | **16 MB** | 8.2 | 0.8 | **0.986** |
+| dense | 80 MB | 3.1 | **0.20** | 0.987 |
+| band w200 | 30 MB | 3.2 | 2.0 | 0.758 |
+| **low-rank 99.5%** | **16 MB** | 10.5 | 1.6 | **0.986** |
 
 Two costs, and they are different in kind:
 
 * **Build (the eigendecomposition) is one-time and cached.** It is part of LD
   *construction*, not the fit — computed once, saved as the `U` factor (`--ld-out`,
   including the memmap `--ld-stream` cache) and reused across every later fit /
-  cohort via `--ld-cache`. So the 8.2 s amortises to ~0 per run, exactly as the
+  cohort via `--ld-cache`. So the 10.5 s amortises to ~0 per run, exactly as the
   dense LD's own `Z·Zᵀ` does; it should not be charged to a fit.
 * **The recurring cost is fit time.** Low-rank **cuts memory ~5× and matches
-  dense accuracy (0.986 vs 0.987) but fits ~9× slower**, and that part does not
+  dense accuracy (0.986 vs 0.987) but fits ~8× slower**, and that part does not
   amortise. The slowdown is structural — the dense sampler keeps the full
   residual vector and reads `(Rβ)_j` in O(1), whereas the eigenspace fit
   recomputes `(Rβ)_j = U[j]·s` in O(rank) per SNP. This is intrinsic, not an
@@ -804,11 +807,11 @@ toggles `NUMBA_DISABLE_JIT` in a subprocess). Regenerate with
 
 | mode | fit time (s) |
 |------|-------------:|
-| pure Python | 19.24 |
-| Numba JIT | 0.03 |
+| pure Python | 43.75 |
+| Numba JIT | 0.06 |
 
-A **large** speed-up (here ~680×; strongly machine-dependent — the pure-Python
-inner loop is especially slow on this laptop's CPython) — this is why
+A **large** speed-up (here ~780×; strongly machine-dependent — the pure-Python
+inner loop is especially slow in CPython) — this is why
 `pip install numba` is strongly recommended. Without it everything still runs,
 just far slower.
 
@@ -832,16 +835,16 @@ the per-SNP path (`N` perturbed by 1e-6 to select the latter). Regenerate with
 
 | method | p (causal) | fast path (ms) | per-SNP path (ms) | saved | genetic R² |
 |--------|-----------:|---------------:|------------------:|------:|-----------:|
-| grid    | 0.001 | 23.0 | 28.2 | **18%** | 0.996 |
-| finemap | 0.001 | 44.9 | 54.6 | **18%** | 0.998 |
-| grid    | 0.01  | 26.0 | 31.1 | **16%** | 0.995 |
-| finemap | 0.01  | 53.1 | 62.4 | **15%** | 0.995 |
-| grid    | 0.1   | 54.1 | 59.7 | **9%**  | 0.971 |
-| finemap | 0.1   | 126.5 | 136.9 | **8%** | 0.972 |
+| grid    | 0.001 | 88.6 | 113.5 | **22%** | 0.996 |
+| finemap | 0.001 | 177.9 | 219.6 | **19%** | 0.998 |
+| grid    | 0.01  | 93.7 | 117.8 | **20%** | 0.996 |
+| finemap | 0.01  | 193.3 | 236.1 | **18%** | 0.995 |
+| grid    | 0.1   | 149.7 | 175.1 | **14%** | 0.971 |
+| finemap | 0.1   | 389.2 | 428.3 | **9%**  | 0.971 |
 
 The genetic R² is the same to three decimals in both columns — the fast path
 changes only *when* the scalars are computed, not the result. The saving is
-**largest for sparse `p`** (~18%, tapering to ~8% as the trait gets denser):
+**largest for sparse `p`** (~22%, tapering to ~9% as the trait gets denser):
 when few effects change per sweep the O(m) rank-1 residual update is mostly
 skipped, so the per-SNP `sqrt`/`log1p` is a larger share of the sweep — precisely
 the regime that fine-mapping (`ldpred3_pip`, sparse `p_init`) and the auto
@@ -853,18 +856,18 @@ this fast path and is unchanged.
 
 The packed auto sampler parallelises its per-sweep block loop with Numba
 `prange`. Parallel speed-up and efficiency of one fixed kernel (m=20,000 = 40×500
-blocks, burn-in 100 / 200 sweeps, Apple-Silicon laptop). Regenerate with
+blocks, burn-in 100 / 200 sweeps, 4-core Linux machine). Regenerate with
 `benchmarks/cores_scaling.py`.
 
 | ncores | fit (s) | speed-up | efficiency |
 |-------:|--------:|---------:|-----------:|
-| 1 | 2.37 | 1.00× | 100% |
-| 2 | 1.43 | 1.65× | 83% |
-| 4 | 0.78 | 3.04× | 76% |
+| 1 | 5.55 | 1.00× | 100% |
+| 2 | 2.65 | 2.10× | 105% |
+| 4 | 1.48 | 3.74× | 93% |
 
-Solid scaling (~3× on 4 cores, ~76% efficiency) when there is enough per-block
-work; efficiency is hardware-dependent (memory bandwidth and core contention vary
-by machine). Note `--ncores 1` uses the low-memory *streaming* sampler while
+Near-linear scaling (~3.7× on 4 cores, ~93% efficiency) when there is enough
+per-block work; efficiency is hardware-dependent (memory bandwidth and core
+contention vary by machine). Note `--ncores 1` uses the low-memory *streaming* sampler while
 `--ncores > 1` switches to this packed parallel kernel (more memory, parallel
 sweeps); for small problems the single-core streaming path can already be fast
 enough that the packed kernel's setup isn't worth it.
