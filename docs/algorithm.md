@@ -471,3 +471,89 @@ export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 (the test suite sets these for exactly this reason). The Gibbs effect estimates
 themselves are reproducible from the seed regardless.
+
+## References
+
+Methods implemented in LDpred3 and the papers they come from.
+
+**Core PRS models**
+
+- **LDpred (original).** Vilhjálmsson BJ, Yang J, Finucane HK, *et al.* "Modeling
+  Linkage Disequilibrium Increases Accuracy of Polygenic Risk Scores."
+  *Am J Hum Genet* 97(4):576–592 (2015). doi:10.1016/j.ajhg.2015.09.001 —
+  the point-normal (spike-and-slab) LD-aware PRS and the infinitesimal model.
+- **LDpred2.** Privé F, Arbel J, Vilhjálmsson BJ. "LDpred2: better, faster,
+  stronger." *Bioinformatics* 36(22–23):5424–5431 (2020).
+  doi:10.1093/bioinformatics/btaa1029 — the `grid`, `auto`, and sparse variants,
+  the `N(Rβ, R/N)` sampling model, and the `bigsnpr` reference implementation.
+- **LDpred2-auto (disease architecture & inference).** Privé F, Albiñana C,
+  Pasaniuc B, Vilhjálmsson BJ. "Inferring disease architecture and predictive
+  ability with LDpred2-auto." *Am J Hum Genet* 110(12):2042–2055 (2023).
+  doi:10.1016/j.ajhg.2023.10.010 — the robust multi-chain estimator
+  (`--auto-chains`), the `use_MLE`/`α` MAF-dependent prior (`--alpha`), and the
+  in-sample `h²` / polygenicity / predictive-`r²` estimators (`--infer`).
+
+**Penalised-regression / Laplace-prior PRS**
+
+- **lassosum.** Mak TSH, Porsch RM, Choi SW, Zhou X, Sham PC. "Polygenic scores
+  via penalized regression on summary statistics." *Genet Epidemiol*
+  41(6):469–480 (2017). doi:10.1002/gepi.22050 — the L1-penalised summary-statistic
+  objective and pseudo-validation; `lassosum2` is the `bigsnpr` re-parameterisation
+  (Privé *et al.* 2020).
+- **Bayesian lasso.** Park T, Casella G. "The Bayesian Lasso." *J Am Stat Assoc*
+  103(482):681–686 (2008). doi:10.1198/016214508000000337 — the normal/exponential
+  scale-mixture Gibbs sampler and the marginal-maximisation `λ` update behind
+  `method="laplace"`.
+- **Scale mixtures of normals.** Andrews DF, Mallows CL. "Scale Mixtures of Normal
+  Distributions." *J R Stat Soc B* 36(1):99–102 (1974) — the Laplace-as-mixture
+  identity the sampler exploits.
+- **Inverse-Gaussian variates.** Michael JR, Schucany WR, Haas RW. "Generating
+  Random Variates Using Transformations with Multiple Roots." *Am Stat*
+  30(2):88–90 (1976) — the `1/τ²` draw.
+
+**Priors & annotations**
+
+- **MAF/LD-dependent architecture (the `α`/`S` parameter).** Speed D, Cai N, *the
+  UCLEB Consortium*, Johnson MR, Nejentsev S, Balding DJ. "Reevaluation of SNP
+  heritability in complex human traits." *Nat Genet* 49:986–992 (2017).
+  doi:10.1038/ng.3865; and Zeng J, de Vlaming R, Wu Y, *et al.* "Signatures of
+  negative selection in the genetic architecture of human complex traits."
+  *Nat Genet* 50:746–753 (2018). doi:10.1038/s41588-018-0101-4 — the effect-size /
+  allele-frequency coupling formalised as `use_MLE` in LDpred2-auto (2023).
+- **SBayesR / SBayesRC (annotation-informed priors).** Lloyd-Jones LR, Zeng J,
+  *et al.* "Improved polygenic prediction by Bayesian multiple regression on
+  summary statistics." *Nat Commun* 10:5086 (2019).
+  doi:10.1038/s41467-019-12653-0; Zheng Z, Liu S, Sidorenko J, *et al.*
+  "Leveraging functional genomic annotations and genome coverage to improve
+  polygenic prediction of complex traits within and between ancestries."
+  *Nat Genet* 56:767–777 (2024). doi:10.1038/s41588-024-01704-4 — the learned
+  annotation→prior map behind `--method annot`.
+
+**QC, LD, and summary-statistic corrections**
+
+- **Sumstats misspecification (SD check & per-variant `N`).** Privé F, Arbel J,
+  Aschard H, Vilhjálmsson BJ. "Identifying and correcting for misspecifications in
+  GWAS summary statistics and polygenic scores." *HGG Adv* 3(4):100136 (2022).
+  doi:10.1016/j.xhgg.2022.100136 — the SD-consistency filter and `--impute-n`.
+- **DENTIST.** Chen W, Wu Y, Zheng Z, *et al.* "Improved analyses of GWAS summary
+  statistics by reducing data heterogeneity and errors." *Nat Commun* 12:7117
+  (2021). doi:10.1038/s41467-021-27438-7 — the LD-consistency outlier filter
+  (`--dentist`).
+- **Optimal LD-block splitting.** Privé F. "Optimal linkage disequilibrium
+  splitting." *Bioinformatics* 38(1):255–256 (2022).
+  doi:10.1093/bioinformatics/btab519 — `optimal_ld_blocks`.
+
+**Heritability, inference & fine-mapping**
+
+- **LD Score regression.** Bulik-Sullivan BK, Loh P-R, Finucane HK, *et al.*
+  "LD Score regression distinguishes confounding from polygenicity in genome-wide
+  association studies." *Nat Genet* 47(3):291–295 (2015). doi:10.1038/ng.3211 —
+  `ld_scores` / `ldsc_h2` / `ldsc_rg` and `--ldsc-init`.
+- **Liability-scale heritability.** Lee SH, Wray NR, Goddard ME, Visscher PM.
+  "Estimating Missing Heritability for Disease from Genome-wide Association
+  Studies." *Am J Hum Genet* 88(3):294–305 (2011).
+  doi:10.1016/j.ajhg.2011.02.002 — `h2_liability`.
+- **Approximate Bayes factor (fine-mapping).** Wakefield J. "Bayes factors for
+  genome-wide association studies: comparison with P-values." *Genet Epidemiol*
+  33(1):79–86 (2009). doi:10.1002/gepi.20359 — the single-SNP ABF in
+  `single_signal_finemap`.
